@@ -62,7 +62,9 @@ import uk.rydeapp.ryde.domain.model.RouteMatch
 import uk.rydeapp.ryde.domain.model.CreateSeatRequestResult
 import uk.rydeapp.ryde.domain.model.SeatRequest
 import uk.rydeapp.ryde.domain.model.SeatRequestStatus
+import uk.rydeapp.ryde.domain.model.RepeatJourneyPrefill
 import uk.rydeapp.ryde.domain.model.formatDemoTime
+import uk.rydeapp.ryde.ui.components.InfoCard
 import uk.rydeapp.ryde.ui.components.LabelPill
 import uk.rydeapp.ryde.ui.components.RouteMark
 import uk.rydeapp.ryde.ui.theme.ElectricBlue
@@ -75,6 +77,7 @@ private enum class FindStage { FORM, RESULTS, DETAILS, CONFIRM, SUCCESS }
 fun FindScreen(
     content: FindRideContent,
     joinedCircle: HostedCircle?,
+    repeatPrefill: RepeatJourneyPrefill? = null,
     onSearch: (FindRideCriteria) -> FindRideSearchResult,
     requestForMatch: (String, String?) -> SeatRequest?,
     onCreateRequest: (String, FindRideCriteria) -> CreateSeatRequestResult,
@@ -96,6 +99,17 @@ fun FindScreen(
 
     LaunchedEffect(joinedCircle?.id) {
         if (joinedCircle == null) searchInCircle = false
+    }
+
+    LaunchedEffect(repeatPrefill?.requestId) {
+        repeatPrefill?.let {
+            origin = it.originArea
+            destination = it.destinationArea
+            searchInCircle = false
+            searchAttempt = 0
+            selectedMatchId = null
+            stage = FindStage.FORM
+        }
     }
 
     val currentCriteria = FindRideCriteria(
@@ -167,6 +181,7 @@ fun FindScreen(
         else -> SearchForm(
             content = content,
             joinedCircle = joinedCircle,
+            repeatPrefill = repeatPrefill,
             searchInCircle = searchInCircle,
             criteria = currentCriteria,
             errors = result?.takeIf { !it.isValid }?.validationErrors.orEmpty(),
@@ -198,6 +213,7 @@ fun FindScreen(
 private fun SearchForm(
     content: FindRideContent,
     joinedCircle: HostedCircle?,
+    repeatPrefill: RepeatJourneyPrefill?,
     searchInCircle: Boolean,
     criteria: FindRideCriteria,
     errors: List<uk.rydeapp.ryde.domain.model.FindRideValidationError>,
@@ -224,6 +240,14 @@ private fun SearchForm(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium,
             )
+        }
+        repeatPrefill?.let { prefill ->
+            item {
+                InfoCard(
+                    title = "Travel together again with ${prefill.preferredPersonName}",
+                    body = "The previous broad-area route is pre-filled. Review and edit it before searching; no journey has been created.",
+                )
+            }
         }
         if (joinedCircle != null) {
             item {

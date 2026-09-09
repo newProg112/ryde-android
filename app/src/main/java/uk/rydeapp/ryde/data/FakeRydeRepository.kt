@@ -39,6 +39,18 @@ import uk.rydeapp.ryde.domain.model.ServiceFeeResponsibility
 import uk.rydeapp.ryde.domain.model.TravelDatePolicy
 import uk.rydeapp.ryde.domain.model.DemoDepartureTimePolicy
 import uk.rydeapp.ryde.domain.model.formatDemoTime
+import uk.rydeapp.ryde.domain.model.CompletedJourneyHistory
+import uk.rydeapp.ryde.domain.model.DemoProfileIdentity
+import uk.rydeapp.ryde.domain.model.DemoVehicle
+import uk.rydeapp.ryde.domain.model.PersonalSafetyStatus
+import uk.rydeapp.ryde.domain.model.ProfileContent
+import uk.rydeapp.ryde.domain.model.RepeatJourneyMode
+import uk.rydeapp.ryde.domain.model.RepeatJourneyPrefill
+import uk.rydeapp.ryde.domain.model.RepeatJourneyPrefillResult
+import uk.rydeapp.ryde.domain.model.SavePlaceResult
+import uk.rydeapp.ryde.domain.model.SavedPlacePolicy
+import uk.rydeapp.ryde.domain.model.TrustedPerson
+import uk.rydeapp.ryde.domain.model.UpdateTrustedPersonResult
 
 class FakeRydeRepository : RydeRepository {
     private val requestsByMatchId = linkedMapOf<String, SeatRequest>()
@@ -46,9 +58,37 @@ class FakeRydeRepository : RydeRepository {
     private val incomingRequests = mutableListOf<IncomingSeatRequest>()
     private val confirmedTrips = mutableListOf<ConfirmedSharedTrip>()
     private val joinedCircleIds = mutableSetOf<String>()
-    private val savedPlaces = listOf(
+    private val savedPlaces = mutableListOf(
         SavedPlace(label = "Home", area = "Sutton-in-Ashfield"),
         SavedPlace(label = "Work", area = "Nottingham"),
+    )
+    private val completedJourneyHistory = listOf(
+        CompletedJourneyHistory(
+            id = "completed-jamie-nottingham-1",
+            personId = "jamie-demo",
+            personName = "Jamie",
+            originArea = "Sutton-in-Ashfield",
+            destinationArea = "Nottingham",
+            completedLabel = "Completed last month",
+        ),
+    )
+    private val peopleById = linkedMapOf(
+        "jamie-demo" to TrustedPerson(
+            id = "jamie-demo",
+            firstName = "Jamie",
+            initials = "JM",
+            rating = 4.8,
+            completedTripIds = setOf("completed-jamie-nottingham-1"),
+            personallyTrusted = false,
+        ),
+        "casey-demo" to TrustedPerson(
+            id = "casey-demo",
+            firstName = "Casey",
+            initials = "CK",
+            rating = 4.7,
+            completedTripIds = emptySet(),
+            personallyTrusted = false,
+        ),
     )
 
     override fun getHomeContent(): HomeContent {
@@ -340,6 +380,67 @@ class FakeRydeRepository : RydeRepository {
     }
 
     override fun getConfirmedSharedTrips(): List<ConfirmedSharedTrip> = confirmedTrips.toList()
+
+    override fun getProfileContent() = ProfileContent(
+        identity = DemoProfileIdentity(
+            firstName = "Sam",
+            initials = "SR",
+            memberSince = "Member since spring 2026",
+            completedSharedJourneys = completedJourneyHistory.size,
+            reliabilityPercent = 96,
+            rating = 4.9,
+            vehicle = DemoVehicle(description = "5-door hatchback", colour = "Blue"),
+        ),
+        savedPlaces = getSavedPlaces(),
+        people = peopleById.values.filter { it.completedTripIds.isNotEmpty() },
+        completedJourneys = getCompletedJourneyHistory(),
+    )
+
+    override fun getSavedPlaces(): List<SavedPlace> = savedPlaces.toList()
+
+    override fun savePlace(place: SavedPlace): SavePlaceResult {
+        if (!SavedPlacePolicy.isBroadDisplayArea(place.area)) return SavePlaceResult.PrivateOrInvalidArea
+        val normalized = place.copy(label = place.label.trim(), area = place.area.trim())
+        val existingIndex = savedPlaces.indexOfFirst { it.label.equals(normalized.label, ignoreCase = true) }
+        if (existingIndex >= 0) savedPlaces[existingIndex] = normalized else savedPlaces += normalized
+        return SavePlaceResult.Saved(normalized)
+    }
+
+    override fun getCompletedJourneyHistory(): List<CompletedJourneyHistory> = completedJourneyHistory.toList()
+
+    override fun getTrustedPeople(): List<TrustedPerson> = peopleById.values.filter { it.isTrusted }
+
+    override fun setPersonTrusted(personId: String, trusted: Boolean): UpdateTrustedPersonResult {
+        val person = peopleById[personId] ?: return UpdateTrustedPersonResult.NotEligible(null)
+        if (trusted && !person.isEligibleForTrust) return UpdateTrustedPersonResult.NotEligible(person)
+        val updated = person.copy(
+            personallyTrusted = trusted,
+            safetyStatus = if (trusted) PersonalSafetyStatus.CLEAR else person.safetyStatus,
+        )
+        peopleById[personId] = updated
+        return UpdateTrustedPersonResult.Updated(updated)
+    }
+
+    override fun prepareRepeatJourney(
+        completedTripId: String,
+        personId: String,
+        mode: RepeatJourneyMode,
+    ): RepeatJourneyPrefillResult {
+        val trip = completedJourneyHistory.firstOrNull { it.id == completedTripId }
+            ?: return RepeatJourneyPrefillResult.CompletedTripNotFound
+        if (trip.personId != personId) return RepeatJourneyPrefillResult.PersonNotOnCompletedTrip
+        return RepeatJourneyPrefillResult.Ready(
+            RepeatJourneyPrefill(
+                requestId = "repeat-${trip.id}-${mode.name.lowercase()}",
+                mode = mode,
+                sourceCompletedTripId = trip.id,
+                preferredPersonId = personId,
+                preferredPersonName = trip.personName,
+                originArea = trip.originArea,
+                destinationArea = trip.destinationArea,
+            ),
+        )
+    }
 
     private fun demoIncomingRequest(journey: OfferedJourney): IncomingSeatRequest {
         val sharedMiles = 17

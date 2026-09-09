@@ -19,6 +19,14 @@ import uk.rydeapp.ryde.domain.model.IncomingSeatRequest
 import uk.rydeapp.ryde.domain.model.CircleMembership
 import uk.rydeapp.ryde.domain.model.JoinCircleResult
 import uk.rydeapp.ryde.domain.model.LeaveCircleResult
+import uk.rydeapp.ryde.domain.model.CompletedJourneyHistory
+import uk.rydeapp.ryde.domain.model.ProfileContent
+import uk.rydeapp.ryde.domain.model.RepeatJourneyMode
+import uk.rydeapp.ryde.domain.model.RepeatJourneyPrefillResult
+import uk.rydeapp.ryde.domain.model.SavePlaceResult
+import uk.rydeapp.ryde.domain.model.SavedPlace
+import uk.rydeapp.ryde.domain.model.TrustedPerson
+import uk.rydeapp.ryde.domain.model.UpdateTrustedPersonResult
 
 interface RydeRepository {
     fun getHomeContent(): HomeContent
@@ -42,4 +50,15 @@ interface RydeRepository {
         decision: IncomingRequestDecision,
     ): DecideIncomingRequestResult
     fun getConfirmedSharedTrips(): List<ConfirmedSharedTrip>
+    fun getProfileContent(): ProfileContent
+    fun getSavedPlaces(): List<SavedPlace>
+    fun savePlace(place: SavedPlace): SavePlaceResult
+    fun getCompletedJourneyHistory(): List<CompletedJourneyHistory>
+    fun getTrustedPeople(): List<TrustedPerson>
+    fun setPersonTrusted(personId: String, trusted: Boolean): UpdateTrustedPersonResult
+    fun prepareRepeatJourney(
+        completedTripId: String,
+        personId: String,
+        mode: RepeatJourneyMode = RepeatJourneyMode.FIND,
+    ): RepeatJourneyPrefillResult
 }

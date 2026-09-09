@@ -28,6 +28,8 @@ import uk.rydeapp.ryde.ui.destinations.ProfileScreen
 import uk.rydeapp.ryde.ui.destinations.TripsScreen
 import uk.rydeapp.ryde.ui.offer.OfferScreen
 import uk.rydeapp.ryde.domain.model.OfferRideValidator
+import uk.rydeapp.ryde.domain.model.RepeatJourneyPrefill
+import uk.rydeapp.ryde.domain.model.RepeatJourneyPrefillResult
 import uk.rydeapp.ryde.ui.home.HomeScreen
 import uk.rydeapp.ryde.ui.find.FindScreen
 import uk.rydeapp.ryde.ui.theme.RydeTheme
@@ -49,6 +51,8 @@ fun RydeApp(repository: RydeRepository? = null) {
     var selectedDestination by rememberSaveable { mutableStateOf(RydeDestination.HOME) }
     var tripRevision by remember { mutableIntStateOf(0) }
     var circleRevision by remember { mutableIntStateOf(0) }
+    var profileRevision by remember { mutableIntStateOf(0) }
+    var repeatPrefill by remember { mutableStateOf<RepeatJourneyPrefill?>(null) }
     val stateHolder = rememberSaveableStateHolder()
     val homeContent = remember(appRepository) { appRepository.getHomeContent() }
     val findContent = remember(appRepository) { appRepository.getFindRideContent() }
@@ -60,6 +64,18 @@ fun RydeApp(repository: RydeRepository? = null) {
     val offeredJourneys = remember(appRepository, tripRevision) { appRepository.getOfferedJourneys() }
     val incomingRequests = remember(appRepository, tripRevision) { appRepository.getIncomingSeatRequests() }
     val confirmedTrips = remember(appRepository, tripRevision) { appRepository.getConfirmedSharedTrips() }
+    val completedJourneyHistory = remember(appRepository) { appRepository.getCompletedJourneyHistory() }
+    val profileContent = remember(appRepository, profileRevision) { appRepository.getProfileContent() }
+    val openRepeatJourney: (String, String) -> Unit = { tripId, personId ->
+        when (val result = appRepository.prepareRepeatJourney(tripId, personId)) {
+            is RepeatJourneyPrefillResult.Ready -> {
+                repeatPrefill = result.prefill
+                selectedDestination = RydeDestination.FIND
+            }
+            RepeatJourneyPrefillResult.CompletedTripNotFound,
+            RepeatJourneyPrefillResult.PersonNotOnCompletedTrip -> Unit
+        }
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -103,6 +119,7 @@ fun RydeApp(repository: RydeRepository? = null) {
                 RydeDestination.FIND -> FindScreen(
                     content = findContent,
                     joinedCircle = circleMembership.takeIf { it.isJoined }?.circle,
+                    repeatPrefill = repeatPrefill,
                     onSearch = appRepository::findRides,
                     requestForMatch = appRepository::getSeatRequestForMatch,
                     onCreateRequest = { matchId, criteria ->
@@ -127,6 +144,7 @@ fun RydeApp(repository: RydeRepository? = null) {
                     offeredJourneys = offeredJourneys,
                     incomingRequests = incomingRequests,
                     confirmedTrips = confirmedTrips,
+                    completedJourneyHistory = completedJourneyHistory,
                     onCancelRequest = { requestId ->
                         appRepository.cancelSeatRequest(requestId)
                         tripRevision += 1
@@ -140,10 +158,15 @@ fun RydeApp(repository: RydeRepository? = null) {
                             tripRevision += 1
                         }
                     },
+                    onTravelTogetherAgain = openRepeatJourney,
                     modifier = Modifier.padding(innerPadding),
                 )
                 RydeDestination.PROFILE -> ProfileScreen(
-                    savedPlaces = homeContent.currentUser.savedPlaces,
+                    content = profileContent,
+                    onSetPersonTrusted = { personId, trusted ->
+                        appRepository.setPersonTrusted(personId, trusted).also { profileRevision += 1 }
+                    },
+                    onTravelTogetherAgain = openRepeatJourney,
                     modifier = Modifier.padding(innerPadding),
                 )
             }

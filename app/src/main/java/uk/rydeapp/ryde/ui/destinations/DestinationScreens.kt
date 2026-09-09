@@ -52,6 +52,9 @@ import uk.rydeapp.ryde.domain.model.IncomingSeatRequestStatus
 import uk.rydeapp.ryde.domain.model.CircleIdentity
 import uk.rydeapp.ryde.domain.model.JourneyPricing
 import uk.rydeapp.ryde.domain.model.formatDemoTime
+import uk.rydeapp.ryde.domain.model.CompletedJourneyHistory
+import uk.rydeapp.ryde.domain.model.ProfileContent
+import uk.rydeapp.ryde.domain.model.UpdateTrustedPersonResult
 import uk.rydeapp.ryde.ui.components.DestinationIcon
 import uk.rydeapp.ryde.ui.components.DestinationIconType
 import uk.rydeapp.ryde.ui.components.InfoCard
@@ -67,25 +70,29 @@ fun TripsScreen(
     offeredJourneys: List<OfferedJourney>,
     incomingRequests: List<IncomingSeatRequest>,
     confirmedTrips: List<ConfirmedSharedTrip>,
+    completedJourneyHistory: List<CompletedJourneyHistory>,
     onCancelRequest: (String) -> Unit,
     onCancelOffer: (String) -> Unit,
     onDecideIncomingRequest: (String, IncomingRequestDecision) -> DecideIncomingRequestResult,
+    onTravelTogetherAgain: (String, String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var selectedRequestId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedOfferId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedIncomingRequestId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedConfirmedTripId by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedCompletedJourneyId by rememberSaveable { mutableStateOf<String?>(null) }
     var showCancelConfirmation by rememberSaveable { mutableStateOf(false) }
     var pendingDecision by rememberSaveable { mutableStateOf<IncomingRequestDecision?>(null) }
     val selectedRequest = requests.firstOrNull { it.id == selectedRequestId }
     val selectedOffer = offeredJourneys.firstOrNull { it.id == selectedOfferId }
     val selectedIncomingRequest = incomingRequests.firstOrNull { it.id == selectedIncomingRequestId }
     val selectedConfirmedTrip = confirmedTrips.firstOrNull { it.id == selectedConfirmedTripId }
+    val selectedCompletedJourney = completedJourneyHistory.firstOrNull { it.id == selectedCompletedJourneyId }
 
     BackHandler(
         enabled = selectedRequest != null || selectedOffer != null ||
-            selectedIncomingRequest != null || selectedConfirmedTrip != null,
+            selectedIncomingRequest != null || selectedConfirmedTrip != null || selectedCompletedJourney != null,
     ) {
         if (selectedIncomingRequest != null) {
             selectedIncomingRequestId = null
@@ -93,6 +100,7 @@ fun TripsScreen(
             selectedRequestId = null
             selectedOfferId = null
             selectedConfirmedTripId = null
+            selectedCompletedJourneyId = null
         }
         showCancelConfirmation = false
         pendingDecision = null
@@ -168,6 +176,13 @@ fun TripsScreen(
         modifier = modifier,
     ) {
         when {
+            selectedCompletedJourney != null -> CompletedJourneyDetail(
+                journey = selectedCompletedJourney,
+                onBack = { selectedCompletedJourneyId = null },
+                onTravelTogetherAgain = {
+                    onTravelTogetherAgain(selectedCompletedJourney.id, selectedCompletedJourney.personId)
+                },
+            )
             selectedConfirmedTrip != null -> ConfirmedSharedTripDetail(
                 trip = selectedConfirmedTrip,
                 onBack = { selectedConfirmedTripId = null },
@@ -191,7 +206,7 @@ fun TripsScreen(
                 onCancel = { showCancelConfirmation = true },
                 onReviewRequest = { selectedIncomingRequestId = it },
             )
-            requests.isEmpty() && offeredJourneys.isEmpty() && confirmedTrips.isEmpty() -> EmptyStateCard()
+            requests.isEmpty() && offeredJourneys.isEmpty() && confirmedTrips.isEmpty() && completedJourneyHistory.isEmpty() -> EmptyStateCard()
             else -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (requests.isNotEmpty()) {
                     Text("Your outgoing seat requests", style = MaterialTheme.typography.titleMedium)
@@ -221,6 +236,12 @@ fun TripsScreen(
                 confirmedTrips.forEach { trip ->
                     ConfirmedSharedTripCard(trip, onClick = { selectedConfirmedTripId = trip.id })
                 }
+                if (completedJourneyHistory.isNotEmpty()) {
+                    Text("Completed journey history", style = MaterialTheme.typography.titleMedium)
+                }
+                completedJourneyHistory.forEach { journey ->
+                    CompletedJourneyCard(journey, onClick = { selectedCompletedJourneyId = journey.id })
+                }
             }
         }
     }
@@ -228,22 +249,183 @@ fun TripsScreen(
 
 @Composable
 fun ProfileScreen(
-    savedPlaces: List<SavedPlace>,
+    content: ProfileContent,
+    onSetPersonTrusted: (String, Boolean) -> UpdateTrustedPersonResult,
+    onTravelTogetherAgain: (String, String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     DestinationShell(
         headingRes = R.string.profile_heading,
         bodyRes = R.string.profile_body,
         iconType = DestinationIconType.PROFILE,
+        phaseLabel = "PHASE 7 · LOCAL DEMO",
         modifier = modifier,
     ) {
-        Text(stringResource(R.string.saved_places), style = MaterialTheme.typography.titleMedium)
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            savedPlaces.forEach { place -> SavedPlaceCard(place, Modifier.weight(1f)) }
+        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            ProfileIdentityCard(content)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(stringResource(R.string.saved_places), style = MaterialTheme.typography.titleMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    content.savedPlaces.forEach { place -> SavedPlaceCard(place, Modifier.weight(1f)) }
+                }
+                Text(
+                    "Broad areas only — never a private street address. Tap Home or Work in Find and Offer, then edit as needed.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Trusted people", style = MaterialTheme.typography.titleMedium)
+                if (content.people.isEmpty()) {
+                    InfoCard("No eligible people yet", "Someone appears here only after a completed shared trip in this local demo.")
+                } else {
+                    content.people.forEach { person ->
+                        val completedTrip = content.completedJourneys.firstOrNull { it.id in person.completedTripIds }
+                        TrustedPersonCard(
+                            personName = person.firstName,
+                            initials = person.initials,
+                            rating = person.rating,
+                            isTrusted = person.isTrusted,
+                            onToggleTrust = { onSetPersonTrusted(person.id, !person.isTrusted) },
+                            onRepeat = completedTrip?.takeIf { person.isTrusted }?.let { trip ->
+                                { onTravelTogetherAgain(trip.id, person.id) }
+                            },
+                        )
+                    }
+                }
+                Text(
+                    "Trust is your personal, session-local reminder — not identity verification. A future blocked or reported status always overrides it.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            InfoCard(
+                title = "Location sharing · Not shared",
+                body = "Ryde is not using device location. Exact or live location would require a separate, clear consent step before sharing could start.",
+            )
+        }
+    }
+}
+
+@Composable
+private fun ProfileIdentityCard(content: ProfileContent) {
+    val identity = content.identity
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer) {
+                    Text(
+                        identity.initials,
+                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+                Spacer(Modifier.size(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(identity.firstName, style = MaterialTheme.typography.headlineSmall)
+                    Text(identity.memberSince, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    LabelPill("FICTIONAL · LOCAL DEMO")
+                }
+            }
+            HorizontalDivider()
+            TripDetailRow("Completed shared journeys", identity.completedSharedJourneys.toString())
+            TripDetailRow("Reliability", "${identity.reliabilityPercent}%")
+            TripDetailRow("Demo rating", "★ ${identity.rating}")
+            TripDetailRow("Fictional vehicle", "${identity.vehicle.colour} ${identity.vehicle.description}")
+            Text(
+                "These illustrative details are not verified identity, licence, vehicle or rating checks.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+}
+
+@Composable
+private fun TrustedPersonCard(
+    personName: String,
+    initials: String,
+    rating: Double,
+    isTrusted: Boolean,
+    onToggleTrust: () -> Unit,
+    onRepeat: (() -> Unit)?,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer) {
+                    Text(initials, modifier = Modifier.padding(12.dp), fontWeight = FontWeight.Bold)
+                }
+                Spacer(Modifier.size(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(personName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text("1 completed shared trip · demo rating ★ $rating", style = MaterialTheme.typography.bodySmall)
+                }
+                if (isTrusted) LabelPill("Trusted", containerColor = Mint.copy(alpha = .22f))
+            }
+            if (onRepeat != null) {
+                Button(onClick = onRepeat, modifier = Modifier.fillMaxWidth()) { Text("Travel together again") }
+            }
+            OutlinedButton(onClick = onToggleTrust, modifier = Modifier.fillMaxWidth()) {
+                Text(if (isTrusted) "Remove from trusted" else "Add to trusted people")
+            }
+        }
+    }
+}
+
+@Composable
+private fun CompletedJourneyCard(journey: CompletedJourneyHistory, onClick: () -> Unit) {
+    Card(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            LabelPill("Completed · local demo", containerColor = Mint.copy(alpha = .22f))
+            Text("${journey.originArea} → ${journey.destinationArea}", style = MaterialTheme.typography.titleLarge)
+            Text("Shared with fictional ${journey.personName} · ${journey.completedLabel}")
+            Text("Open journey history →", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
+private fun CompletedJourneyDetail(
+    journey: CompletedJourneyHistory,
+    onBack: () -> Unit,
+    onTravelTogetherAgain: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        OutlinedButton(onClick = onBack) { Text("← Back to trips") }
+        LabelPill("Completed · local demo", containerColor = Mint.copy(alpha = .22f))
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(22.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        ) {
+            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("${journey.originArea} → ${journey.destinationArea}", style = MaterialTheme.typography.titleLarge)
+                TripDetailRow("Travelled with", "Fictional ${journey.personName}")
+                TripDetailRow("Status", journey.completedLabel)
+                Text("Only broad journey areas are retained for this session.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        Button(onClick = onTravelTogetherAgain, modifier = Modifier.fillMaxWidth()) {
+            Text("Travel together again")
         }
         InfoCard(
-            title = stringResource(R.string.trusted_connections),
-            body = stringResource(R.string.trusted_connections_body),
+            "Review before continuing",
+            "Find will open with this route and person as context. Nothing is created or confirmed automatically.",
         )
     }
 }

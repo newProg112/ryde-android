@@ -8,7 +8,9 @@ data class RydeUser(
 data class SavedPlace(
     val label: String,
     val area: String,
-)
+) {
+    val displayArea: String get() = area
+}
 
 data class DriverProfile(
     val firstName: String,
