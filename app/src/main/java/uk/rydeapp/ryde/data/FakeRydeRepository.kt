@@ -19,9 +19,17 @@ import uk.rydeapp.ryde.domain.model.CancelSeatRequestResult
 import uk.rydeapp.ryde.domain.model.CreateSeatRequestResult
 import uk.rydeapp.ryde.domain.model.SeatRequest
 import uk.rydeapp.ryde.domain.model.SeatRequestStatus
+import uk.rydeapp.ryde.domain.model.CancelOfferedJourneyResult
+import uk.rydeapp.ryde.domain.model.CreateOfferedJourneyResult
+import uk.rydeapp.ryde.domain.model.OfferRideContent
+import uk.rydeapp.ryde.domain.model.OfferRideCriteria
+import uk.rydeapp.ryde.domain.model.OfferRideValidator
+import uk.rydeapp.ryde.domain.model.OfferedJourney
+import uk.rydeapp.ryde.domain.model.OfferedJourneyStatus
 
 class FakeRydeRepository : RydeRepository {
     private val requestsByMatchId = linkedMapOf<String, SeatRequest>()
+    private val offeredJourneys = mutableListOf<OfferedJourney>()
     private val savedPlaces = listOf(
         SavedPlace(label = "Home", area = "Sutton-in-Ashfield"),
         SavedPlace(label = "Work", area = "Nottingham"),
@@ -128,6 +136,60 @@ class FakeRydeRepository : RydeRepository {
         val cancelled = existing.copy(status = SeatRequestStatus.CANCELLED)
         requestsByMatchId[existing.matchId] = cancelled
         return CancelSeatRequestResult.Cancelled(cancelled)
+    }
+
+    override fun getOfferRideContent() = OfferRideContent(
+        savedPlaces = savedPlaces,
+        defaultCriteria = OfferRideCriteria(
+            originArea = savedPlaces.first { it.label == "Home" }.area,
+            destinationArea = savedPlaces.first { it.label == "Work" }.area,
+            travelDate = DemoTravelDate.TODAY,
+            departureMinutes = 8 * 60,
+            flexibility = Flexibility.THIRTY,
+            spareSeats = 1,
+            maximumDetourMiles = 3,
+        ),
+    )
+
+    override fun getOfferedJourneys(): List<OfferedJourney> = offeredJourneys.toList()
+
+    override fun createOfferedJourney(criteria: OfferRideCriteria): CreateOfferedJourneyResult {
+        val errors = OfferRideValidator.validate(criteria)
+        if (errors.isNotEmpty()) return CreateOfferedJourneyResult.Invalid(errors)
+
+        val normalized = OfferRideValidator.normalize(criteria)
+        offeredJourneys.firstOrNull {
+            it.status == OfferedJourneyStatus.OPEN &&
+                OfferRideValidator.routeKey(it.originArea) == OfferRideValidator.routeKey(normalized.originArea) &&
+                OfferRideValidator.routeKey(it.destinationArea) == OfferRideValidator.routeKey(normalized.destinationArea) &&
+                it.travelDate == normalized.travelDate &&
+                it.departureMinutes == normalized.departureMinutes
+        }?.let { return CreateOfferedJourneyResult.DuplicateActive(it) }
+
+        val journey = OfferedJourney(
+            id = "demo-offer-${offeredJourneys.size + 1}",
+            status = OfferedJourneyStatus.OPEN,
+            originArea = normalized.originArea,
+            destinationArea = normalized.destinationArea,
+            travelDate = normalized.travelDate,
+            departureMinutes = normalized.departureMinutes,
+            flexibility = normalized.flexibility,
+            spareSeats = normalized.spareSeats,
+            maximumDetourMiles = normalized.maximumDetourMiles,
+        )
+        offeredJourneys += journey
+        return CreateOfferedJourneyResult.Created(journey)
+    }
+
+    override fun cancelOfferedJourney(journeyId: String): CancelOfferedJourneyResult {
+        val index = offeredJourneys.indexOfFirst { it.id == journeyId }
+        val existing = offeredJourneys.getOrNull(index)
+        if (existing?.status != OfferedJourneyStatus.OPEN) {
+            return CancelOfferedJourneyResult.NotOpen(existing)
+        }
+        val cancelled = existing.copy(status = OfferedJourneyStatus.CANCELLED)
+        offeredJourneys[index] = cancelled
+        return CancelOfferedJourneyResult.Cancelled(cancelled)
     }
 
     private val demoMatches = listOf(

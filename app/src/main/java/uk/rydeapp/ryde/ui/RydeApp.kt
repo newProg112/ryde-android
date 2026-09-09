@@ -24,9 +24,10 @@ import uk.rydeapp.ryde.data.FakeRydeRepository
 import uk.rydeapp.ryde.data.RydeRepository
 import uk.rydeapp.ryde.ui.components.DestinationIcon
 import uk.rydeapp.ryde.ui.components.DestinationIconType
-import uk.rydeapp.ryde.ui.destinations.OfferScreen
 import uk.rydeapp.ryde.ui.destinations.ProfileScreen
 import uk.rydeapp.ryde.ui.destinations.TripsScreen
+import uk.rydeapp.ryde.ui.offer.OfferScreen
+import uk.rydeapp.ryde.domain.model.OfferRideValidator
 import uk.rydeapp.ryde.ui.home.HomeScreen
 import uk.rydeapp.ryde.ui.find.FindScreen
 import uk.rydeapp.ryde.ui.theme.RydeTheme
@@ -46,11 +47,13 @@ private enum class RydeDestination(
 fun RydeApp(repository: RydeRepository? = null) {
     val appRepository = remember(repository) { repository ?: FakeRydeRepository() }
     var selectedDestination by rememberSaveable { mutableStateOf(RydeDestination.HOME) }
-    var requestRevision by remember { mutableIntStateOf(0) }
+    var tripRevision by remember { mutableIntStateOf(0) }
     val stateHolder = rememberSaveableStateHolder()
     val homeContent = remember(appRepository) { appRepository.getHomeContent() }
     val findContent = remember(appRepository) { appRepository.getFindRideContent() }
-    val requests = remember(appRepository, requestRevision) { appRepository.getSeatRequests() }
+    val offerContent = remember(appRepository) { appRepository.getOfferRideContent() }
+    val requests = remember(appRepository, tripRevision) { appRepository.getSeatRequests() }
+    val offeredJourneys = remember(appRepository, tripRevision) { appRepository.getOfferedJourneys() }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -87,17 +90,31 @@ fun RydeApp(repository: RydeRepository? = null) {
                     onSearch = appRepository::findRides,
                     requestForMatch = appRepository::getSeatRequestForMatch,
                     onCreateRequest = { matchId, criteria ->
-                        appRepository.createSeatRequest(matchId, criteria).also { requestRevision += 1 }
+                        appRepository.createSeatRequest(matchId, criteria).also { tripRevision += 1 }
                     },
                     onOpenTrips = { selectedDestination = RydeDestination.TRIPS },
                     modifier = Modifier.padding(innerPadding),
                 )
-                RydeDestination.OFFER -> OfferScreen(Modifier.padding(innerPadding))
+                RydeDestination.OFFER -> OfferScreen(
+                    content = offerContent,
+                    offeredJourneys = offeredJourneys,
+                    validate = OfferRideValidator::validate,
+                    onCreateOffer = { criteria ->
+                        appRepository.createOfferedJourney(criteria).also { tripRevision += 1 }
+                    },
+                    onOpenTrips = { selectedDestination = RydeDestination.TRIPS },
+                    modifier = Modifier.padding(innerPadding),
+                )
                 RydeDestination.TRIPS -> TripsScreen(
                     requests = requests,
+                    offeredJourneys = offeredJourneys,
                     onCancelRequest = { requestId ->
                         appRepository.cancelSeatRequest(requestId)
-                        requestRevision += 1
+                        tripRevision += 1
+                    },
+                    onCancelOffer = { journeyId ->
+                        appRepository.cancelOfferedJourney(journeyId)
+                        tripRevision += 1
                     },
                     modifier = Modifier.padding(innerPadding),
                 )

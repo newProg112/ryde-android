@@ -44,14 +44,10 @@
     <string name="nav_profile">Profile</string>
     <string name="nav_description">Open %1$s</string>
 
-    <string name="offer_heading">Offer your spare seats</string>
-    <string name="offer_body">Only offer journeys you already plan to make.</string>
-    <string name="offer_info_title">You can ride and drive</string>
-    <string name="offer_info_body">Ryde does not lock people into permanent rider or driver roles. Journey publishing is deferred beyond Phase 1.</string>
     <string name="trips_heading">Your trips</string>
-    <string name="trips_body">Track seat requests stored in this fictional local demo.</string>
-    <string name="trips_info_title">No demo requests yet</string>
-    <string name="trips_info_body">Request a seat from a Find match and its local-only status will appear here.</string>
+    <string name="trips_body">Track seat requests and offered journeys stored in this fictional local demo.</string>
+    <string name="trips_info_title">No demo trips yet</string>
+    <string name="trips_info_body">Request a seat in Find or offer spare seats, and its local-only status will appear here.</string>
     <string name="profile_heading">Your Ryde profile</string>
     <string name="profile_body">Keep useful places and trusted travel connections close at hand.</string>
     <string name="saved_places">Saved places</string>

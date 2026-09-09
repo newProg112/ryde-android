@@ -7,6 +7,11 @@ import uk.rydeapp.ryde.domain.model.FindRideSearchResult
 import uk.rydeapp.ryde.domain.model.CancelSeatRequestResult
 import uk.rydeapp.ryde.domain.model.CreateSeatRequestResult
 import uk.rydeapp.ryde.domain.model.SeatRequest
+import uk.rydeapp.ryde.domain.model.CancelOfferedJourneyResult
+import uk.rydeapp.ryde.domain.model.CreateOfferedJourneyResult
+import uk.rydeapp.ryde.domain.model.OfferRideContent
+import uk.rydeapp.ryde.domain.model.OfferRideCriteria
+import uk.rydeapp.ryde.domain.model.OfferedJourney
 
 interface RydeRepository {
     fun getHomeContent(): HomeContent
@@ -16,4 +21,8 @@ interface RydeRepository {
     fun getSeatRequestForMatch(matchId: String): SeatRequest?
     fun createSeatRequest(matchId: String, criteria: FindRideCriteria): CreateSeatRequestResult
     fun cancelSeatRequest(requestId: String): CancelSeatRequestResult
+    fun getOfferRideContent(): OfferRideContent
+    fun getOfferedJourneys(): List<OfferedJourney>
+    fun createOfferedJourney(criteria: OfferRideCriteria): CreateOfferedJourneyResult
+    fun cancelOfferedJourney(journeyId: String): CancelOfferedJourneyResult
 }
