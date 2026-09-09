@@ -10,9 +10,11 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -41,10 +43,14 @@ private enum class RydeDestination(
 }
 
 @Composable
-fun RydeApp(repository: RydeRepository = FakeRydeRepository) {
+fun RydeApp(repository: RydeRepository? = null) {
+    val appRepository = remember(repository) { repository ?: FakeRydeRepository() }
     var selectedDestination by rememberSaveable { mutableStateOf(RydeDestination.HOME) }
-    val homeContent = remember(repository) { repository.getHomeContent() }
-    val findContent = remember(repository) { repository.getFindRideContent() }
+    var requestRevision by remember { mutableIntStateOf(0) }
+    val stateHolder = rememberSaveableStateHolder()
+    val homeContent = remember(appRepository) { appRepository.getHomeContent() }
+    val findContent = remember(appRepository) { appRepository.getFindRideContent() }
+    val requests = remember(appRepository, requestRevision) { appRepository.getSeatRequests() }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -68,24 +74,38 @@ fun RydeApp(repository: RydeRepository = FakeRydeRepository) {
             }
         },
     ) { innerPadding ->
-        when (selectedDestination) {
-            RydeDestination.HOME -> HomeScreen(
-                content = homeContent,
-                onFindRide = { selectedDestination = RydeDestination.FIND },
-                onOfferRide = { selectedDestination = RydeDestination.OFFER },
-                modifier = Modifier.padding(innerPadding),
-            )
-            RydeDestination.FIND -> FindScreen(
-                content = findContent,
-                onSearch = repository::findRides,
-                modifier = Modifier.padding(innerPadding),
-            )
-            RydeDestination.OFFER -> OfferScreen(Modifier.padding(innerPadding))
-            RydeDestination.TRIPS -> TripsScreen(Modifier.padding(innerPadding))
-            RydeDestination.PROFILE -> ProfileScreen(
-                savedPlaces = homeContent.currentUser.savedPlaces,
-                modifier = Modifier.padding(innerPadding),
-            )
+        stateHolder.SaveableStateProvider(selectedDestination.name) {
+            when (selectedDestination) {
+                RydeDestination.HOME -> HomeScreen(
+                    content = homeContent,
+                    onFindRide = { selectedDestination = RydeDestination.FIND },
+                    onOfferRide = { selectedDestination = RydeDestination.OFFER },
+                    modifier = Modifier.padding(innerPadding),
+                )
+                RydeDestination.FIND -> FindScreen(
+                    content = findContent,
+                    onSearch = appRepository::findRides,
+                    requestForMatch = appRepository::getSeatRequestForMatch,
+                    onCreateRequest = { matchId, criteria ->
+                        appRepository.createSeatRequest(matchId, criteria).also { requestRevision += 1 }
+                    },
+                    onOpenTrips = { selectedDestination = RydeDestination.TRIPS },
+                    modifier = Modifier.padding(innerPadding),
+                )
+                RydeDestination.OFFER -> OfferScreen(Modifier.padding(innerPadding))
+                RydeDestination.TRIPS -> TripsScreen(
+                    requests = requests,
+                    onCancelRequest = { requestId ->
+                        appRepository.cancelSeatRequest(requestId)
+                        requestRevision += 1
+                    },
+                    modifier = Modifier.padding(innerPadding),
+                )
+                RydeDestination.PROFILE -> ProfileScreen(
+                    savedPlaces = homeContent.currentUser.savedPlaces,
+                    modifier = Modifier.padding(innerPadding),
+                )
+            }
         }
     }
 }

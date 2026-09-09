@@ -1,5 +1,6 @@
 package uk.rydeapp.ryde.ui.find
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -19,6 +20,7 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -53,6 +55,9 @@ import uk.rydeapp.ryde.domain.model.FindRideField
 import uk.rydeapp.ryde.domain.model.FindRideSearchResult
 import uk.rydeapp.ryde.domain.model.Flexibility
 import uk.rydeapp.ryde.domain.model.RouteMatch
+import uk.rydeapp.ryde.domain.model.CreateSeatRequestResult
+import uk.rydeapp.ryde.domain.model.SeatRequest
+import uk.rydeapp.ryde.domain.model.SeatRequestStatus
 import uk.rydeapp.ryde.domain.model.formatDemoTime
 import uk.rydeapp.ryde.ui.components.LabelPill
 import uk.rydeapp.ryde.ui.components.RouteMark
@@ -60,12 +65,15 @@ import uk.rydeapp.ryde.ui.theme.ElectricBlue
 import uk.rydeapp.ryde.ui.theme.Mint
 import uk.rydeapp.ryde.ui.theme.RydeTheme
 
-private enum class FindStage { FORM, RESULTS, DETAILS }
+private enum class FindStage { FORM, RESULTS, DETAILS, CONFIRM, SUCCESS }
 
 @Composable
 fun FindScreen(
     content: FindRideContent,
     onSearch: (FindRideCriteria) -> FindRideSearchResult,
+    requestForMatch: (String) -> SeatRequest?,
+    onCreateRequest: (String, FindRideCriteria) -> CreateSeatRequestResult,
+    onOpenTrips: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val defaults = content.defaultCriteria
@@ -76,17 +84,53 @@ fun FindScreen(
     var flexibility by rememberSaveable { mutableStateOf(defaults.flexibility) }
     var seats by rememberSaveable { mutableIntStateOf(defaults.seatsRequired) }
     var stage by rememberSaveable { mutableStateOf(FindStage.FORM) }
-    var result by remember { mutableStateOf<FindRideSearchResult?>(null) }
+    var searchAttempt by rememberSaveable { mutableIntStateOf(0) }
     var selectedMatchId by rememberSaveable { mutableStateOf<String?>(null) }
 
     val currentCriteria = FindRideCriteria(origin, destination, date, departureMinutes, flexibility, seats)
+    val result = remember(currentCriteria, searchAttempt) {
+        if (searchAttempt > 0) onSearch(currentCriteria) else null
+    }
     val selectedMatch = result?.matches?.firstOrNull { it.id == selectedMatchId }
+    val existingRequest = selectedMatch?.let { requestForMatch(it.id) }
+
+    BackHandler(enabled = stage != FindStage.FORM) {
+        stage = when (stage) {
+            FindStage.RESULTS -> FindStage.FORM
+            FindStage.DETAILS -> FindStage.RESULTS
+            FindStage.CONFIRM, FindStage.SUCCESS -> FindStage.DETAILS
+            FindStage.FORM -> FindStage.FORM
+        }
+    }
 
     when {
+        stage == FindStage.SUCCESS && existingRequest != null -> RequestSuccess(
+            request = existingRequest,
+            onBackToMatch = { stage = FindStage.DETAILS },
+            onOpenTrips = onOpenTrips,
+            modifier = modifier,
+        )
+        stage == FindStage.CONFIRM && selectedMatch != null -> RequestConfirmation(
+            criteria = result!!.criteria,
+            match = selectedMatch,
+            onBack = { stage = FindStage.DETAILS },
+            onConfirm = {
+                when (onCreateRequest(selectedMatch.id, result!!.criteria)) {
+                    is CreateSeatRequestResult.Created,
+                    is CreateSeatRequestResult.DuplicateActive -> stage = FindStage.SUCCESS
+                    CreateSeatRequestResult.InvalidSeatCount,
+                    CreateSeatRequestResult.MatchNotFound -> stage = FindStage.DETAILS
+                }
+            },
+            modifier = modifier,
+        )
         stage == FindStage.DETAILS && selectedMatch != null -> MatchDetails(
             criteria = result!!.criteria,
             match = selectedMatch,
+            request = existingRequest,
             onBack = { stage = FindStage.RESULTS },
+            onRequest = { stage = FindStage.CONFIRM },
+            onOpenTrips = onOpenTrips,
             modifier = modifier,
         )
         stage == FindStage.RESULTS && result != null -> Results(
@@ -114,8 +158,9 @@ fun FindScreen(
             onFlexibilityChange = { flexibility = it },
             onSeatsChange = { seats = it.coerceIn(1, 4) },
             onSearch = {
-                result = onSearch(currentCriteria)
-                if (result?.isValid == true) stage = FindStage.RESULTS
+                val searched = onSearch(currentCriteria)
+                searchAttempt += 1
+                if (searched.isValid) stage = FindStage.RESULTS
             },
             modifier = modifier,
         )
@@ -344,7 +389,10 @@ private fun EmptyResults(onEdit: () -> Unit) {
 private fun MatchDetails(
     criteria: FindRideCriteria,
     match: RouteMatch,
+    request: SeatRequest?,
     onBack: () -> Unit,
+    onRequest: () -> Unit,
+    onOpenTrips: () -> Unit,
     modifier: Modifier,
 ) {
     FindList(modifier) {
@@ -395,8 +443,120 @@ private fun MatchDetails(
             }
         }
         item {
-            Button(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) { Text("Seat requests coming in Phase 3") }
-            Text("No request has been sent in this demo.", modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+            when (request?.status) {
+                SeatRequestStatus.PENDING -> {
+                    Button(onClick = onOpenTrips, modifier = Modifier.fillMaxWidth()) { Text("View pending request in Trips") }
+                    Text("Pending in this local demo only — no real driver has been contacted.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                }
+                SeatRequestStatus.CANCELLED -> {
+                    Button(onClick = onRequest, modifier = Modifier.fillMaxWidth()) { Text("Request seat again") }
+                    Text("The earlier local-demo request is cancelled. No real driver was contacted.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                }
+                null -> {
+                    Button(onClick = onRequest, modifier = Modifier.fillMaxWidth()) { Text("Review seat request") }
+                    Text("You will review privacy and the full total before submitting.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RequestConfirmation(
+    criteria: FindRideCriteria,
+    match: RouteMatch,
+    onBack: () -> Unit,
+    onConfirm: () -> Unit,
+    modifier: Modifier,
+) {
+    var privacyAcknowledged by rememberSaveable { mutableStateOf(false) }
+    FindList(modifier) {
+        item {
+            OutlinedButton(onClick = onBack) { Text("← Back to match") }
+            Spacer(Modifier.height(10.dp))
+            FindHeader("Review your seat request", "Nothing is sent until you confirm")
+        }
+        item {
+            DetailCard("Journey") {
+                PriceRow("Fictional driver", match.driver.firstName)
+                PriceRow("Route", "${criteria.origin} → ${criteria.destination}")
+                PriceRow("Date", match.travelDate.displayName)
+                PriceRow("Approximate pickup", formatDemoTime(match.pickupMinutes))
+                PriceRow("Public pickup area", match.pickupArea)
+                PriceRow("Seats requested", criteria.seatsRequired.toString())
+            }
+        }
+        item {
+            DetailCard("Transparent total") {
+                PriceRow("Shared-distance contribution", money(match.contributionPence))
+                Text("${match.sharedMiles} shared miles × £0.20, rounded to the nearest 50p", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                PriceRow("Ryde service fee", money(match.serviceFeePence))
+                HorizontalDivider(Modifier.padding(vertical = 6.dp))
+                PriceRow("Rider total", money(match.riderTotalPence), bold = true)
+                PriceRow("Driver receives", money(match.driverReceivesPence), bold = true)
+                Text("Based on shared distance — never demand, delays or surge pricing.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        item {
+            DetailCard("Privacy before you request") {
+                Text("Your home address is never displayed or shared.", fontWeight = FontWeight.Bold)
+                Text("Only the public, approximate pickup area ‘${match.pickupArea}’ is shared with the fictional driver at this stage.")
+                Text("Exact or live location would only be shared later when necessary, and only after a clear warning.")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = privacyAcknowledged, onCheckedChange = { privacyAcknowledged = it })
+                    Text("I understand what this demo shares", modifier = Modifier.weight(1f))
+                }
+            }
+        }
+        item {
+            Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.secondaryContainer) {
+                Text(
+                    "Fictional local demo: this request will only be stored in this app session. It will not reach a real driver and no payment will be taken.",
+                    modifier = Modifier.padding(16.dp),
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            Button(
+                onClick = onConfirm,
+                enabled = privacyAcknowledged,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Request seat") }
+        }
+    }
+}
+
+@Composable
+private fun RequestSuccess(
+    request: SeatRequest,
+    onBackToMatch: () -> Unit,
+    onOpenTrips: () -> Unit,
+    modifier: Modifier,
+) {
+    FindList(modifier) {
+        item {
+            FindHeader(
+                if (request.status == SeatRequestStatus.PENDING) "Request saved" else "Request cancelled",
+                if (request.status == SeatRequestStatus.PENDING) "Pending driver response" else "Cancelled · local demo history",
+            )
+        }
+        item {
+            DetailCard("Local-demo success") {
+                Text(
+                    if (request.status == SeatRequestStatus.PENDING) {
+                        "Your fictional request for ${request.requestedSeats} ${if (request.requestedSeats == 1) "seat" else "seats"} is now visible in Trips."
+                    } else {
+                        "This fictional request is cancelled and remains visible in Trips as local-demo history."
+                    },
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text("It is stored only for this app session. No real driver was contacted and no payment or location sharing occurred.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        item {
+            Button(onClick = onOpenTrips, modifier = Modifier.fillMaxWidth()) { Text("Open Trips") }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = onBackToMatch, modifier = Modifier.fillMaxWidth()) { Text("Back to match") }
         }
     }
 }
@@ -438,7 +598,7 @@ private fun FindHeader(title: String, subtitle: String) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         RouteMark("Ryde merging route mark", Modifier.size(38.dp))
         Spacer(Modifier.weight(1f))
-        LabelPill("PHASE 2 · LOCAL DEMO")
+        LabelPill("PHASE 3 · LOCAL DEMO")
     }
     Spacer(Modifier.height(14.dp))
     Text(title, style = MaterialTheme.typography.headlineMedium)
@@ -466,6 +626,13 @@ private fun seatLabel(count: Int): String = "$count ${if (count == 1) "seat" els
 @Composable
 private fun FindScreenPreview() {
     RydeTheme(darkTheme = false) {
-        FindScreen(FakeRydeRepository.getFindRideContent(), FakeRydeRepository::findRides)
+        val repository = remember { FakeRydeRepository() }
+        FindScreen(
+            repository.getFindRideContent(),
+            repository::findRides,
+            repository::getSeatRequestForMatch,
+            repository::createSeatRequest,
+            onOpenTrips = {},
+        )
     }
 }

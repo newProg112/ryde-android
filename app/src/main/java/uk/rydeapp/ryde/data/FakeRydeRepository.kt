@@ -15,8 +15,13 @@ import uk.rydeapp.ryde.domain.model.RydeUser
 import uk.rydeapp.ryde.domain.model.SavedPlace
 import uk.rydeapp.ryde.domain.model.SuggestedMatch
 import uk.rydeapp.ryde.domain.model.RouteMatch
+import uk.rydeapp.ryde.domain.model.CancelSeatRequestResult
+import uk.rydeapp.ryde.domain.model.CreateSeatRequestResult
+import uk.rydeapp.ryde.domain.model.SeatRequest
+import uk.rydeapp.ryde.domain.model.SeatRequestStatus
 
-object FakeRydeRepository : RydeRepository {
+class FakeRydeRepository : RydeRepository {
+    private val requestsByMatchId = linkedMapOf<String, SeatRequest>()
     private val savedPlaces = listOf(
         SavedPlace(label = "Home", area = "Sutton-in-Ashfield"),
         SavedPlace(label = "Work", area = "Nottingham"),
@@ -76,6 +81,53 @@ object FakeRydeRepository : RydeRepository {
             validationErrors = errors,
             matches = if (errors.isEmpty()) FindRideMatcher.rankCompatible(criteria, demoMatches) else emptyList(),
         )
+    }
+
+    override fun getSeatRequests(): List<SeatRequest> = requestsByMatchId.values.toList()
+
+    override fun getSeatRequestForMatch(matchId: String): SeatRequest? = requestsByMatchId[matchId]
+
+    override fun createSeatRequest(
+        matchId: String,
+        criteria: FindRideCriteria,
+    ): CreateSeatRequestResult {
+        requestsByMatchId[matchId]
+            ?.takeIf { it.status == SeatRequestStatus.PENDING }
+            ?.let { return CreateSeatRequestResult.DuplicateActive(it) }
+
+        val match = demoMatches.firstOrNull { it.id == matchId }
+            ?: return CreateSeatRequestResult.MatchNotFound
+        if (criteria.seatsRequired !in 1..match.availableSeats) {
+            return CreateSeatRequestResult.InvalidSeatCount
+        }
+
+        val request = SeatRequest(
+            id = "demo-request-$matchId",
+            matchId = matchId,
+            status = SeatRequestStatus.PENDING,
+            driver = match.driver,
+            originArea = criteria.origin,
+            destinationArea = criteria.destination,
+            travelDate = match.travelDate,
+            approximatePickupMinutes = match.pickupMinutes,
+            pickupArea = match.pickupArea,
+            requestedSeats = criteria.seatsRequired,
+            sharedMiles = match.sharedMiles,
+            contributionPence = ContributionCalculator.calculatePence(match.sharedMiles),
+            serviceFeePence = match.serviceFeePence,
+        )
+        requestsByMatchId[matchId] = request
+        return CreateSeatRequestResult.Created(request)
+    }
+
+    override fun cancelSeatRequest(requestId: String): CancelSeatRequestResult {
+        val existing = requestsByMatchId.values.firstOrNull { it.id == requestId }
+        if (existing?.status != SeatRequestStatus.PENDING) {
+            return CancelSeatRequestResult.NotPending(existing)
+        }
+        val cancelled = existing.copy(status = SeatRequestStatus.CANCELLED)
+        requestsByMatchId[existing.matchId] = cancelled
+        return CancelSeatRequestResult.Cancelled(cancelled)
     }
 
     private val demoMatches = listOf(

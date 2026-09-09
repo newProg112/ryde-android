@@ -5,7 +5,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class FakeRydeRepositoryTest {
-    private val home = FakeRydeRepository.getHomeContent()
+    private val repository = FakeRydeRepository()
+    private val home = repository.getHomeContent()
 
     @Test
     fun `demo match exposes transparent contribution split`() {
@@ -25,7 +26,7 @@ class FakeRydeRepositoryTest {
 
     @Test
     fun `default find search returns Alex first`() {
-        val result = FakeRydeRepository.findRides(FakeRydeRepository.getFindRideContent().defaultCriteria)
+        val result = repository.findRides(repository.getFindRideContent().defaultCriteria)
 
         assertTrue(result.isValid)
         assertEquals("Alex", result.matches.first().driver.firstName)
@@ -34,8 +35,8 @@ class FakeRydeRepositoryTest {
 
     @Test
     fun `Alex search match uses seventeen mile contribution breakdown`() {
-        val alex = FakeRydeRepository
-            .findRides(FakeRydeRepository.getFindRideContent().defaultCriteria)
+        val alex = repository
+            .findRides(repository.getFindRideContent().defaultCriteria)
             .matches
             .first()
 

@@ -49,9 +49,9 @@
     <string name="offer_info_title">You can ride and drive</string>
     <string name="offer_info_body">Ryde does not lock people into permanent rider or driver roles. Journey publishing is deferred beyond Phase 1.</string>
     <string name="trips_heading">Your trips</string>
-    <string name="trips_body">Planned rides and offered journeys will live together here.</string>
-    <string name="trips_info_title">No active trips in this demo</string>
-    <string name="trips_info_body">When a route request or seat offer is confirmed, its status will be easy to follow here.</string>
+    <string name="trips_body">Track seat requests stored in this fictional local demo.</string>
+    <string name="trips_info_title">No demo requests yet</string>
+    <string name="trips_info_body">Request a seat from a Find match and its local-only status will appear here.</string>
     <string name="profile_heading">Your Ryde profile</string>
     <string name="profile_body">Keep useful places and trusted travel connections close at hand.</string>
     <string name="saved_places">Saved places</string>

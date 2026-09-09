@@ -386,7 +386,7 @@ private fun formatPence(pence: Int): String =
 private fun HomeScreenPreview() {
     RydeTheme(darkTheme = false) {
         HomeScreen(
-            content = FakeRydeRepository.getHomeContent(),
+            content = FakeRydeRepository().getHomeContent(),
             onFindRide = {},
             onOfferRide = {},
         )
