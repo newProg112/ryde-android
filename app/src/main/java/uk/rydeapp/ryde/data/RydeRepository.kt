@@ -16,13 +16,19 @@ import uk.rydeapp.ryde.domain.model.ConfirmedSharedTrip
 import uk.rydeapp.ryde.domain.model.DecideIncomingRequestResult
 import uk.rydeapp.ryde.domain.model.IncomingRequestDecision
 import uk.rydeapp.ryde.domain.model.IncomingSeatRequest
+import uk.rydeapp.ryde.domain.model.CircleMembership
+import uk.rydeapp.ryde.domain.model.JoinCircleResult
+import uk.rydeapp.ryde.domain.model.LeaveCircleResult
 
 interface RydeRepository {
     fun getHomeContent(): HomeContent
+    fun getCircleMembership(circleId: String): CircleMembership?
+    fun joinCircle(circleId: String): JoinCircleResult
+    fun leaveCircle(circleId: String): LeaveCircleResult
     fun getFindRideContent(): FindRideContent
     fun findRides(criteria: FindRideCriteria): FindRideSearchResult
     fun getSeatRequests(): List<SeatRequest>
-    fun getSeatRequestForMatch(matchId: String): SeatRequest?
+    fun getSeatRequestForMatch(matchId: String, circleId: String? = null): SeatRequest?
     fun createSeatRequest(matchId: String, criteria: FindRideCriteria): CreateSeatRequestResult
     fun cancelSeatRequest(requestId: String): CancelSeatRequestResult
     fun getOfferRideContent(): OfferRideContent

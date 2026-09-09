@@ -30,15 +30,30 @@ data class SuggestedMatch(
     val contributionPence: Int,
     val serviceFeePence: Int,
 ) {
-    val riderTotalPence: Int get() = contributionPence + serviceFeePence
-    val driverReceivesPence: Int get() = contributionPence
+    val pricing: JourneyPricing
+        get() = JourneyPricing(contributionPence, serviceFeePence, ServiceFeeResponsibility.RIDER)
+    val riderTotalPence: Int get() = pricing.riderTotalPence
+    val driverReceivesPence: Int get() = pricing.driverReceivesPence
 }
 
 data class HostedCircle(
+    val id: String,
     val name: String,
+    val hostName: String,
+    val type: String,
+    val location: String,
+    val status: String,
     val summary: String,
+    val purpose: String,
+    val destinationArea: String,
+    val eventDate: DemoTravelDate,
+    val eventTime: String,
+    val illustrativeMembers: Int,
+    val illustrativeTrips: Int,
     val serviceFeeCoveredByHost: Boolean,
-)
+) {
+    val identity: CircleIdentity get() = CircleIdentity(id, name)
+}
 
 data class HomeContent(
     val currentUser: RydeUser,

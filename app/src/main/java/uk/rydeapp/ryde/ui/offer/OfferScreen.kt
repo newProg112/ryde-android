@@ -27,6 +27,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -48,6 +49,9 @@ import uk.rydeapp.ryde.domain.model.OfferRideField
 import uk.rydeapp.ryde.domain.model.OfferRideValidationError
 import uk.rydeapp.ryde.domain.model.OfferedJourney
 import uk.rydeapp.ryde.domain.model.OfferedJourneyStatus
+import uk.rydeapp.ryde.domain.model.HostedCircle
+import uk.rydeapp.ryde.domain.model.TravelDatePolicy
+import uk.rydeapp.ryde.domain.model.DemoDepartureTimePolicy
 import uk.rydeapp.ryde.domain.model.formatDemoTime
 import uk.rydeapp.ryde.ui.components.InfoCard
 import uk.rydeapp.ryde.ui.components.LabelPill
@@ -58,6 +62,7 @@ private enum class OfferStage { FORM, REVIEW, SUCCESS }
 @Composable
 fun OfferScreen(
     content: OfferRideContent,
+    joinedCircle: HostedCircle?,
     offeredJourneys: List<OfferedJourney>,
     validate: (OfferRideCriteria) -> List<OfferRideValidationError>,
     onCreateOffer: (OfferRideCriteria) -> CreateOfferedJourneyResult,
@@ -69,7 +74,8 @@ fun OfferScreen(
     var origin by rememberSaveable { mutableStateOf(defaults.originArea) }
     var destination by rememberSaveable { mutableStateOf(defaults.destinationArea) }
     var date by rememberSaveable { mutableStateOf(defaults.travelDate) }
-    var departureMinutes by rememberSaveable { mutableIntStateOf(defaults.departureMinutes) }
+    var ordinaryDepartureMinutes by rememberSaveable { mutableIntStateOf(defaults.departureMinutes) }
+    var circleDepartureMinutes by rememberSaveable { mutableIntStateOf(DemoDepartureTimePolicy.CIRCLE_DEFAULT) }
     var flexibility by rememberSaveable { mutableStateOf(defaults.flexibility) }
     var spareSeats by rememberSaveable { mutableIntStateOf(defaults.spareSeats) }
     var maximumDetourMiles by rememberSaveable { mutableIntStateOf(defaults.maximumDetourMiles) }
@@ -78,15 +84,24 @@ fun OfferScreen(
     var acknowledgement by rememberSaveable { mutableStateOf(false) }
     var publishedOfferId by rememberSaveable { mutableStateOf(initialActive?.id) }
     var duplicateMessage by rememberSaveable { mutableStateOf(false) }
+    var offerWithinCircle by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(joinedCircle?.id) {
+        if (joinedCircle == null) offerWithinCircle = false
+    }
 
     val criteria = OfferRideCriteria(
         originArea = origin,
         destinationArea = destination,
-        travelDate = date,
-        departureMinutes = departureMinutes,
+        travelDate = TravelDatePolicy.forMode(date, joinedCircle.takeIf { offerWithinCircle }),
+        departureMinutes = DemoDepartureTimePolicy.resolveOffer(
+            requestedMinutes = if (offerWithinCircle) circleDepartureMinutes else ordinaryDepartureMinutes,
+            isCircleMode = joinedCircle != null && offerWithinCircle,
+        ),
         flexibility = flexibility,
         spareSeats = spareSeats,
         maximumDetourMiles = maximumDetourMiles,
+        circleId = joinedCircle?.id?.takeIf { offerWithinCircle },
     )
     val publishedOffer = offeredJourneys.firstOrNull { it.id == publishedOfferId }
         ?: initialActive
@@ -102,6 +117,8 @@ fun OfferScreen(
     when (stage) {
         OfferStage.FORM -> OfferForm(
             content = content,
+            joinedCircle = joinedCircle,
+            offerWithinCircle = offerWithinCircle,
             activeOffer = offeredJourneys.lastOrNull { it.status == OfferedJourneyStatus.OPEN },
             criteria = criteria,
             errors = errors,
@@ -109,10 +126,13 @@ fun OfferScreen(
             onDestinationChange = { destination = it; errors = errors.without(OfferRideField.DESTINATION, OfferRideField.ENDPOINTS) },
             onSwap = { val oldOrigin = origin; origin = destination; destination = oldOrigin; errors = emptyList() },
             onDateChange = { date = it },
-            onTimeChange = { departureMinutes = it },
+            onTimeChange = {
+                if (offerWithinCircle) circleDepartureMinutes = it else ordinaryDepartureMinutes = it
+            },
             onFlexibilityChange = { flexibility = it },
             onSeatsChange = { spareSeats = it },
             onDetourChange = { maximumDetourMiles = it },
+            onOfferWithinCircleChange = { offerWithinCircle = it },
             onReview = {
                 errors = validate(criteria)
                 if (errors.isEmpty()) {
@@ -165,6 +185,8 @@ fun OfferScreen(
 @Composable
 private fun OfferForm(
     content: OfferRideContent,
+    joinedCircle: HostedCircle?,
+    offerWithinCircle: Boolean,
     activeOffer: OfferedJourney?,
     criteria: OfferRideCriteria,
     errors: List<OfferRideValidationError>,
@@ -176,6 +198,7 @@ private fun OfferForm(
     onFlexibilityChange: (Flexibility) -> Unit,
     onSeatsChange: (Int) -> Unit,
     onDetourChange: (Int) -> Unit,
+    onOfferWithinCircleChange: (Boolean) -> Unit,
     onReview: () -> Unit,
     modifier: Modifier,
 ) {
@@ -196,6 +219,31 @@ private fun OfferForm(
                 title = "A planned journey, not a taxi service",
                 body = "You are offering spare seats on a journey you already intend to make, not operating an on-demand taxi service.",
             )
+        }
+        if (joinedCircle != null) {
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Offer visibility", style = MaterialTheme.typography.titleMedium)
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        FilterChip(
+                            selected = !offerWithinCircle,
+                            onClick = { onOfferWithinCircleChange(false) },
+                            label = { Text("Ordinary Ryde offer") },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        FilterChip(
+                            selected = offerWithinCircle,
+                            onClick = { onOfferWithinCircleChange(true) },
+                            label = { Text("Offer within Nottingham Live") },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    if (offerWithinCircle) Text("Ryde Circle journey · host-covered service fee", color = MaterialTheme.colorScheme.primary)
+                }
+            }
         }
         item {
             OutlinedTextField(
@@ -231,11 +279,32 @@ private fun OfferForm(
                 AssistChip(onClick = { onDestinationChange(place.area) }, label = { Text("Work · ${place.area}") })
             }
         }
-        item { OfferChoices("Demo travel date", DemoTravelDate.entries, criteria.travelDate, { it.displayName }, onDateChange) }
+        if (criteria.circleId != null) {
+            item {
+                InfoCard(
+                    title = "Circle event date",
+                    body = criteria.travelDate.displayName,
+                )
+            }
+        } else {
+            item {
+                OfferChoices(
+                    "Demo travel date",
+                    DemoTravelDate.ordinaryChoices,
+                    criteria.travelDate,
+                    { it.displayName },
+                    onDateChange,
+                )
+            }
+        }
         item {
             OfferChoices(
                 "Planned departure time",
-                listOf(7 * 60 + 30, 8 * 60, 8 * 60 + 30),
+                if (criteria.circleId == null) {
+                    DemoDepartureTimePolicy.ordinaryOfferChoices
+                } else {
+                    DemoDepartureTimePolicy.circleChoices
+                },
                 criteria.departureMinutes,
                 ::formatDemoTime,
                 onTimeChange,
@@ -298,6 +367,7 @@ private fun OfferReview(
             OutlinedButton(onClick = onBack) { Text("← Back to edit") }
             Spacer(Modifier.height(12.dp))
             OfferHeader("Review your journey", "Nothing is published outside this local demo")
+            if (criteria.circleId != null) LabelPill("Ryde Circle · Nottingham Live — Event Travel")
         }
         item {
             OfferCard("Journey offered") {
@@ -321,7 +391,11 @@ private fun OfferReview(
         item {
             InfoCard(
                 title = "Transparent contributions",
-                body = "Any future rider contribution will be calculated from the distance actually shared—not demand, delays or surge pricing.",
+                body = if (criteria.circleId == null) {
+                    "Any future rider contribution will be calculated from the distance actually shared—not demand, delays or surge pricing."
+                } else {
+                    "The rider contribution still uses shared distance. The fictional Circle host covers Ryde’s £0.50 fee; no real sponsorship or payment occurs."
+                },
             )
             Spacer(Modifier.height(12.dp))
             Button(onClick = onPublish, enabled = acknowledged, modifier = Modifier.fillMaxWidth()) {
@@ -344,6 +418,7 @@ private fun OfferSuccess(
         item {
             OfferCard("Local-demo status") {
                 if (journey != null) {
+                    journey.circle?.let { LabelPill("Ryde Circle · ${it.name}") }
                     Text("${journey.originArea} → ${journey.destinationArea}", style = MaterialTheme.typography.titleLarge)
                     Text("${journey.travelDate.displayName} · ${formatDemoTime(journey.departureMinutes)} · ${journey.spareSeats} ${if (journey.spareSeats == 1) "seat" else "seats"}")
                     Text("Maximum detour ${detourLabel(journey.maximumDetourMiles)}")
@@ -353,7 +428,14 @@ private fun OfferSuccess(
                     else "Your offered journey is now saved for this app session.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Text("No real rider has seen it, and no journey, personal details or location were published.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    if (journey?.circle == null) {
+                        "No real rider has seen it, and no journey, personal details or location were published."
+                    } else {
+                        "No real rider or host was contacted. No payment, sponsorship, journey, personal details or location were published."
+                    },
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
         item {

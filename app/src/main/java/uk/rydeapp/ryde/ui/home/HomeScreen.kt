@@ -25,6 +25,10 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -40,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import uk.rydeapp.ryde.R
 import uk.rydeapp.ryde.data.FakeRydeRepository
 import uk.rydeapp.ryde.domain.model.HomeContent
+import uk.rydeapp.ryde.domain.model.CircleMembership
 import uk.rydeapp.ryde.domain.model.HostedCircle
 import uk.rydeapp.ryde.domain.model.SavedPlace
 import uk.rydeapp.ryde.domain.model.SuggestedMatch
@@ -49,16 +54,31 @@ import uk.rydeapp.ryde.ui.components.RouteMark
 import uk.rydeapp.ryde.ui.theme.ElectricBlue
 import uk.rydeapp.ryde.ui.theme.Mint
 import uk.rydeapp.ryde.ui.theme.RydeTheme
+import uk.rydeapp.ryde.ui.circle.CircleDetailScreen
 import java.text.NumberFormat
 import java.util.Locale
 
 @Composable
 fun HomeScreen(
     content: HomeContent,
+    circleMembership: CircleMembership,
+    onJoinCircle: () -> Unit,
+    onLeaveCircle: () -> Unit,
     onFindRide: () -> Unit,
     onOfferRide: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var circleOpen by rememberSaveable { mutableStateOf(false) }
+    if (circleOpen) {
+        CircleDetailScreen(
+            membership = circleMembership,
+            onBack = { circleOpen = false },
+            onJoin = onJoinCircle,
+            onLeave = onLeaveCircle,
+            modifier = modifier,
+        )
+        return
+    }
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 18.dp, top = 14.dp, end = 18.dp, bottom = 24.dp),
@@ -106,7 +126,7 @@ fun HomeScreen(
         }
         item { JourneySearchCard(content.currentUser.savedPlaces) }
         item { SuggestedMatchCard(content.suggestedMatch) }
-        item { HostedCircleCard(content.hostedCircle) }
+        item { HostedCircleCard(content.hostedCircle, onClick = { circleOpen = true }) }
     }
 }
 
@@ -349,8 +369,9 @@ private fun RouteOverlapVisual() {
 }
 
 @Composable
-private fun HostedCircleCard(circle: HostedCircle) {
+private fun HostedCircleCard(circle: HostedCircle, onClick: () -> Unit) {
     Card(
+        onClick = onClick,
         shape = RoundedCornerShape(22.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
     ) {
@@ -374,6 +395,8 @@ private fun HostedCircleCard(circle: HostedCircle) {
                 color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = .8f),
                 style = MaterialTheme.typography.bodySmall,
             )
+            Spacer(Modifier.height(8.dp))
+            Text("Explore Circle →", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -387,6 +410,9 @@ private fun HomeScreenPreview() {
     RydeTheme(darkTheme = false) {
         HomeScreen(
             content = FakeRydeRepository().getHomeContent(),
+            circleMembership = FakeRydeRepository().getCircleMembership("nottingham-live")!!,
+            onJoinCircle = {},
+            onLeaveCircle = {},
             onFindRide = {},
             onOfferRide = {},
         )

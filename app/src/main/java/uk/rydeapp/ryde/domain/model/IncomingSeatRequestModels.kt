@@ -15,6 +15,7 @@ data class IncomingSeatRequest(
     val rider: DemoRiderProfile,
     val originArea: String,
     val destinationArea: String,
+    val travelDate: DemoTravelDate,
     val approximatePickupMinutes: Int,
     val pickupArea: String,
     val walkMinutes: Int,
@@ -23,9 +24,13 @@ data class IncomingSeatRequest(
     val sharedMiles: Int,
     val contributionPence: Int,
     val serviceFeePence: Int,
+    val serviceFeeResponsibility: ServiceFeeResponsibility = ServiceFeeResponsibility.RIDER,
+    val circle: CircleIdentity? = null,
 ) {
-    val riderTotalPence: Int get() = contributionPence + serviceFeePence
-    val driverReceivesPence: Int get() = contributionPence
+    val pricing: JourneyPricing
+        get() = JourneyPricing(contributionPence, serviceFeePence, serviceFeeResponsibility)
+    val riderTotalPence: Int get() = pricing.riderTotalPence
+    val driverReceivesPence: Int get() = pricing.driverReceivesPence
 }
 
 enum class IncomingRequestDecision { ACCEPT, DECLINE }
@@ -46,9 +51,13 @@ data class ConfirmedSharedTrip(
     val sharedMiles: Int,
     val contributionPence: Int,
     val serviceFeePence: Int,
+    val serviceFeeResponsibility: ServiceFeeResponsibility = ServiceFeeResponsibility.RIDER,
+    val circle: CircleIdentity? = null,
 ) {
-    val riderTotalPence: Int get() = contributionPence + serviceFeePence
-    val driverReceivesPence: Int get() = contributionPence
+    val pricing: JourneyPricing
+        get() = JourneyPricing(contributionPence, serviceFeePence, serviceFeeResponsibility)
+    val riderTotalPence: Int get() = pricing.riderTotalPence
+    val driverReceivesPence: Int get() = pricing.driverReceivesPence
 }
 
 sealed interface DecideIncomingRequestResult {

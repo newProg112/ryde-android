@@ -1,8 +1,67 @@
 package uk.rydeapp.ryde.domain.model
 
-enum class DemoTravelDate(val displayName: String) {
+enum class DemoTravelDate(
+    private val dayLabel: String,
+    val calendarDate: String? = null,
+) {
     TODAY("Today"),
     TOMORROW("Tomorrow"),
+    EVENT_DAY("Event day", "18 October 2026");
+
+    val displayName: String
+        get() = calendarDate?.let { "$dayLabel · $it" } ?: dayLabel
+
+    val isOrdinaryChoice: Boolean get() = this != EVENT_DAY
+
+    companion object {
+        val ordinaryChoices: List<DemoTravelDate> = listOf(TODAY, TOMORROW)
+    }
+}
+
+object TravelDatePolicy {
+    fun forMode(ordinaryDate: DemoTravelDate, circle: HostedCircle?): DemoTravelDate =
+        circle?.eventDate ?: ordinaryDate.takeIf { it.isOrdinaryChoice } ?: DemoTravelDate.TODAY
+}
+
+data class DemoMatchTiming(
+    val driverDepartureMinutes: Int,
+    val pickupMinutes: Int,
+)
+
+object DemoDepartureTimePolicy {
+    const val ORDINARY_FIND_DEFAULT = 8 * 60 + 5
+    const val ORDINARY_OFFER_DEFAULT = 8 * 60
+    const val CIRCLE_DEFAULT = 17 * 60 + 30
+    const val EVENT_DOORS = 18 * 60 + 30
+
+    val ordinaryFindChoices = listOf(7 * 60 + 35, ORDINARY_FIND_DEFAULT, 8 * 60 + 35)
+    val ordinaryOfferChoices = listOf(7 * 60 + 30, ORDINARY_OFFER_DEFAULT, 8 * 60 + 30)
+    val circleChoices = listOf(17 * 60, CIRCLE_DEFAULT, 18 * 60)
+
+    private val circleMatchTimings = listOf(
+        DemoMatchTiming(driverDepartureMinutes = 17 * 60 + 25, pickupMinutes = 17 * 60 + 30),
+        DemoMatchTiming(driverDepartureMinutes = 16 * 60 + 55, pickupMinutes = 17 * 60 + 5),
+        DemoMatchTiming(driverDepartureMinutes = 17 * 60 + 45, pickupMinutes = 18 * 60),
+    )
+
+    fun resolveFind(requestedMinutes: Int, isCircleMode: Boolean): Int = when {
+        isCircleMode && requestedMinutes in circleChoices -> requestedMinutes
+        isCircleMode -> CIRCLE_DEFAULT
+        requestedMinutes in ordinaryFindChoices -> requestedMinutes
+        else -> ORDINARY_FIND_DEFAULT
+    }
+
+    fun resolveOffer(requestedMinutes: Int, isCircleMode: Boolean): Int = when {
+        isCircleMode && requestedMinutes in circleChoices -> requestedMinutes
+        isCircleMode -> CIRCLE_DEFAULT
+        requestedMinutes in ordinaryOfferChoices -> requestedMinutes
+        else -> ORDINARY_OFFER_DEFAULT
+    }
+
+    fun circleMatchTiming(rank: Int): DemoMatchTiming =
+        circleMatchTimings.getOrElse(rank) { circleMatchTimings.last() }
+
+    val eventDoorsDisplayName: String get() = "Doors ${formatDemoTime(EVENT_DOORS)} · fictional demo time"
 }
 
 enum class Flexibility(val minutes: Int, val displayName: String) {
@@ -18,6 +77,7 @@ data class FindRideCriteria(
     val departureMinutes: Int,
     val flexibility: Flexibility,
     val seatsRequired: Int,
+    val circleId: String? = null,
 )
 
 enum class FindRideField { ORIGIN, DESTINATION, ENDPOINTS, SEATS }
@@ -43,9 +103,13 @@ data class RouteMatch(
     val matchScore: Int,
     val contributionPence: Int,
     val serviceFeePence: Int,
+    val serviceFeeResponsibility: ServiceFeeResponsibility = ServiceFeeResponsibility.RIDER,
+    val circle: CircleIdentity? = null,
 ) {
-    val riderTotalPence: Int get() = contributionPence + serviceFeePence
-    val driverReceivesPence: Int get() = contributionPence
+    val pricing: JourneyPricing
+        get() = JourneyPricing(contributionPence, serviceFeePence, serviceFeeResponsibility)
+    val riderTotalPence: Int get() = pricing.riderTotalPence
+    val driverReceivesPence: Int get() = pricing.driverReceivesPence
 }
 
 data class FindRideContent(

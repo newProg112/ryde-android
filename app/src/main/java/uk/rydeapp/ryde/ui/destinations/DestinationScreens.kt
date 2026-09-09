@@ -49,6 +49,8 @@ import uk.rydeapp.ryde.domain.model.DecideIncomingRequestResult
 import uk.rydeapp.ryde.domain.model.IncomingRequestDecision
 import uk.rydeapp.ryde.domain.model.IncomingSeatRequest
 import uk.rydeapp.ryde.domain.model.IncomingSeatRequestStatus
+import uk.rydeapp.ryde.domain.model.CircleIdentity
+import uk.rydeapp.ryde.domain.model.JourneyPricing
 import uk.rydeapp.ryde.domain.model.formatDemoTime
 import uk.rydeapp.ryde.ui.components.DestinationIcon
 import uk.rydeapp.ryde.ui.components.DestinationIconType
@@ -308,6 +310,7 @@ private fun TripRequestCard(request: SeatRequest, onClick: () -> Unit) {
     ) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
             Text("Seat request", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+            CircleTripLabel(request.circle)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 LabelPill(
                     if (request.status == SeatRequestStatus.PENDING) "Pending driver response" else "Cancelled",
@@ -345,6 +348,7 @@ private fun OfferedJourneyCard(
     ) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
             Text("Journey offered", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+            CircleTripLabel(journey.circle)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 LabelPill(
                     if (journey.status == OfferedJourneyStatus.OPEN) "Open for requests" else "Cancelled",
@@ -374,6 +378,7 @@ private fun TripRequestDetail(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         OutlinedButton(onClick = onBack) { Text("← Back to trips") }
+        CircleTripLabel(request.circle)
         LabelPill(if (request.status == SeatRequestStatus.PENDING) "Pending driver response" else "Cancelled")
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -389,14 +394,18 @@ private fun TripRequestDetail(
                 HorizontalDivider(Modifier.padding(vertical = 4.dp))
                 TripDetailRow("Shared-distance contribution", money(request.contributionPence))
                 Text("${request.sharedMiles} shared miles × £0.20, rounded to the nearest 50p", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
-                TripDetailRow("Ryde service fee", money(request.serviceFeePence))
+                TripDetailRow("Ryde service fee", serviceFeeValue(request.pricing))
                 TripDetailRow("Rider total", money(request.riderTotalPence), bold = true)
                 TripDetailRow("Driver receives", money(request.driverReceivesPence), bold = true)
             }
         }
         InfoCard(
             title = "Fictional local-demo data",
-            body = "No request reached a real driver. No payment, verification, contact, map or exact/live location sharing occurred.",
+            body = if (request.circle == null) {
+                "No request reached a real driver. No payment, verification, contact, map or exact/live location sharing occurred."
+            } else {
+                "No request reached a real driver. No payment or real host sponsorship occurred, and no exact/live location was shared."
+            },
         )
         if (request.status == SeatRequestStatus.PENDING) {
             OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) { Text("Cancel demo request") }
@@ -417,6 +426,7 @@ private fun OfferedJourneyDetail(
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         OutlinedButton(onClick = onBack) { Text("← Back to trips") }
         Text("Journey offered", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+        CircleTripLabel(journey.circle)
         LabelPill(if (journey.status == OfferedJourneyStatus.OPEN) "Open for requests" else "Cancelled")
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -445,6 +455,7 @@ private fun OfferedJourneyDetail(
             ) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Incoming seat request", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    CircleTripLabel(incomingRequest.circle)
                     Text(
                         when (incomingRequest.status) {
                             IncomingSeatRequestStatus.PENDING -> "1 demo seat request from fictional rider ${incomingRequest.rider.firstName}"
@@ -482,6 +493,7 @@ private fun IncomingRequestDetail(
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         OutlinedButton(onClick = onBack) { Text("← Back to offered journey") }
         Text("Incoming seat request", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+        CircleTripLabel(request.circle)
         LabelPill(incomingStatusLabel(request.status))
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -503,6 +515,7 @@ private fun IncomingRequestDetail(
                 HorizontalDivider(Modifier.padding(vertical = 4.dp))
                 TripDetailRow("Requested route", "${request.originArea} → ${request.destinationArea}")
                 TripDetailRow("Your planned route", "${journey.originArea} → ${journey.destinationArea}")
+                TripDetailRow("Date", request.travelDate.displayName)
                 TripDetailRow("Public pickup area", request.pickupArea)
                 TripDetailRow("Approximate pickup", "around ${formatDemoTime(request.approximatePickupMinutes)}")
                 TripDetailRow("Walk to pickup", "about ${request.walkMinutes} minutes")
@@ -516,7 +529,7 @@ private fun IncomingRequestDetail(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                 )
-                TripDetailRow("Ryde service fee", money(request.serviceFeePence))
+                TripDetailRow("Ryde service fee", serviceFeeValue(request.pricing))
                 TripDetailRow("Rider total", money(request.riderTotalPence), bold = true)
                 TripDetailRow("Driver receives", money(request.driverReceivesPence), bold = true)
             }
@@ -527,7 +540,11 @@ private fun IncomingRequestDetail(
         )
         InfoCard(
             title = "Fictional local-demo request",
-            body = "Jamie is fictional and this request was generated on this device. No real person submitted it, and no payment or contact has occurred.",
+            body = if (request.circle == null) {
+                "Jamie is fictional and this request was generated on this device. No real person submitted it, and no payment or contact has occurred."
+            } else {
+                "Jamie and the Circle are fictional. No real person submitted this, and no payment, host sponsorship or host contact occurred."
+            },
         )
         if (request.status == IncomingSeatRequestStatus.PENDING && journey.status == OfferedJourneyStatus.OPEN) {
             Button(onClick = onAccept, modifier = Modifier.fillMaxWidth()) { Text("Accept request") }
@@ -553,6 +570,7 @@ private fun ConfirmedSharedTripCard(trip: ConfirmedSharedTrip, onClick: () -> Un
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
     ) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            CircleTripLabel(trip.circle)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 LabelPill("Confirmed · local demo", containerColor = Mint.copy(alpha = .22f))
                 Spacer(Modifier.weight(1f))
@@ -570,6 +588,7 @@ private fun ConfirmedSharedTripCard(trip: ConfirmedSharedTrip, onClick: () -> Un
 private fun ConfirmedSharedTripDetail(trip: ConfirmedSharedTrip, onBack: () -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         OutlinedButton(onClick = onBack) { Text("← Back to trips") }
+        CircleTripLabel(trip.circle)
         LabelPill("Confirmed · local demo", containerColor = Mint.copy(alpha = .22f))
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -598,7 +617,7 @@ private fun ConfirmedSharedTripDetail(trip: ConfirmedSharedTrip, onBack: () -> U
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                 )
-                TripDetailRow("Ryde service fee", money(trip.serviceFeePence))
+                TripDetailRow("Ryde service fee", serviceFeeValue(trip.pricing))
                 TripDetailRow("Rider total", money(trip.riderTotalPence), bold = true)
                 TripDetailRow("Driver receives", money(trip.driverReceivesPence), bold = true)
             }
@@ -609,7 +628,11 @@ private fun ConfirmedSharedTripDetail(trip: ConfirmedSharedTrip, onBack: () -> U
         )
         InfoCard(
             title = "Local demo only",
-            body = "No real request, payment, contact or journey occurred. This confirmed state exists only in the current app session.",
+            body = if (trip.circle == null) {
+                "No real request, payment, contact or journey occurred. This confirmed state exists only in the current app session."
+            } else {
+                "No real request, payment, host sponsorship, contact or journey occurred. The Circle label remains as local-demo history."
+            },
         )
     }
 }
@@ -634,6 +657,13 @@ private fun TripDetailRow(label: String, value: String, bold: Boolean = false) {
 }
 
 private fun money(pence: Int): String = NumberFormat.getCurrencyInstance(Locale.UK).format(pence / 100.0)
+private fun serviceFeeValue(pricing: JourneyPricing): String =
+    if (pricing.hostCoversServiceFee) "${money(pricing.serviceFeePence)} · covered by host" else money(pricing.serviceFeePence)
+
+@Composable
+private fun CircleTripLabel(circle: CircleIdentity?) {
+    circle?.let { LabelPill("Ryde Circle · ${it.name}") }
+}
 private fun seatWord(count: Int): String = if (count == 1) "seat" else "seats"
 private fun tripDetourLabel(miles: Int): String = "up to $miles ${if (miles == 1) "mile" else "miles"}"
 

@@ -48,10 +48,14 @@ fun RydeApp(repository: RydeRepository? = null) {
     val appRepository = remember(repository) { repository ?: FakeRydeRepository() }
     var selectedDestination by rememberSaveable { mutableStateOf(RydeDestination.HOME) }
     var tripRevision by remember { mutableIntStateOf(0) }
+    var circleRevision by remember { mutableIntStateOf(0) }
     val stateHolder = rememberSaveableStateHolder()
     val homeContent = remember(appRepository) { appRepository.getHomeContent() }
     val findContent = remember(appRepository) { appRepository.getFindRideContent() }
     val offerContent = remember(appRepository) { appRepository.getOfferRideContent() }
+    val circleMembership = remember(appRepository, circleRevision) {
+        appRepository.getCircleMembership(homeContent.hostedCircle.id)!!
+    }
     val requests = remember(appRepository, tripRevision) { appRepository.getSeatRequests() }
     val offeredJourneys = remember(appRepository, tripRevision) { appRepository.getOfferedJourneys() }
     val incomingRequests = remember(appRepository, tripRevision) { appRepository.getIncomingSeatRequests() }
@@ -83,12 +87,22 @@ fun RydeApp(repository: RydeRepository? = null) {
             when (selectedDestination) {
                 RydeDestination.HOME -> HomeScreen(
                     content = homeContent,
+                    circleMembership = circleMembership,
+                    onJoinCircle = {
+                        appRepository.joinCircle(homeContent.hostedCircle.id)
+                        circleRevision += 1
+                    },
+                    onLeaveCircle = {
+                        appRepository.leaveCircle(homeContent.hostedCircle.id)
+                        circleRevision += 1
+                    },
                     onFindRide = { selectedDestination = RydeDestination.FIND },
                     onOfferRide = { selectedDestination = RydeDestination.OFFER },
                     modifier = Modifier.padding(innerPadding),
                 )
                 RydeDestination.FIND -> FindScreen(
                     content = findContent,
+                    joinedCircle = circleMembership.takeIf { it.isJoined }?.circle,
                     onSearch = appRepository::findRides,
                     requestForMatch = appRepository::getSeatRequestForMatch,
                     onCreateRequest = { matchId, criteria ->
@@ -99,6 +113,7 @@ fun RydeApp(repository: RydeRepository? = null) {
                 )
                 RydeDestination.OFFER -> OfferScreen(
                     content = offerContent,
+                    joinedCircle = circleMembership.takeIf { it.isJoined }?.circle,
                     offeredJourneys = offeredJourneys,
                     validate = OfferRideValidator::validate,
                     onCreateOffer = { criteria ->

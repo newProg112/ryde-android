@@ -19,9 +19,13 @@ data class SeatRequest(
     val sharedMiles: Int,
     val contributionPence: Int,
     val serviceFeePence: Int,
+    val serviceFeeResponsibility: ServiceFeeResponsibility = ServiceFeeResponsibility.RIDER,
+    val circle: CircleIdentity? = null,
 ) {
-    val riderTotalPence: Int get() = contributionPence + serviceFeePence
-    val driverReceivesPence: Int get() = contributionPence
+    val pricing: JourneyPricing
+        get() = JourneyPricing(contributionPence, serviceFeePence, serviceFeeResponsibility)
+    val riderTotalPence: Int get() = pricing.riderTotalPence
+    val driverReceivesPence: Int get() = pricing.driverReceivesPence
 }
 
 sealed interface CreateSeatRequestResult {

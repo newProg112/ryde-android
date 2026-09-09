@@ -10,6 +10,7 @@ data class OfferRideCriteria(
     val flexibility: Flexibility,
     val spareSeats: Int,
     val maximumDetourMiles: Int,
+    val circleId: String? = null,
 )
 
 data class OfferRideContent(
@@ -29,6 +30,7 @@ data class OfferedJourney(
     val flexibility: Flexibility,
     val spareSeats: Int,
     val maximumDetourMiles: Int,
+    val circle: CircleIdentity? = null,
 )
 
 enum class OfferRideField { ORIGIN, DESTINATION, ENDPOINTS, DEPARTURE_TIME, SEATS, DETOUR }

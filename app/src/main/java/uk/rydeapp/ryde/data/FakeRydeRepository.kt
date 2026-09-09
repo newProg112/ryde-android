@@ -32,12 +32,20 @@ import uk.rydeapp.ryde.domain.model.DemoRiderProfile
 import uk.rydeapp.ryde.domain.model.IncomingRequestDecision
 import uk.rydeapp.ryde.domain.model.IncomingSeatRequest
 import uk.rydeapp.ryde.domain.model.IncomingSeatRequestStatus
+import uk.rydeapp.ryde.domain.model.CircleMembership
+import uk.rydeapp.ryde.domain.model.JoinCircleResult
+import uk.rydeapp.ryde.domain.model.LeaveCircleResult
+import uk.rydeapp.ryde.domain.model.ServiceFeeResponsibility
+import uk.rydeapp.ryde.domain.model.TravelDatePolicy
+import uk.rydeapp.ryde.domain.model.DemoDepartureTimePolicy
+import uk.rydeapp.ryde.domain.model.formatDemoTime
 
 class FakeRydeRepository : RydeRepository {
     private val requestsByMatchId = linkedMapOf<String, SeatRequest>()
     private val offeredJourneys = mutableListOf<OfferedJourney>()
     private val incomingRequests = mutableListOf<IncomingSeatRequest>()
     private val confirmedTrips = mutableListOf<ConfirmedSharedTrip>()
+    private val joinedCircleIds = mutableSetOf<String>()
     private val savedPlaces = listOf(
         SavedPlace(label = "Home", area = "Sutton-in-Ashfield"),
         SavedPlace(label = "Work", area = "Nottingham"),
@@ -70,12 +78,31 @@ class FakeRydeRepository : RydeRepository {
                 contributionPence = ContributionCalculator.calculatePence(sharedMiles),
                 serviceFeePence = DEMO_SERVICE_FEE_PENCE,
             ),
-            hostedCircle = HostedCircle(
-                name = "Nottingham Live — Event Travel",
-                summary = "Share routes with people heading to the same fictional event.",
-                serviceFeeCoveredByHost = true,
-            ),
+            hostedCircle = demoCircle,
         )
+    }
+
+    override fun getCircleMembership(circleId: String): CircleMembership? =
+        demoCircle.takeIf { it.id == circleId }?.let { CircleMembership(it, circleId in joinedCircleIds) }
+
+    override fun joinCircle(circleId: String): JoinCircleResult {
+        val circle = demoCircle.takeIf { it.id == circleId } ?: return JoinCircleResult.CircleNotFound
+        val membership = CircleMembership(circle, isJoined = true)
+        return if (joinedCircleIds.add(circleId)) {
+            JoinCircleResult.Joined(membership)
+        } else {
+            JoinCircleResult.AlreadyJoined(membership)
+        }
+    }
+
+    override fun leaveCircle(circleId: String): LeaveCircleResult {
+        if (circleId != demoCircle.id) return LeaveCircleResult.NotJoined(null)
+        val membership = CircleMembership(demoCircle, isJoined = false)
+        return if (joinedCircleIds.remove(circleId)) {
+            LeaveCircleResult.Left(membership)
+        } else {
+            LeaveCircleResult.NotJoined(membership)
+        }
     }
 
     override fun getFindRideContent() = FindRideContent(
@@ -84,55 +111,91 @@ class FakeRydeRepository : RydeRepository {
             origin = "Sutton-in-Ashfield",
             destination = "Nottingham",
             travelDate = DemoTravelDate.TODAY,
-            departureMinutes = 8 * 60 + 5,
+            departureMinutes = DemoDepartureTimePolicy.ORDINARY_FIND_DEFAULT,
             flexibility = Flexibility.THIRTY,
             seatsRequired = 1,
         ),
     )
 
     override fun findRides(criteria: FindRideCriteria): FindRideSearchResult {
-        val errors = FindRideMatcher.validate(criteria)
+        val circle = joinedCircle(criteria.circleId)
+        val effectiveCriteria = criteria.copy(
+            travelDate = TravelDatePolicy.forMode(criteria.travelDate, circle),
+            departureMinutes = DemoDepartureTimePolicy.resolveFind(
+                criteria.departureMinutes,
+                isCircleMode = circle != null,
+            ),
+        )
+        val errors = FindRideMatcher.validate(effectiveCriteria)
         return FindRideSearchResult(
-            criteria = criteria,
+            criteria = effectiveCriteria,
             validationErrors = errors,
-            matches = if (errors.isEmpty()) FindRideMatcher.rankCompatible(criteria, demoMatches) else emptyList(),
+            matches = if (errors.isEmpty()) {
+                val candidates = if (circle == null) demoMatches else demoMatches.mapIndexed { index, match ->
+                    val timing = DemoDepartureTimePolicy.circleMatchTiming(index)
+                    match.copy(
+                        driverJourney = match.driverJourney.copy(
+                            departureTime = formatDemoTime(timing.driverDepartureMinutes),
+                        ),
+                        travelDate = circle.eventDate,
+                        pickupMinutes = timing.pickupMinutes,
+                    )
+                }
+                FindRideMatcher.rankCompatible(effectiveCriteria, candidates).map { match ->
+                    if (circle == null) match else match.copy(
+                        serviceFeeResponsibility = ServiceFeeResponsibility.HOST,
+                        circle = circle.identity,
+                    )
+                }
+            } else emptyList(),
         )
     }
 
     override fun getSeatRequests(): List<SeatRequest> = requestsByMatchId.values.toList()
 
-    override fun getSeatRequestForMatch(matchId: String): SeatRequest? = requestsByMatchId[matchId]
+    override fun getSeatRequestForMatch(matchId: String, circleId: String?): SeatRequest? =
+        requestsByMatchId[requestKey(matchId, circleId)]
 
     override fun createSeatRequest(
         matchId: String,
         criteria: FindRideCriteria,
     ): CreateSeatRequestResult {
-        requestsByMatchId[matchId]
+        val circle = joinedCircle(criteria.circleId)
+        val requestKey = requestKey(matchId, circle?.id)
+        requestsByMatchId[requestKey]
             ?.takeIf { it.status == SeatRequestStatus.PENDING }
             ?.let { return CreateSeatRequestResult.DuplicateActive(it) }
 
-        val match = demoMatches.firstOrNull { it.id == matchId }
-            ?: return CreateSeatRequestResult.MatchNotFound
+        val matchIndex = demoMatches.indexOfFirst { it.id == matchId }
+        val match = demoMatches.getOrNull(matchIndex) ?: return CreateSeatRequestResult.MatchNotFound
+        val effectiveTravelDate = circle?.eventDate ?: match.travelDate
+        val effectivePickupMinutes = if (circle == null) {
+            match.pickupMinutes
+        } else {
+            DemoDepartureTimePolicy.circleMatchTiming(matchIndex).pickupMinutes
+        }
         if (criteria.seatsRequired !in 1..match.availableSeats) {
             return CreateSeatRequestResult.InvalidSeatCount
         }
 
         val request = SeatRequest(
-            id = "demo-request-$matchId",
+            id = "demo-request-$matchId${if (circle == null) "" else "-${circle.id}"}",
             matchId = matchId,
             status = SeatRequestStatus.PENDING,
             driver = match.driver,
             originArea = criteria.origin,
             destinationArea = criteria.destination,
-            travelDate = match.travelDate,
-            approximatePickupMinutes = match.pickupMinutes,
+            travelDate = effectiveTravelDate,
+            approximatePickupMinutes = effectivePickupMinutes,
             pickupArea = match.pickupArea,
             requestedSeats = criteria.seatsRequired,
             sharedMiles = match.sharedMiles,
             contributionPence = ContributionCalculator.calculatePence(match.sharedMiles),
             serviceFeePence = match.serviceFeePence,
+            serviceFeeResponsibility = if (circle == null) ServiceFeeResponsibility.RIDER else ServiceFeeResponsibility.HOST,
+            circle = circle?.identity,
         )
-        requestsByMatchId[matchId] = request
+        requestsByMatchId[requestKey] = request
         return CreateSeatRequestResult.Created(request)
     }
 
@@ -142,7 +205,7 @@ class FakeRydeRepository : RydeRepository {
             return CancelSeatRequestResult.NotPending(existing)
         }
         val cancelled = existing.copy(status = SeatRequestStatus.CANCELLED)
-        requestsByMatchId[existing.matchId] = cancelled
+        requestsByMatchId[requestKey(existing.matchId, existing.circle?.id)] = cancelled
         return CancelSeatRequestResult.Cancelled(cancelled)
     }
 
@@ -152,7 +215,7 @@ class FakeRydeRepository : RydeRepository {
             originArea = savedPlaces.first { it.label == "Home" }.area,
             destinationArea = savedPlaces.first { it.label == "Work" }.area,
             travelDate = DemoTravelDate.TODAY,
-            departureMinutes = 8 * 60,
+            departureMinutes = DemoDepartureTimePolicy.ORDINARY_OFFER_DEFAULT,
             flexibility = Flexibility.THIRTY,
             spareSeats = 1,
             maximumDetourMiles = 3,
@@ -165,13 +228,21 @@ class FakeRydeRepository : RydeRepository {
         val errors = OfferRideValidator.validate(criteria)
         if (errors.isNotEmpty()) return CreateOfferedJourneyResult.Invalid(errors)
 
-        val normalized = OfferRideValidator.normalize(criteria)
+        val requestedCircle = joinedCircle(criteria.circleId)
+        val normalized = OfferRideValidator.normalize(criteria).copy(
+            travelDate = TravelDatePolicy.forMode(criteria.travelDate, requestedCircle),
+            departureMinutes = DemoDepartureTimePolicy.resolveOffer(
+                criteria.departureMinutes,
+                isCircleMode = requestedCircle != null,
+            ),
+        )
         offeredJourneys.firstOrNull {
             it.status == OfferedJourneyStatus.OPEN &&
                 OfferRideValidator.routeKey(it.originArea) == OfferRideValidator.routeKey(normalized.originArea) &&
                 OfferRideValidator.routeKey(it.destinationArea) == OfferRideValidator.routeKey(normalized.destinationArea) &&
                 it.travelDate == normalized.travelDate &&
-                it.departureMinutes == normalized.departureMinutes
+                it.departureMinutes == normalized.departureMinutes &&
+                it.circle?.id == requestedCircle?.id
         }?.let { return CreateOfferedJourneyResult.DuplicateActive(it) }
 
         val journey = OfferedJourney(
@@ -184,6 +255,7 @@ class FakeRydeRepository : RydeRepository {
             flexibility = normalized.flexibility,
             spareSeats = normalized.spareSeats,
             maximumDetourMiles = normalized.maximumDetourMiles,
+            circle = requestedCircle?.identity,
         )
         offeredJourneys += journey
         incomingRequests += demoIncomingRequest(journey)
@@ -260,6 +332,8 @@ class FakeRydeRepository : RydeRepository {
             sharedMiles = request.sharedMiles,
             contributionPence = request.contributionPence,
             serviceFeePence = request.serviceFeePence,
+            serviceFeeResponsibility = request.serviceFeeResponsibility,
+            circle = request.circle,
         )
         confirmedTrips += confirmedTrip
         return DecideIncomingRequestResult.Decided(decidedRequest, confirmedJourney, confirmedTrip)
@@ -276,6 +350,7 @@ class FakeRydeRepository : RydeRepository {
             rider = DemoRiderProfile(firstName = "Jamie", rating = 4.8, isDemoVerified = true),
             originArea = journey.originArea,
             destinationArea = journey.destinationArea,
+            travelDate = journey.travelDate,
             approximatePickupMinutes = (journey.departureMinutes + 5).coerceAtMost(23 * 60 + 59),
             pickupArea = "${journey.originArea} town centre",
             walkMinutes = 6,
@@ -284,6 +359,8 @@ class FakeRydeRepository : RydeRepository {
             sharedMiles = sharedMiles,
             contributionPence = ContributionCalculator.calculatePence(sharedMiles),
             serviceFeePence = DEMO_SERVICE_FEE_PENCE,
+            serviceFeeResponsibility = if (journey.circle == null) ServiceFeeResponsibility.RIDER else ServiceFeeResponsibility.HOST,
+            circle = journey.circle,
         )
     }
 
@@ -335,6 +412,28 @@ class FakeRydeRepository : RydeRepository {
     private companion object {
         const val DEMO_SERVICE_FEE_PENCE = 50
     }
+
+    private fun joinedCircle(circleId: String?): HostedCircle? =
+        demoCircle.takeIf { circleId == it.id && circleId in joinedCircleIds }
+
+    private fun requestKey(matchId: String, circleId: String?): String = "$matchId|${circleId.orEmpty()}"
+
+    private val demoCircle = HostedCircle(
+        id = "nottingham-live",
+        name = "Nottingham Live — Event Travel",
+        hostName = "Nottingham Live Demo Events",
+        type = "Event travel",
+        location = "Nottingham",
+        status = "Open",
+        summary = "Share routes with people heading to the same fictional event.",
+        purpose = "Help people share planned journeys to the same fictional event.",
+        destinationArea = "Nottingham city centre",
+        eventDate = DemoTravelDate.EVENT_DAY,
+        eventTime = DemoDepartureTimePolicy.eventDoorsDisplayName,
+        illustrativeMembers = 128,
+        illustrativeTrips = 34,
+        serviceFeeCoveredByHost = true,
+    )
 
     private fun demoMatch(
         id: String,

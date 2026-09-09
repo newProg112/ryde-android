@@ -29,6 +29,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -54,6 +55,9 @@ import uk.rydeapp.ryde.domain.model.FindRideCriteria
 import uk.rydeapp.ryde.domain.model.FindRideField
 import uk.rydeapp.ryde.domain.model.FindRideSearchResult
 import uk.rydeapp.ryde.domain.model.Flexibility
+import uk.rydeapp.ryde.domain.model.HostedCircle
+import uk.rydeapp.ryde.domain.model.TravelDatePolicy
+import uk.rydeapp.ryde.domain.model.DemoDepartureTimePolicy
 import uk.rydeapp.ryde.domain.model.RouteMatch
 import uk.rydeapp.ryde.domain.model.CreateSeatRequestResult
 import uk.rydeapp.ryde.domain.model.SeatRequest
@@ -70,8 +74,9 @@ private enum class FindStage { FORM, RESULTS, DETAILS, CONFIRM, SUCCESS }
 @Composable
 fun FindScreen(
     content: FindRideContent,
+    joinedCircle: HostedCircle?,
     onSearch: (FindRideCriteria) -> FindRideSearchResult,
-    requestForMatch: (String) -> SeatRequest?,
+    requestForMatch: (String, String?) -> SeatRequest?,
     onCreateRequest: (String, FindRideCriteria) -> CreateSeatRequestResult,
     onOpenTrips: () -> Unit,
     modifier: Modifier = Modifier,
@@ -80,19 +85,36 @@ fun FindScreen(
     var origin by rememberSaveable { mutableStateOf(defaults.origin) }
     var destination by rememberSaveable { mutableStateOf(defaults.destination) }
     var date by rememberSaveable { mutableStateOf(defaults.travelDate) }
-    var departureMinutes by rememberSaveable { mutableIntStateOf(defaults.departureMinutes) }
+    var ordinaryDepartureMinutes by rememberSaveable { mutableIntStateOf(defaults.departureMinutes) }
+    var circleDepartureMinutes by rememberSaveable { mutableIntStateOf(DemoDepartureTimePolicy.CIRCLE_DEFAULT) }
     var flexibility by rememberSaveable { mutableStateOf(defaults.flexibility) }
     var seats by rememberSaveable { mutableIntStateOf(defaults.seatsRequired) }
     var stage by rememberSaveable { mutableStateOf(FindStage.FORM) }
     var searchAttempt by rememberSaveable { mutableIntStateOf(0) }
     var selectedMatchId by rememberSaveable { mutableStateOf<String?>(null) }
+    var searchInCircle by rememberSaveable { mutableStateOf(false) }
 
-    val currentCriteria = FindRideCriteria(origin, destination, date, departureMinutes, flexibility, seats)
+    LaunchedEffect(joinedCircle?.id) {
+        if (joinedCircle == null) searchInCircle = false
+    }
+
+    val currentCriteria = FindRideCriteria(
+        origin = origin,
+        destination = destination,
+        travelDate = TravelDatePolicy.forMode(date, joinedCircle.takeIf { searchInCircle }),
+        departureMinutes = DemoDepartureTimePolicy.resolveFind(
+            requestedMinutes = if (searchInCircle) circleDepartureMinutes else ordinaryDepartureMinutes,
+            isCircleMode = joinedCircle != null && searchInCircle,
+        ),
+        flexibility = flexibility,
+        seatsRequired = seats,
+        circleId = joinedCircle?.id?.takeIf { searchInCircle },
+    )
     val result = remember(currentCriteria, searchAttempt) {
         if (searchAttempt > 0) onSearch(currentCriteria) else null
     }
     val selectedMatch = result?.matches?.firstOrNull { it.id == selectedMatchId }
-    val existingRequest = selectedMatch?.let { requestForMatch(it.id) }
+    val existingRequest = selectedMatch?.let { requestForMatch(it.id, it.circle?.id) }
 
     BackHandler(enabled = stage != FindStage.FORM) {
         stage = when (stage) {
@@ -144,6 +166,8 @@ fun FindScreen(
         )
         else -> SearchForm(
             content = content,
+            joinedCircle = joinedCircle,
+            searchInCircle = searchInCircle,
             criteria = currentCriteria,
             errors = result?.takeIf { !it.isValid }?.validationErrors.orEmpty(),
             onOriginChange = { origin = it },
@@ -154,9 +178,12 @@ fun FindScreen(
                 destination = previousOrigin
             },
             onDateChange = { date = it },
-            onTimeChange = { departureMinutes = it },
+            onTimeChange = {
+                if (searchInCircle) circleDepartureMinutes = it else ordinaryDepartureMinutes = it
+            },
             onFlexibilityChange = { flexibility = it },
             onSeatsChange = { seats = it.coerceIn(1, 4) },
+            onSearchInCircleChange = { searchInCircle = it },
             onSearch = {
                 val searched = onSearch(currentCriteria)
                 searchAttempt += 1
@@ -170,6 +197,8 @@ fun FindScreen(
 @Composable
 private fun SearchForm(
     content: FindRideContent,
+    joinedCircle: HostedCircle?,
+    searchInCircle: Boolean,
     criteria: FindRideCriteria,
     errors: List<uk.rydeapp.ryde.domain.model.FindRideValidationError>,
     onOriginChange: (String) -> Unit,
@@ -179,6 +208,7 @@ private fun SearchForm(
     onTimeChange: (Int) -> Unit,
     onFlexibilityChange: (Flexibility) -> Unit,
     onSeatsChange: (Int) -> Unit,
+    onSearchInCircleChange: (Boolean) -> Unit,
     onSearch: () -> Unit,
     modifier: Modifier,
 ) {
@@ -194,6 +224,33 @@ private fun SearchForm(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium,
             )
+        }
+        if (joinedCircle != null) {
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Where to search", style = MaterialTheme.typography.titleMedium)
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        FilterChip(
+                            selected = !searchInCircle,
+                            onClick = { onSearchInCircleChange(false) },
+                            label = { Text("All Ryde matches") },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        FilterChip(
+                            selected = searchInCircle,
+                            onClick = { onSearchInCircleChange(true) },
+                            label = { Text("Search within Nottingham Live") },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    if (searchInCircle) {
+                        Text("Circle matches · host covers the £0.50 service fee", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
         }
         item {
             OutlinedTextField(
@@ -235,11 +292,34 @@ private fun SearchForm(
                 )
             }
         }
-        item { ChoiceSection("Demo travel date", DemoTravelDate.entries, criteria.travelDate, { it.displayName }, onDateChange) }
+        if (criteria.circleId != null) {
+            item {
+                Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.primaryContainer) {
+                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Circle event date", style = MaterialTheme.typography.titleMedium)
+                        Text(criteria.travelDate.displayName, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        } else {
+            item {
+                ChoiceSection(
+                    "Demo travel date",
+                    DemoTravelDate.ordinaryChoices,
+                    criteria.travelDate,
+                    { it.displayName },
+                    onDateChange,
+                )
+            }
+        }
         item {
             ChoiceSection(
                 "Preferred departure",
-                listOf(7 * 60 + 35, 8 * 60 + 5, 8 * 60 + 35),
+                if (criteria.circleId == null) {
+                    DemoDepartureTimePolicy.ordinaryFindChoices
+                } else {
+                    DemoDepartureTimePolicy.circleChoices
+                },
                 criteria.departureMinutes,
                 ::formatDemoTime,
                 onTimeChange,
@@ -306,7 +386,7 @@ private fun Results(
     modifier: Modifier,
 ) {
     FindList(modifier) {
-        item { FindHeader("Matching routes", "Ranked fictional route-overlap options") }
+        item { FindHeader(if (result.criteria.circleId == null) "Matching routes" else "Circle matches", "Ranked fictional route-overlap options") }
         item {
             CriteriaCard(result.criteria)
             Spacer(Modifier.height(10.dp))
@@ -354,6 +434,7 @@ private fun MatchCard(match: RouteMatch, isBest: Boolean, onClick: () -> Unit) {
         elevation = CardDefaults.cardElevation(defaultElevation = if (isBest) 3.dp else 1.dp),
     ) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            match.circle?.let { LabelPill("Ryde Circle · ${it.name}") }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (isBest) LabelPill("Best match", containerColor = Mint.copy(alpha = .22f))
                 Spacer(Modifier.weight(1f))
@@ -400,6 +481,7 @@ private fun MatchDetails(
             OutlinedButton(onClick = onBack) { Text("← Back to results") }
             Spacer(Modifier.height(10.dp))
             FindHeader("${match.driver.firstName}'s route overlap", "Fictional demo match · ${match.matchScore}%")
+            match.circle?.let { LabelPill("Circle match · ${it.name}") }
         }
         item {
             DetailCard("Driver profile") {
@@ -434,12 +516,16 @@ private fun MatchDetails(
             DetailCard("Transparent contribution") {
                 PriceRow("Shared-distance contribution", money(match.contributionPence))
                 Text("${match.sharedMiles} miles × £0.20, rounded to the nearest 50p", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
-                PriceRow("Ryde service fee", money(match.serviceFeePence))
+                PriceRow(
+                    "Ryde service fee",
+                    if (match.pricing.hostCoversServiceFee) "${money(match.serviceFeePence)} · covered by host" else money(match.serviceFeePence),
+                )
                 HorizontalDivider(Modifier.padding(vertical = 6.dp))
                 PriceRow("Rider total", money(match.riderTotalPence), bold = true)
                 PriceRow("Driver receives", money(match.driverReceivesPence), bold = true)
                 Spacer(Modifier.height(6.dp))
                 Text("Contributions are based on shared distance—not demand, delays or surge pricing.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (match.pricing.hostCoversServiceFee) Text("The Circle host covers only Ryde’s fee; the driver contribution is unchanged.", color = MaterialTheme.colorScheme.primary)
             }
         }
         item {
@@ -475,6 +561,7 @@ private fun RequestConfirmation(
             OutlinedButton(onClick = onBack) { Text("← Back to match") }
             Spacer(Modifier.height(10.dp))
             FindHeader("Review your seat request", "Nothing is sent until you confirm")
+            match.circle?.let { LabelPill("Ryde Circle · ${it.name}") }
         }
         item {
             DetailCard("Journey") {
@@ -490,11 +577,15 @@ private fun RequestConfirmation(
             DetailCard("Transparent total") {
                 PriceRow("Shared-distance contribution", money(match.contributionPence))
                 Text("${match.sharedMiles} shared miles × £0.20, rounded to the nearest 50p", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
-                PriceRow("Ryde service fee", money(match.serviceFeePence))
+                PriceRow(
+                    "Ryde service fee",
+                    if (match.pricing.hostCoversServiceFee) "${money(match.serviceFeePence)} · covered by host" else money(match.serviceFeePence),
+                )
                 HorizontalDivider(Modifier.padding(vertical = 6.dp))
                 PriceRow("Rider total", money(match.riderTotalPence), bold = true)
                 PriceRow("Driver receives", money(match.driverReceivesPence), bold = true)
                 Text("Based on shared distance — never demand, delays or surge pricing.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (match.pricing.hostCoversServiceFee) Text("Your total excludes the host-covered fee. The driver still receives the full shared-distance contribution.", color = MaterialTheme.colorScheme.primary)
             }
         }
         item {
@@ -511,7 +602,11 @@ private fun RequestConfirmation(
         item {
             Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.secondaryContainer) {
                 Text(
-                    "Fictional local demo: this request will only be stored in this app session. It will not reach a real driver and no payment will be taken.",
+                    if (match.circle == null) {
+                        "Fictional local demo: this request will only be stored in this app session. It will not reach a real driver and no payment will be taken."
+                    } else {
+                        "Fictional local demo: no payment, real host sponsorship or host contact occurred. This Circle request stays only in this app session."
+                    },
                     modifier = Modifier.padding(16.dp),
                     fontWeight = FontWeight.Bold,
                 )
@@ -540,6 +635,7 @@ private fun RequestSuccess(
                 if (request.status == SeatRequestStatus.PENDING) "Pending driver response" else "Cancelled · local demo history",
             )
         }
+        request.circle?.let { item { LabelPill("Ryde Circle · ${it.name}") } }
         item {
             DetailCard("Local-demo success") {
                 Text(
@@ -628,10 +724,11 @@ private fun FindScreenPreview() {
     RydeTheme(darkTheme = false) {
         val repository = remember { FakeRydeRepository() }
         FindScreen(
-            repository.getFindRideContent(),
-            repository::findRides,
-            repository::getSeatRequestForMatch,
-            repository::createSeatRequest,
+            content = repository.getFindRideContent(),
+            joinedCircle = null,
+            onSearch = repository::findRides,
+            requestForMatch = repository::getSeatRequestForMatch,
+            onCreateRequest = repository::createSeatRequest,
             onOpenTrips = {},
         )
     }
