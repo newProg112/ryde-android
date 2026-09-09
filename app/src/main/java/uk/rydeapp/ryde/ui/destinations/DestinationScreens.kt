@@ -40,21 +40,6 @@ import uk.rydeapp.ryde.ui.theme.Mint
 import uk.rydeapp.ryde.ui.theme.RydeTheme
 
 @Composable
-fun FindScreen(modifier: Modifier = Modifier) {
-    DestinationShell(
-        headingRes = R.string.find_heading,
-        bodyRes = R.string.find_body,
-        iconType = DestinationIconType.FIND,
-        modifier = modifier,
-    ) {
-        InfoCard(
-            title = stringResource(R.string.find_info_title),
-            body = stringResource(R.string.find_info_body),
-        )
-    }
-}
-
-@Composable
 fun OfferScreen(modifier: Modifier = Modifier) {
     DestinationShell(
         headingRes = R.string.offer_heading,

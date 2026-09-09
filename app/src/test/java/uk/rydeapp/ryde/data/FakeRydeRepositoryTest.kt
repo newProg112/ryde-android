@@ -22,4 +22,27 @@ class FakeRydeRepositoryTest {
     fun `hosted circle clearly covers service fee`() {
         assertTrue(home.hostedCircle.serviceFeeCoveredByHost)
     }
+
+    @Test
+    fun `default find search returns Alex first`() {
+        val result = FakeRydeRepository.findRides(FakeRydeRepository.getFindRideContent().defaultCriteria)
+
+        assertTrue(result.isValid)
+        assertEquals("Alex", result.matches.first().driver.firstName)
+        assertEquals(92, result.matches.first().matchScore)
+    }
+
+    @Test
+    fun `Alex search match uses seventeen mile contribution breakdown`() {
+        val alex = FakeRydeRepository
+            .findRides(FakeRydeRepository.getFindRideContent().defaultCriteria)
+            .matches
+            .first()
+
+        assertEquals(17, alex.sharedMiles)
+        assertEquals(350, alex.contributionPence)
+        assertEquals(50, alex.serviceFeePence)
+        assertEquals(400, alex.riderTotalPence)
+        assertEquals(350, alex.driverReceivesPence)
+    }
 }

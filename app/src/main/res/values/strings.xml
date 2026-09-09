@@ -44,10 +44,6 @@
     <string name="nav_profile">Profile</string>
     <string name="nav_description">Open %1$s</string>
 
-    <string name="find_heading">Find a shared route</string>
-    <string name="find_body">Tell Ryde where and when you need to travel. Matches will be based on routes and times that overlap—not just matching start and end points.</string>
-    <string name="find_info_title">Designed around real journeys</string>
-    <string name="find_info_body">A future step will let you set a route and time window. This Phase 1 screen is informational.</string>
     <string name="offer_heading">Offer your spare seats</string>
     <string name="offer_body">Only offer journeys you already plan to make.</string>
     <string name="offer_info_title">You can ride and drive</string>

@@ -22,11 +22,11 @@ import uk.rydeapp.ryde.data.FakeRydeRepository
 import uk.rydeapp.ryde.data.RydeRepository
 import uk.rydeapp.ryde.ui.components.DestinationIcon
 import uk.rydeapp.ryde.ui.components.DestinationIconType
-import uk.rydeapp.ryde.ui.destinations.FindScreen
 import uk.rydeapp.ryde.ui.destinations.OfferScreen
 import uk.rydeapp.ryde.ui.destinations.ProfileScreen
 import uk.rydeapp.ryde.ui.destinations.TripsScreen
 import uk.rydeapp.ryde.ui.home.HomeScreen
+import uk.rydeapp.ryde.ui.find.FindScreen
 import uk.rydeapp.ryde.ui.theme.RydeTheme
 
 private enum class RydeDestination(
@@ -44,6 +44,7 @@ private enum class RydeDestination(
 fun RydeApp(repository: RydeRepository = FakeRydeRepository) {
     var selectedDestination by rememberSaveable { mutableStateOf(RydeDestination.HOME) }
     val homeContent = remember(repository) { repository.getHomeContent() }
+    val findContent = remember(repository) { repository.getFindRideContent() }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -74,7 +75,11 @@ fun RydeApp(repository: RydeRepository = FakeRydeRepository) {
                 onOfferRide = { selectedDestination = RydeDestination.OFFER },
                 modifier = Modifier.padding(innerPadding),
             )
-            RydeDestination.FIND -> FindScreen(Modifier.padding(innerPadding))
+            RydeDestination.FIND -> FindScreen(
+                content = findContent,
+                onSearch = repository::findRides,
+                modifier = Modifier.padding(innerPadding),
+            )
             RydeDestination.OFFER -> OfferScreen(Modifier.padding(innerPadding))
             RydeDestination.TRIPS -> TripsScreen(Modifier.padding(innerPadding))
             RydeDestination.PROFILE -> ProfileScreen(
