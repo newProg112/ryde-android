@@ -36,6 +36,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import uk.rydeapp.ryde.R
 import uk.rydeapp.ryde.domain.model.SavedPlace
@@ -43,6 +44,11 @@ import uk.rydeapp.ryde.domain.model.SeatRequest
 import uk.rydeapp.ryde.domain.model.SeatRequestStatus
 import uk.rydeapp.ryde.domain.model.OfferedJourney
 import uk.rydeapp.ryde.domain.model.OfferedJourneyStatus
+import uk.rydeapp.ryde.domain.model.ConfirmedSharedTrip
+import uk.rydeapp.ryde.domain.model.DecideIncomingRequestResult
+import uk.rydeapp.ryde.domain.model.IncomingRequestDecision
+import uk.rydeapp.ryde.domain.model.IncomingSeatRequest
+import uk.rydeapp.ryde.domain.model.IncomingSeatRequestStatus
 import uk.rydeapp.ryde.domain.model.formatDemoTime
 import uk.rydeapp.ryde.ui.components.DestinationIcon
 import uk.rydeapp.ryde.ui.components.DestinationIconType
@@ -57,20 +63,71 @@ import java.util.Locale
 fun TripsScreen(
     requests: List<SeatRequest>,
     offeredJourneys: List<OfferedJourney>,
+    incomingRequests: List<IncomingSeatRequest>,
+    confirmedTrips: List<ConfirmedSharedTrip>,
     onCancelRequest: (String) -> Unit,
     onCancelOffer: (String) -> Unit,
+    onDecideIncomingRequest: (String, IncomingRequestDecision) -> DecideIncomingRequestResult,
     modifier: Modifier = Modifier,
 ) {
     var selectedRequestId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedOfferId by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedIncomingRequestId by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedConfirmedTripId by rememberSaveable { mutableStateOf<String?>(null) }
     var showCancelConfirmation by rememberSaveable { mutableStateOf(false) }
+    var pendingDecision by rememberSaveable { mutableStateOf<IncomingRequestDecision?>(null) }
     val selectedRequest = requests.firstOrNull { it.id == selectedRequestId }
     val selectedOffer = offeredJourneys.firstOrNull { it.id == selectedOfferId }
+    val selectedIncomingRequest = incomingRequests.firstOrNull { it.id == selectedIncomingRequestId }
+    val selectedConfirmedTrip = confirmedTrips.firstOrNull { it.id == selectedConfirmedTripId }
 
-    BackHandler(enabled = selectedRequest != null || selectedOffer != null) {
-        selectedRequestId = null
-        selectedOfferId = null
+    BackHandler(
+        enabled = selectedRequest != null || selectedOffer != null ||
+            selectedIncomingRequest != null || selectedConfirmedTrip != null,
+    ) {
+        if (selectedIncomingRequest != null) {
+            selectedIncomingRequestId = null
+        } else {
+            selectedRequestId = null
+            selectedOfferId = null
+            selectedConfirmedTripId = null
+        }
         showCancelConfirmation = false
+        pendingDecision = null
+    }
+
+    if (pendingDecision != null && selectedIncomingRequest != null) {
+        val decision = pendingDecision ?: IncomingRequestDecision.DECLINE
+        val accepting = decision == IncomingRequestDecision.ACCEPT
+        AlertDialog(
+            onDismissRequest = { pendingDecision = null },
+            title = { Text(if (accepting) "Accept demo request?" else "Decline demo request?") },
+            text = {
+                Text(
+                    if (accepting) {
+                        "This confirms a fictional shared trip locally. No payment, contact or live location sharing will occur."
+                    } else {
+                        "The fictional request stays as declined local-demo history and your offer remains open."
+                    },
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    val result = onDecideIncomingRequest(selectedIncomingRequest.id, decision)
+                    pendingDecision = null
+                    if (result is DecideIncomingRequestResult.Decided) {
+                        selectedIncomingRequestId = null
+                        result.confirmedTrip?.let {
+                            selectedOfferId = null
+                            selectedConfirmedTripId = it.id
+                        }
+                    }
+                }) { Text(if (accepting) "Accept request" else "Decline request") }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { pendingDecision = null }) { Text("Go back") }
+            },
+        )
     }
 
     if (showCancelConfirmation && (selectedRequest != null || selectedOffer != null)) {
@@ -105,10 +162,21 @@ fun TripsScreen(
         headingRes = R.string.trips_heading,
         bodyRes = R.string.trips_body,
         iconType = DestinationIconType.TRIPS,
-        phaseLabel = "PHASE 4 · LOCAL DEMO",
+        phaseLabel = "PHASE 5 · LOCAL DEMO",
         modifier = modifier,
     ) {
         when {
+            selectedConfirmedTrip != null -> ConfirmedSharedTripDetail(
+                trip = selectedConfirmedTrip,
+                onBack = { selectedConfirmedTripId = null },
+            )
+            selectedIncomingRequest != null -> IncomingRequestDetail(
+                request = selectedIncomingRequest,
+                journey = offeredJourneys.first { it.id == selectedIncomingRequest.offeredJourneyId },
+                onBack = { selectedIncomingRequestId = null },
+                onAccept = { pendingDecision = IncomingRequestDecision.ACCEPT },
+                onDecline = { pendingDecision = IncomingRequestDecision.DECLINE },
+            )
             selectedRequest != null -> TripRequestDetail(
                 request = selectedRequest,
                 onBack = { selectedRequestId = null },
@@ -116,22 +184,40 @@ fun TripsScreen(
             )
             selectedOffer != null -> OfferedJourneyDetail(
                 journey = selectedOffer,
+                incomingRequest = incomingRequests.firstOrNull { it.offeredJourneyId == selectedOffer.id },
                 onBack = { selectedOfferId = null },
                 onCancel = { showCancelConfirmation = true },
+                onReviewRequest = { selectedIncomingRequestId = it },
             )
-            requests.isEmpty() && offeredJourneys.isEmpty() -> EmptyStateCard()
+            requests.isEmpty() && offeredJourneys.isEmpty() && confirmedTrips.isEmpty() -> EmptyStateCard()
             else -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (requests.isNotEmpty()) {
+                    Text("Your outgoing seat requests", style = MaterialTheme.typography.titleMedium)
+                }
                 requests.forEach { request ->
                     TripRequestCard(request, onClick = {
                         selectedOfferId = null
                         selectedRequestId = request.id
                     })
                 }
-                offeredJourneys.forEach { journey ->
-                    OfferedJourneyCard(journey, onClick = {
-                        selectedRequestId = null
-                        selectedOfferId = journey.id
-                    })
+                if (offeredJourneys.any { it.status != OfferedJourneyStatus.CONFIRMED }) {
+                    Text("Journeys you offered", style = MaterialTheme.typography.titleMedium)
+                }
+                offeredJourneys.filter { it.status != OfferedJourneyStatus.CONFIRMED }.forEach { journey ->
+                    OfferedJourneyCard(
+                        journey = journey,
+                        incomingRequest = incomingRequests.firstOrNull { it.offeredJourneyId == journey.id },
+                        onClick = {
+                            selectedRequestId = null
+                            selectedOfferId = journey.id
+                        },
+                    )
+                }
+                if (confirmedTrips.isNotEmpty()) {
+                    Text("Confirmed shared trips", style = MaterialTheme.typography.titleMedium)
+                }
+                confirmedTrips.forEach { trip ->
+                    ConfirmedSharedTripCard(trip, onClick = { selectedConfirmedTripId = trip.id })
                 }
             }
         }
@@ -245,7 +331,11 @@ private fun TripRequestCard(request: SeatRequest, onClick: () -> Unit) {
 }
 
 @Composable
-private fun OfferedJourneyCard(journey: OfferedJourney, onClick: () -> Unit) {
+private fun OfferedJourneyCard(
+    journey: OfferedJourney,
+    incomingRequest: IncomingSeatRequest?,
+    onClick: () -> Unit,
+) {
     Card(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
@@ -266,6 +356,11 @@ private fun OfferedJourneyCard(journey: OfferedJourney, onClick: () -> Unit) {
             Text("${journey.originArea} → ${journey.destinationArea}", style = MaterialTheme.typography.titleLarge)
             Text("${journey.travelDate.displayName} · ${formatDemoTime(journey.departureMinutes)}")
             Text("${journey.spareSeats} spare ${seatWord(journey.spareSeats)} · Maximum detour ${tripDetourLabel(journey.maximumDetourMiles)}")
+            if (journey.status == OfferedJourneyStatus.OPEN && incomingRequest?.status == IncomingSeatRequestStatus.PENDING) {
+                LabelPill("1 demo seat request", containerColor = MaterialTheme.colorScheme.primaryContainer)
+            } else if (incomingRequest?.status == IncomingSeatRequestStatus.DECLINED) {
+                Text("1 demo seat request · Declined", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             Text("Open offered-journey details →", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
         }
     }
@@ -314,8 +409,10 @@ private fun TripRequestDetail(
 @Composable
 private fun OfferedJourneyDetail(
     journey: OfferedJourney,
+    incomingRequest: IncomingSeatRequest?,
     onBack: () -> Unit,
     onCancel: () -> Unit,
+    onReviewRequest: (String) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         OutlinedButton(onClick = onBack) { Text("← Back to trips") }
@@ -340,6 +437,32 @@ private fun OfferedJourneyDetail(
             title = "Fictional local-demo data",
             body = "Only broad journey areas are stored for this app session. No exact home address, real journey, personal details or live location were published, and no real rider has seen this offer.",
         )
+        if (incomingRequest != null) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(22.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+            ) {
+                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Incoming seat request", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text(
+                        when (incomingRequest.status) {
+                            IncomingSeatRequestStatus.PENDING -> "1 demo seat request from fictional rider ${incomingRequest.rider.firstName}"
+                            IncomingSeatRequestStatus.ACCEPTED -> "Accepted · now shown as a confirmed shared trip"
+                            IncomingSeatRequestStatus.DECLINED -> "Declined · retained as local-demo history"
+                        },
+                    )
+                    Text(
+                        "This was generated locally for the portfolio demo; no real rider submitted it.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedButton(
+                        onClick = { onReviewRequest(incomingRequest.id) },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Review incoming request") }
+                }
+            }
+        }
         if (journey.status == OfferedJourneyStatus.OPEN) {
             OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) { Text("Cancel demo offer") }
         } else {
@@ -349,10 +472,164 @@ private fun OfferedJourneyDetail(
 }
 
 @Composable
+private fun IncomingRequestDetail(
+    request: IncomingSeatRequest,
+    journey: OfferedJourney,
+    onBack: () -> Unit,
+    onAccept: () -> Unit,
+    onDecline: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        OutlinedButton(onClick = onBack) { Text("← Back to offered journey") }
+        Text("Incoming seat request", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+        LabelPill(incomingStatusLabel(request.status))
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(22.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        ) {
+            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    RouteMark(
+                        contentDescription = "Illustration of rider and driver routes merging; this is not a map",
+                        modifier = Modifier.size(52.dp),
+                    )
+                    Spacer(Modifier.size(12.dp))
+                    Column {
+                        Text(request.rider.firstName, style = MaterialTheme.typography.titleLarge)
+                        Text("★ ${request.rider.rating} · Demo-verified fictional profile")
+                    }
+                }
+                HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                TripDetailRow("Requested route", "${request.originArea} → ${request.destinationArea}")
+                TripDetailRow("Your planned route", "${journey.originArea} → ${journey.destinationArea}")
+                TripDetailRow("Public pickup area", request.pickupArea)
+                TripDetailRow("Approximate pickup", "around ${formatDemoTime(request.approximatePickupMinutes)}")
+                TripDetailRow("Walk to pickup", "about ${request.walkMinutes} minutes")
+                TripDetailRow("Additional detour", "${request.detourMiles} miles")
+                TripDetailRow("Seats requested", request.requestedSeats.toString())
+                TripDetailRow("Seats remaining if accepted", (journey.spareSeats - request.requestedSeats).coerceAtLeast(0).toString())
+                HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                TripDetailRow("Shared-distance contribution", money(request.contributionPence))
+                Text(
+                    "${request.sharedMiles} shared miles × £0.20, rounded to the nearest 50p",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                TripDetailRow("Ryde service fee", money(request.serviceFeePence))
+                TripDetailRow("Rider total", money(request.riderTotalPence), bold = true)
+                TripDetailRow("Driver receives", money(request.driverReceivesPence), bold = true)
+            }
+        }
+        InfoCard(
+            title = "Privacy by design",
+            body = "Only public, approximate areas are shown. Exact and live locations have not been shared.",
+        )
+        InfoCard(
+            title = "Fictional local-demo request",
+            body = "Jamie is fictional and this request was generated on this device. No real person submitted it, and no payment or contact has occurred.",
+        )
+        if (request.status == IncomingSeatRequestStatus.PENDING && journey.status == OfferedJourneyStatus.OPEN) {
+            Button(onClick = onAccept, modifier = Modifier.fillMaxWidth()) { Text("Accept request") }
+            OutlinedButton(onClick = onDecline, modifier = Modifier.fillMaxWidth()) { Text("Decline request") }
+        } else if (journey.status == OfferedJourneyStatus.CANCELLED && request.status == IncomingSeatRequestStatus.PENDING) {
+            Text(
+                "This request cannot be accepted or declined because the related offer is cancelled.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            Text("This decision is final for the current local-demo session.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun ConfirmedSharedTripCard(trip: ConfirmedSharedTrip, onClick: () -> Unit) {
+    Card(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+    ) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                LabelPill("Confirmed · local demo", containerColor = Mint.copy(alpha = .22f))
+                Spacer(Modifier.weight(1f))
+                Text("FICTIONAL", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+            }
+            Text("${trip.originArea} → ${trip.destinationArea}", style = MaterialTheme.typography.titleLarge)
+            Text("${trip.travelDate.displayName} · around ${formatDemoTime(trip.approximatePickupMinutes)}")
+            Text("Driver ${trip.driverName} · Rider ${trip.rider.firstName}")
+            Text("Open confirmed trip details →", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
+private fun ConfirmedSharedTripDetail(trip: ConfirmedSharedTrip, onBack: () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        OutlinedButton(onClick = onBack) { Text("← Back to trips") }
+        LabelPill("Confirmed · local demo", containerColor = Mint.copy(alpha = .22f))
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(22.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        ) {
+            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    RouteMark(
+                        contentDescription = "Illustration of the confirmed shared route; this is not a map",
+                        modifier = Modifier.size(52.dp),
+                    )
+                    Spacer(Modifier.size(12.dp))
+                    Text("${trip.originArea} → ${trip.destinationArea}", style = MaterialTheme.typography.titleLarge)
+                }
+                TripDetailRow("Driver", trip.driverName)
+                TripDetailRow("Fictional rider", "${trip.rider.firstName} · ★ ${trip.rider.rating}")
+                TripDetailRow("Date and pickup", "${trip.travelDate.displayName} · around ${formatDemoTime(trip.approximatePickupMinutes)}")
+                TripDetailRow("Public pickup area", trip.pickupArea)
+                TripDetailRow("Seats", trip.requestedSeats.toString())
+                TripDetailRow("Spare seats remaining", trip.remainingSpareSeats.toString())
+                HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                TripDetailRow("Shared-distance contribution", money(trip.contributionPence))
+                Text(
+                    "${trip.sharedMiles} shared miles × £0.20, rounded to the nearest 50p",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                TripDetailRow("Ryde service fee", money(trip.serviceFeePence))
+                TripDetailRow("Rider total", money(trip.riderTotalPence), bold = true)
+                TripDetailRow("Driver receives", money(trip.driverReceivesPence), bold = true)
+            }
+        }
+        InfoCard(
+            title = "Location sharing",
+            body = "Exact and live location is still not being shared in this demo. A real product would show a clear warning immediately before location sharing begins.",
+        )
+        InfoCard(
+            title = "Local demo only",
+            body = "No real request, payment, contact or journey occurred. This confirmed state exists only in the current app session.",
+        )
+    }
+}
+
+private fun incomingStatusLabel(status: IncomingSeatRequestStatus): String = when (status) {
+    IncomingSeatRequestStatus.PENDING -> "Pending · fictional demo"
+    IncomingSeatRequestStatus.ACCEPTED -> "Accepted · local demo"
+    IncomingSeatRequestStatus.DECLINED -> "Declined · local demo"
+}
+
+@Composable
 private fun TripDetailRow(label: String, value: String, bold: Boolean = false) {
     Row(Modifier.fillMaxWidth()) {
         Text(label, modifier = Modifier.weight(1f), fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal)
-        Text(value, fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal)
+        Text(
+            value,
+            modifier = Modifier.weight(1f),
+            fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
+            textAlign = TextAlign.End,
+        )
     }
 }
 

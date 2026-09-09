@@ -54,6 +54,8 @@ fun RydeApp(repository: RydeRepository? = null) {
     val offerContent = remember(appRepository) { appRepository.getOfferRideContent() }
     val requests = remember(appRepository, tripRevision) { appRepository.getSeatRequests() }
     val offeredJourneys = remember(appRepository, tripRevision) { appRepository.getOfferedJourneys() }
+    val incomingRequests = remember(appRepository, tripRevision) { appRepository.getIncomingSeatRequests() }
+    val confirmedTrips = remember(appRepository, tripRevision) { appRepository.getConfirmedSharedTrips() }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -108,6 +110,8 @@ fun RydeApp(repository: RydeRepository? = null) {
                 RydeDestination.TRIPS -> TripsScreen(
                     requests = requests,
                     offeredJourneys = offeredJourneys,
+                    incomingRequests = incomingRequests,
+                    confirmedTrips = confirmedTrips,
                     onCancelRequest = { requestId ->
                         appRepository.cancelSeatRequest(requestId)
                         tripRevision += 1
@@ -115,6 +119,11 @@ fun RydeApp(repository: RydeRepository? = null) {
                     onCancelOffer = { journeyId ->
                         appRepository.cancelOfferedJourney(journeyId)
                         tripRevision += 1
+                    },
+                    onDecideIncomingRequest = { requestId, decision ->
+                        appRepository.decideIncomingSeatRequest(requestId, decision).also {
+                            tripRevision += 1
+                        }
                     },
                     modifier = Modifier.padding(innerPadding),
                 )

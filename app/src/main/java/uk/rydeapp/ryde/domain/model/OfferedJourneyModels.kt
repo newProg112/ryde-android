@@ -17,7 +17,7 @@ data class OfferRideContent(
     val defaultCriteria: OfferRideCriteria,
 )
 
-enum class OfferedJourneyStatus { OPEN, CANCELLED }
+enum class OfferedJourneyStatus { OPEN, CONFIRMED, CANCELLED }
 
 data class OfferedJourney(
     val id: String,

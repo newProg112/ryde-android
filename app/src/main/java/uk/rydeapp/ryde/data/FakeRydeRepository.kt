@@ -26,10 +26,18 @@ import uk.rydeapp.ryde.domain.model.OfferRideCriteria
 import uk.rydeapp.ryde.domain.model.OfferRideValidator
 import uk.rydeapp.ryde.domain.model.OfferedJourney
 import uk.rydeapp.ryde.domain.model.OfferedJourneyStatus
+import uk.rydeapp.ryde.domain.model.ConfirmedSharedTrip
+import uk.rydeapp.ryde.domain.model.DecideIncomingRequestResult
+import uk.rydeapp.ryde.domain.model.DemoRiderProfile
+import uk.rydeapp.ryde.domain.model.IncomingRequestDecision
+import uk.rydeapp.ryde.domain.model.IncomingSeatRequest
+import uk.rydeapp.ryde.domain.model.IncomingSeatRequestStatus
 
 class FakeRydeRepository : RydeRepository {
     private val requestsByMatchId = linkedMapOf<String, SeatRequest>()
     private val offeredJourneys = mutableListOf<OfferedJourney>()
+    private val incomingRequests = mutableListOf<IncomingSeatRequest>()
+    private val confirmedTrips = mutableListOf<ConfirmedSharedTrip>()
     private val savedPlaces = listOf(
         SavedPlace(label = "Home", area = "Sutton-in-Ashfield"),
         SavedPlace(label = "Work", area = "Nottingham"),
@@ -60,7 +68,7 @@ class FakeRydeRepository : RydeRepository {
                 ),
                 sharedMiles = sharedMiles,
                 contributionPence = ContributionCalculator.calculatePence(sharedMiles),
-                serviceFeePence = 50,
+                serviceFeePence = DEMO_SERVICE_FEE_PENCE,
             ),
             hostedCircle = HostedCircle(
                 name = "Nottingham Live — Event Travel",
@@ -178,6 +186,7 @@ class FakeRydeRepository : RydeRepository {
             maximumDetourMiles = normalized.maximumDetourMiles,
         )
         offeredJourneys += journey
+        incomingRequests += demoIncomingRequest(journey)
         return CreateOfferedJourneyResult.Created(journey)
     }
 
@@ -190,6 +199,92 @@ class FakeRydeRepository : RydeRepository {
         val cancelled = existing.copy(status = OfferedJourneyStatus.CANCELLED)
         offeredJourneys[index] = cancelled
         return CancelOfferedJourneyResult.Cancelled(cancelled)
+    }
+
+    override fun getIncomingSeatRequests(): List<IncomingSeatRequest> = incomingRequests.toList()
+
+    override fun getIncomingSeatRequestForJourney(journeyId: String): IncomingSeatRequest? =
+        incomingRequests.firstOrNull { it.offeredJourneyId == journeyId }
+
+    override fun decideIncomingSeatRequest(
+        requestId: String,
+        decision: IncomingRequestDecision,
+    ): DecideIncomingRequestResult {
+        val requestIndex = incomingRequests.indexOfFirst { it.id == requestId }
+        val request = incomingRequests.getOrNull(requestIndex)
+        if (request?.status != IncomingSeatRequestStatus.PENDING) {
+            return DecideIncomingRequestResult.AlreadyDecided(request)
+        }
+
+        val journeyIndex = offeredJourneys.indexOfFirst { it.id == request.offeredJourneyId }
+        val journey = offeredJourneys.getOrNull(journeyIndex)
+        if (journey?.status != OfferedJourneyStatus.OPEN) {
+            return DecideIncomingRequestResult.RelatedOfferUnavailable(journey)
+        }
+
+        if (decision == IncomingRequestDecision.ACCEPT && journey.spareSeats < request.requestedSeats) {
+            return DecideIncomingRequestResult.NotEnoughSeats(journey)
+        }
+
+        val decidedRequest = request.copy(
+            status = if (decision == IncomingRequestDecision.ACCEPT) {
+                IncomingSeatRequestStatus.ACCEPTED
+            } else {
+                IncomingSeatRequestStatus.DECLINED
+            },
+        )
+        incomingRequests[requestIndex] = decidedRequest
+
+        if (decision == IncomingRequestDecision.DECLINE) {
+            return DecideIncomingRequestResult.Decided(decidedRequest, journey, confirmedTrip = null)
+        }
+
+        val confirmedJourney = journey.copy(
+            status = OfferedJourneyStatus.CONFIRMED,
+            spareSeats = journey.spareSeats - request.requestedSeats,
+        )
+        offeredJourneys[journeyIndex] = confirmedJourney
+        val confirmedTrip = ConfirmedSharedTrip(
+            id = "confirmed-${request.id}",
+            offeredJourneyId = journey.id,
+            incomingRequestId = request.id,
+            driverName = "Sam",
+            rider = request.rider,
+            originArea = request.originArea,
+            destinationArea = request.destinationArea,
+            travelDate = journey.travelDate,
+            approximatePickupMinutes = request.approximatePickupMinutes,
+            pickupArea = request.pickupArea,
+            requestedSeats = request.requestedSeats,
+            remainingSpareSeats = confirmedJourney.spareSeats,
+            sharedMiles = request.sharedMiles,
+            contributionPence = request.contributionPence,
+            serviceFeePence = request.serviceFeePence,
+        )
+        confirmedTrips += confirmedTrip
+        return DecideIncomingRequestResult.Decided(decidedRequest, confirmedJourney, confirmedTrip)
+    }
+
+    override fun getConfirmedSharedTrips(): List<ConfirmedSharedTrip> = confirmedTrips.toList()
+
+    private fun demoIncomingRequest(journey: OfferedJourney): IncomingSeatRequest {
+        val sharedMiles = 17
+        return IncomingSeatRequest(
+            id = "incoming-${journey.id}",
+            offeredJourneyId = journey.id,
+            status = IncomingSeatRequestStatus.PENDING,
+            rider = DemoRiderProfile(firstName = "Jamie", rating = 4.8, isDemoVerified = true),
+            originArea = journey.originArea,
+            destinationArea = journey.destinationArea,
+            approximatePickupMinutes = (journey.departureMinutes + 5).coerceAtMost(23 * 60 + 59),
+            pickupArea = "${journey.originArea} town centre",
+            walkMinutes = 6,
+            detourMiles = 0.8,
+            requestedSeats = 1,
+            sharedMiles = sharedMiles,
+            contributionPence = ContributionCalculator.calculatePence(sharedMiles),
+            serviceFeePence = DEMO_SERVICE_FEE_PENCE,
+        )
     }
 
     private val demoMatches = listOf(
@@ -237,6 +332,10 @@ class FakeRydeRepository : RydeRepository {
         ),
     )
 
+    private companion object {
+        const val DEMO_SERVICE_FEE_PENCE = 50
+    }
+
     private fun demoMatch(
         id: String,
         name: String,
@@ -265,6 +364,6 @@ class FakeRydeRepository : RydeRepository {
         availableSeats = seats,
         matchScore = score,
         contributionPence = ContributionCalculator.calculatePence(sharedMiles),
-        serviceFeePence = 50,
+        serviceFeePence = DEMO_SERVICE_FEE_PENCE,
     )
 }

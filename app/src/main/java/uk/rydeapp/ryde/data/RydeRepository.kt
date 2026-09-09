@@ -12,6 +12,10 @@ import uk.rydeapp.ryde.domain.model.CreateOfferedJourneyResult
 import uk.rydeapp.ryde.domain.model.OfferRideContent
 import uk.rydeapp.ryde.domain.model.OfferRideCriteria
 import uk.rydeapp.ryde.domain.model.OfferedJourney
+import uk.rydeapp.ryde.domain.model.ConfirmedSharedTrip
+import uk.rydeapp.ryde.domain.model.DecideIncomingRequestResult
+import uk.rydeapp.ryde.domain.model.IncomingRequestDecision
+import uk.rydeapp.ryde.domain.model.IncomingSeatRequest
 
 interface RydeRepository {
     fun getHomeContent(): HomeContent
@@ -25,4 +29,11 @@ interface RydeRepository {
     fun getOfferedJourneys(): List<OfferedJourney>
     fun createOfferedJourney(criteria: OfferRideCriteria): CreateOfferedJourneyResult
     fun cancelOfferedJourney(journeyId: String): CancelOfferedJourneyResult
+    fun getIncomingSeatRequests(): List<IncomingSeatRequest>
+    fun getIncomingSeatRequestForJourney(journeyId: String): IncomingSeatRequest?
+    fun decideIncomingSeatRequest(
+        requestId: String,
+        decision: IncomingRequestDecision,
+    ): DecideIncomingRequestResult
+    fun getConfirmedSharedTrips(): List<ConfirmedSharedTrip>
 }

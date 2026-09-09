@@ -45,7 +45,7 @@
     <string name="nav_description">Open %1$s</string>
 
     <string name="trips_heading">Your trips</string>
-    <string name="trips_body">Track seat requests and offered journeys stored in this fictional local demo.</string>
+    <string name="trips_body">Track outgoing requests, offered journeys and confirmed shared trips stored in this fictional local demo.</string>
     <string name="trips_info_title">No demo trips yet</string>
     <string name="trips_info_body">Request a seat in Find or offer spare seats, and its local-only status will appear here.</string>
     <string name="profile_heading">Your Ryde profile</string>
