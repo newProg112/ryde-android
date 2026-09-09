@@ -23,11 +23,13 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -55,6 +57,18 @@ import uk.rydeapp.ryde.domain.model.formatDemoTime
 import uk.rydeapp.ryde.domain.model.CompletedJourneyHistory
 import uk.rydeapp.ryde.domain.model.ProfileContent
 import uk.rydeapp.ryde.domain.model.UpdateTrustedPersonResult
+import uk.rydeapp.ryde.domain.model.CompleteJourneyResult
+import uk.rydeapp.ryde.domain.model.ConversationId
+import uk.rydeapp.ryde.domain.model.ConversationThread
+import uk.rydeapp.ryde.domain.model.CoordinationActivityItem
+import uk.rydeapp.ryde.domain.model.CoordinationActivityType
+import uk.rydeapp.ryde.domain.model.CoordinationUnreadCounts
+import uk.rydeapp.ryde.domain.model.GetConversationResult
+import uk.rydeapp.ryde.domain.model.JourneyLifecyclePolicy
+import uk.rydeapp.ryde.domain.model.JourneyLifecycleStatus
+import uk.rydeapp.ryde.domain.model.JourneyStatusUpdateResult
+import uk.rydeapp.ryde.domain.model.MessageRejectionReason
+import uk.rydeapp.ryde.domain.model.SendMessageResult
 import uk.rydeapp.ryde.ui.components.DestinationIcon
 import uk.rydeapp.ryde.ui.components.DestinationIconType
 import uk.rydeapp.ryde.ui.components.InfoCard
@@ -71,9 +85,16 @@ fun TripsScreen(
     incomingRequests: List<IncomingSeatRequest>,
     confirmedTrips: List<ConfirmedSharedTrip>,
     completedJourneyHistory: List<CompletedJourneyHistory>,
+    coordinationActivities: List<CoordinationActivityItem>,
+    unreadCounts: CoordinationUnreadCounts,
     onCancelRequest: (String) -> Unit,
     onCancelOffer: (String) -> Unit,
     onDecideIncomingRequest: (String, IncomingRequestDecision) -> DecideIncomingRequestResult,
+    onOpenConversation: (String) -> GetConversationResult,
+    onSendMessage: (ConversationId, String) -> SendMessageResult,
+    onMarkActivityRead: (String) -> Unit,
+    onUpdateJourneyStatus: (String, JourneyLifecycleStatus) -> JourneyStatusUpdateResult,
+    onCompleteJourney: (String) -> CompleteJourneyResult,
     onTravelTogetherAgain: (String, String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -82,7 +103,10 @@ fun TripsScreen(
     var selectedIncomingRequestId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedConfirmedTripId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedCompletedJourneyId by rememberSaveable { mutableStateOf<String?>(null) }
+    var openConversation by remember { mutableStateOf<ConversationThread?>(null) }
+    var conversationNotice by rememberSaveable { mutableStateOf<String?>(null) }
     var showCancelConfirmation by rememberSaveable { mutableStateOf(false) }
+    var showCompleteConfirmation by rememberSaveable { mutableStateOf(false) }
     var pendingDecision by rememberSaveable { mutableStateOf<IncomingRequestDecision?>(null) }
     val selectedRequest = requests.firstOrNull { it.id == selectedRequestId }
     val selectedOffer = offeredJourneys.firstOrNull { it.id == selectedOfferId }
@@ -91,10 +115,13 @@ fun TripsScreen(
     val selectedCompletedJourney = completedJourneyHistory.firstOrNull { it.id == selectedCompletedJourneyId }
 
     BackHandler(
-        enabled = selectedRequest != null || selectedOffer != null ||
+        enabled = openConversation != null || selectedRequest != null || selectedOffer != null ||
             selectedIncomingRequest != null || selectedConfirmedTrip != null || selectedCompletedJourney != null,
     ) {
-        if (selectedIncomingRequest != null) {
+        if (openConversation != null) {
+            openConversation = null
+            conversationNotice = null
+        } else if (selectedIncomingRequest != null) {
             selectedIncomingRequestId = null
         } else {
             selectedRequestId = null
@@ -103,7 +130,37 @@ fun TripsScreen(
             selectedCompletedJourneyId = null
         }
         showCancelConfirmation = false
+        showCompleteConfirmation = false
         pendingDecision = null
+    }
+
+    if (showCompleteConfirmation && selectedConfirmedTrip != null) {
+        AlertDialog(
+            onDismissRequest = { showCompleteConfirmation = false },
+            title = { Text("Mark journey completed?") },
+            text = {
+                Text("This moves the fictional trip into completed history and unlocks the existing trust and repeat-journey options for Jamie.")
+            },
+            confirmButton = {
+                Button(onClick = {
+                    when (val result = onCompleteJourney(selectedConfirmedTrip.id)) {
+                        is CompleteJourneyResult.Completed -> {
+                            selectedConfirmedTripId = null
+                            selectedCompletedJourneyId = result.journey.id
+                        }
+                        is CompleteJourneyResult.AlreadyCompleted -> {
+                            selectedConfirmedTripId = null
+                            selectedCompletedJourneyId = result.journey.id
+                        }
+                        is CompleteJourneyResult.Rejected -> Unit
+                    }
+                    showCompleteConfirmation = false
+                }) { Text("Complete journey") }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { showCompleteConfirmation = false }) { Text("Not yet") }
+            },
+        )
     }
 
     if (pendingDecision != null && selectedIncomingRequest != null) {
@@ -172,20 +229,67 @@ fun TripsScreen(
         headingRes = R.string.trips_heading,
         bodyRes = R.string.trips_body,
         iconType = DestinationIconType.TRIPS,
-        phaseLabel = "PHASE 5 · LOCAL DEMO",
+        phaseLabel = "PHASE 8 · LOCAL DEMO",
         modifier = modifier,
     ) {
         when {
+            openConversation != null -> ConversationDetail(
+                conversation = openConversation!!,
+                notice = conversationNotice,
+                onBack = {
+                    openConversation = null
+                    conversationNotice = null
+                },
+                onSendMessage = { body ->
+                    when (val result = onSendMessage(openConversation!!.id, body)) {
+                        is SendMessageResult.Sent -> {
+                            openConversation = result.conversation
+                            conversationNotice = null
+                            true
+                        }
+                        is SendMessageResult.Rejected -> {
+                            conversationNotice = messageRejectionLabel(result)
+                            false
+                        }
+                    }
+                },
+            )
             selectedCompletedJourney != null -> CompletedJourneyDetail(
                 journey = selectedCompletedJourney,
                 onBack = { selectedCompletedJourneyId = null },
                 onTravelTogetherAgain = {
                     onTravelTogetherAgain(selectedCompletedJourney.id, selectedCompletedJourney.personId)
                 },
+                onOpenMessages = {
+                    when (val result = onOpenConversation(selectedCompletedJourney.id)) {
+                        is GetConversationResult.Available -> {
+                            openConversation = result.conversation
+                            conversationNotice = null
+                        }
+                        is GetConversationResult.Unavailable -> {
+                            conversationNotice = "No conversation is stored for this seeded history item."
+                        }
+                    }
+                },
+                messageNotice = conversationNotice,
             )
             selectedConfirmedTrip != null -> ConfirmedSharedTripDetail(
                 trip = selectedConfirmedTrip,
                 onBack = { selectedConfirmedTripId = null },
+                onMessage = {
+                    when (val result = onOpenConversation(selectedConfirmedTrip.id)) {
+                        is GetConversationResult.Available -> {
+                            openConversation = result.conversation
+                            conversationNotice = null
+                        }
+                        is GetConversationResult.Unavailable -> {
+                            conversationNotice = "Messaging is unavailable because this participant is blocked or reported."
+                        }
+                    }
+                },
+                onNextStatus = { status -> onUpdateJourneyStatus(selectedConfirmedTrip.id, status) },
+                onComplete = { showCompleteConfirmation = true },
+                messageNotice = conversationNotice,
             )
             selectedIncomingRequest != null -> IncomingRequestDetail(
                 request = selectedIncomingRequest,
@@ -208,6 +312,28 @@ fun TripsScreen(
             )
             requests.isEmpty() && offeredJourneys.isEmpty() && confirmedTrips.isEmpty() && completedJourneyHistory.isEmpty() -> EmptyStateCard()
             else -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                CoordinationActivitySection(
+                    activities = coordinationActivities,
+                    unreadCounts = unreadCounts,
+                    onOpen = { activity ->
+                        onMarkActivityRead(activity.id)
+                        if (activity.type == CoordinationActivityType.NEW_MESSAGE) {
+                            when (val result = onOpenConversation(activity.confirmedTripId)) {
+                                is GetConversationResult.Available -> {
+                                    openConversation = result.conversation
+                                    conversationNotice = null
+                                }
+                                is GetConversationResult.Unavailable -> {
+                                    conversationNotice = "Messaging is unavailable for this participant."
+                                }
+                            }
+                        } else if (confirmedTrips.any { it.id == activity.confirmedTripId }) {
+                            selectedConfirmedTripId = activity.confirmedTripId
+                        } else if (completedJourneyHistory.any { it.id == activity.confirmedTripId }) {
+                            selectedCompletedJourneyId = activity.confirmedTripId
+                        }
+                    },
+                )
                 if (requests.isNotEmpty()) {
                     Text("Your outgoing seat requests", style = MaterialTheme.typography.titleMedium)
                 }
@@ -245,6 +371,145 @@ fun TripsScreen(
             }
         }
     }
+}
+
+@Composable
+private fun CoordinationActivitySection(
+    activities: List<CoordinationActivityItem>,
+    unreadCounts: CoordinationUnreadCounts,
+    onOpen: (CoordinationActivityItem) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("In-app activity", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+            if (unreadCounts.activity > 0) {
+                LabelPill("${unreadCounts.activity} unread", containerColor = MaterialTheme.colorScheme.primaryContainer)
+            }
+        }
+        Text(
+            "Local session only — these are not Android push notifications.",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        if (activities.isEmpty()) {
+            Text("Coordination updates will appear after a demo request is accepted.")
+        } else {
+            activities.take(5).forEach { item ->
+                Card(
+                    onClick = { onOpen(item) },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (item.isRead) {
+                            MaterialTheme.colorScheme.surface
+                        } else {
+                            MaterialTheme.colorScheme.primaryContainer
+                        },
+                    ),
+                ) {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(item.title, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                            Text(item.displayTime, style = MaterialTheme.typography.labelSmall)
+                        }
+                        Text(item.body, style = MaterialTheme.typography.bodySmall)
+                        if (!item.isRead) Text("Unread · open update", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+        }
+        if (unreadCounts.messages > 0) {
+            Text(
+                "${unreadCounts.messages} unread message${if (unreadCounts.messages == 1) "" else "s"}",
+                color = MaterialTheme.colorScheme.primary,
+                style = MaterialTheme.typography.labelLarge,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ConversationDetail(
+    conversation: ConversationThread,
+    notice: String?,
+    onBack: () -> Unit,
+    onSendMessage: (String) -> Boolean,
+) {
+    var draft by rememberSaveable(conversation.id.value) { mutableStateOf("") }
+    val currentUserId = conversation.participants.firstOrNull {
+        it.role == uk.rydeapp.ryde.domain.model.JourneyParticipantRole.DRIVER
+    }?.id
+    val otherParticipant = conversation.participants.firstOrNull { it.id != currentUserId }
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        OutlinedButton(onClick = onBack) { Text("← Back to journey") }
+        Text("Messages with ${otherParticipant?.firstName ?: "participant"}", style = MaterialTheme.typography.headlineSmall)
+        Text(conversation.journeyLabel, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        InfoCard(
+            title = "Fictional local-demo conversation",
+            body = "Messages stay in this app session. Discuss public pickup areas only — never a private address or exact/live location.",
+        )
+        conversation.messages.forEach { message ->
+            val mine = message.senderId == currentUserId
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
+            ) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(.84f),
+                    shape = RoundedCornerShape(16.dp),
+                    color = if (mine) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+                ) {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text(if (mine) "You · Sam" else otherParticipant?.firstName.orEmpty(), fontWeight = FontWeight.Bold)
+                        Text(message.body)
+                        Text(message.displayTime, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        }
+        if (conversation.canSendMessages) {
+            Text("Quick replies", style = MaterialTheme.typography.titleSmall)
+            listOf(
+                "I’ve arrived at the pickup point",
+                "I’m running five minutes late",
+                "Thanks — I’m on my way",
+            ).forEach { reply ->
+                OutlinedButton(
+                    onClick = { draft = reply },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text(reply) }
+            }
+            OutlinedTextField(
+                value = draft,
+                onValueChange = { draft = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Message") },
+                supportingText = { Text("Public pickup coordination only") },
+            )
+            Button(
+                onClick = { if (onSendMessage(draft)) draft = "" },
+                enabled = draft.isNotBlank(),
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Send demo message") }
+        } else {
+            InfoCard(
+                title = "Conversation history only",
+                body = "This journey is completed or cancelled, so new messages are disabled.",
+            )
+        }
+        notice?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+    }
+}
+
+private fun messageRejectionLabel(result: SendMessageResult.Rejected): String = when (result.reason) {
+    MessageRejectionReason.EMPTY_MESSAGE -> "Write a message first."
+    MessageRejectionReason.PRIVATE_OR_LIVE_LOCATION ->
+        "Keep messages to public pickup areas; private addresses and exact/live locations are not allowed."
+    MessageRejectionReason.JOURNEY_CANCELLED -> "This journey is cancelled, so new messages are disabled."
+    MessageRejectionReason.JOURNEY_COMPLETED -> "This journey is completed, so new messages are disabled."
+    MessageRejectionReason.PARTICIPANT_BLOCKED_OR_REPORTED ->
+        "Messaging is unavailable because this participant is blocked or reported."
+    MessageRejectionReason.CONVERSATION_NOT_FOUND -> "This local-demo conversation is unavailable."
 }
 
 @Composable
@@ -404,6 +669,8 @@ private fun CompletedJourneyDetail(
     journey: CompletedJourneyHistory,
     onBack: () -> Unit,
     onTravelTogetherAgain: () -> Unit,
+    onOpenMessages: () -> Unit,
+    messageNotice: String?,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         OutlinedButton(onClick = onBack) { Text("← Back to trips") }
@@ -422,6 +689,12 @@ private fun CompletedJourneyDetail(
         }
         Button(onClick = onTravelTogetherAgain, modifier = Modifier.fillMaxWidth()) {
             Text("Travel together again")
+        }
+        OutlinedButton(onClick = onOpenMessages, modifier = Modifier.fillMaxWidth()) {
+            Text("View messages from this journey")
+        }
+        messageNotice?.let {
+            Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
         }
         InfoCard(
             "Review before continuing",
@@ -754,7 +1027,7 @@ private fun ConfirmedSharedTripCard(trip: ConfirmedSharedTrip, onClick: () -> Un
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
             CircleTripLabel(trip.circle)
             Row(verticalAlignment = Alignment.CenterVertically) {
-                LabelPill("Confirmed · local demo", containerColor = Mint.copy(alpha = .22f))
+                LabelPill("${journeyStatusLabel(trip.lifecycleStatus)} · local demo", containerColor = Mint.copy(alpha = .22f))
                 Spacer(Modifier.weight(1f))
                 Text("FICTIONAL", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
             }
@@ -767,11 +1040,19 @@ private fun ConfirmedSharedTripCard(trip: ConfirmedSharedTrip, onClick: () -> Un
 }
 
 @Composable
-private fun ConfirmedSharedTripDetail(trip: ConfirmedSharedTrip, onBack: () -> Unit) {
+private fun ConfirmedSharedTripDetail(
+    trip: ConfirmedSharedTrip,
+    onBack: () -> Unit,
+    onMessage: () -> Unit,
+    onNextStatus: (JourneyLifecycleStatus) -> JourneyStatusUpdateResult,
+    onComplete: () -> Unit,
+    messageNotice: String?,
+) {
+    val nextStatus = JourneyLifecyclePolicy.nextProgressStatus(trip.lifecycleStatus)
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         OutlinedButton(onClick = onBack) { Text("← Back to trips") }
         CircleTripLabel(trip.circle)
-        LabelPill("Confirmed · local demo", containerColor = Mint.copy(alpha = .22f))
+        LabelPill("${journeyStatusLabel(trip.lifecycleStatus)} · local demo", containerColor = Mint.copy(alpha = .22f))
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(22.dp),
@@ -792,6 +1073,7 @@ private fun ConfirmedSharedTripDetail(trip: ConfirmedSharedTrip, onBack: () -> U
                 TripDetailRow("Public pickup area", trip.pickupArea)
                 TripDetailRow("Seats", trip.requestedSeats.toString())
                 TripDetailRow("Spare seats remaining", trip.remainingSpareSeats.toString())
+                TripDetailRow("Journey status", journeyStatusLabel(trip.lifecycleStatus))
                 HorizontalDivider(Modifier.padding(vertical = 4.dp))
                 TripDetailRow("Shared-distance contribution", money(trip.contributionPence))
                 Text(
@@ -802,6 +1084,20 @@ private fun ConfirmedSharedTripDetail(trip: ConfirmedSharedTrip, onBack: () -> U
                 TripDetailRow("Ryde service fee", serviceFeeValue(trip.pricing))
                 TripDetailRow("Rider total", money(trip.riderTotalPence), bold = true)
                 TripDetailRow("Driver receives", money(trip.driverReceivesPence), bold = true)
+            }
+        }
+        Button(onClick = onMessage, modifier = Modifier.fillMaxWidth()) { Text("Message ${trip.rider.firstName}") }
+        messageNotice?.let {
+            Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        }
+        if (nextStatus != null) {
+            Button(
+                onClick = {
+                    if (nextStatus == JourneyLifecycleStatus.COMPLETED) onComplete() else onNextStatus(nextStatus)
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(journeyActionLabel(nextStatus))
             }
         }
         InfoCard(
@@ -817,6 +1113,25 @@ private fun ConfirmedSharedTripDetail(trip: ConfirmedSharedTrip, onBack: () -> U
             },
         )
     }
+}
+
+private fun journeyStatusLabel(status: JourneyLifecycleStatus): String = when (status) {
+    JourneyLifecycleStatus.CONFIRMED -> "Confirmed"
+    JourneyLifecycleStatus.DRIVER_EN_ROUTE -> "Driver en route"
+    JourneyLifecycleStatus.READY_AT_PICKUP -> "Ready at pickup"
+    JourneyLifecycleStatus.JOURNEY_UNDERWAY -> "Journey underway"
+    JourneyLifecycleStatus.COMPLETED -> "Completed"
+    JourneyLifecycleStatus.CANCELLED -> "Cancelled"
+}
+
+private fun journeyActionLabel(status: JourneyLifecycleStatus): String = when (status) {
+    JourneyLifecycleStatus.DRIVER_EN_ROUTE -> "Start driving to pickup"
+    JourneyLifecycleStatus.READY_AT_PICKUP -> "Mark ready at pickup"
+    JourneyLifecycleStatus.JOURNEY_UNDERWAY -> "Start journey"
+    JourneyLifecycleStatus.COMPLETED -> "Mark journey completed"
+    JourneyLifecycleStatus.CONFIRMED,
+    JourneyLifecycleStatus.CANCELLED,
+    -> "Update journey"
 }
 
 private fun incomingStatusLabel(status: IncomingSeatRequestStatus): String = when (status) {

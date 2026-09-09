@@ -30,6 +30,7 @@ import uk.rydeapp.ryde.ui.offer.OfferScreen
 import uk.rydeapp.ryde.domain.model.OfferRideValidator
 import uk.rydeapp.ryde.domain.model.RepeatJourneyPrefill
 import uk.rydeapp.ryde.domain.model.RepeatJourneyPrefillResult
+import uk.rydeapp.ryde.domain.model.GetConversationResult
 import uk.rydeapp.ryde.ui.home.HomeScreen
 import uk.rydeapp.ryde.ui.find.FindScreen
 import uk.rydeapp.ryde.ui.theme.RydeTheme
@@ -64,7 +65,15 @@ fun RydeApp(repository: RydeRepository? = null) {
     val offeredJourneys = remember(appRepository, tripRevision) { appRepository.getOfferedJourneys() }
     val incomingRequests = remember(appRepository, tripRevision) { appRepository.getIncomingSeatRequests() }
     val confirmedTrips = remember(appRepository, tripRevision) { appRepository.getConfirmedSharedTrips() }
-    val completedJourneyHistory = remember(appRepository) { appRepository.getCompletedJourneyHistory() }
+    val completedJourneyHistory = remember(appRepository, tripRevision, profileRevision) {
+        appRepository.getCompletedJourneyHistory()
+    }
+    val coordinationActivities = remember(appRepository, tripRevision) {
+        appRepository.getCoordinationActivityItems()
+    }
+    val coordinationUnreadCounts = remember(appRepository, tripRevision) {
+        appRepository.getCoordinationUnreadCounts()
+    }
     val profileContent = remember(appRepository, profileRevision) { appRepository.getProfileContent() }
     val openRepeatJourney: (String, String) -> Unit = { tripId, personId ->
         when (val result = appRepository.prepareRepeatJourney(tripId, personId)) {
@@ -145,6 +154,8 @@ fun RydeApp(repository: RydeRepository? = null) {
                     incomingRequests = incomingRequests,
                     confirmedTrips = confirmedTrips,
                     completedJourneyHistory = completedJourneyHistory,
+                    coordinationActivities = coordinationActivities,
+                    unreadCounts = coordinationUnreadCounts,
                     onCancelRequest = { requestId ->
                         appRepository.cancelSeatRequest(requestId)
                         tripRevision += 1
@@ -156,6 +167,29 @@ fun RydeApp(repository: RydeRepository? = null) {
                     onDecideIncomingRequest = { requestId, decision ->
                         appRepository.decideIncomingSeatRequest(requestId, decision).also {
                             tripRevision += 1
+                        }
+                    },
+                    onOpenConversation = { tripId ->
+                        when (val result = appRepository.getConversationForConfirmedTrip(tripId)) {
+                            is GetConversationResult.Available ->
+                                appRepository.markConversationRead(result.conversation.id)
+                            is GetConversationResult.Unavailable -> result
+                        }.also { tripRevision += 1 }
+                    },
+                    onSendMessage = { conversationId, body ->
+                        appRepository.sendMessage(conversationId, body).also { tripRevision += 1 }
+                    },
+                    onMarkActivityRead = { activityId ->
+                        appRepository.markCoordinationActivityRead(activityId)
+                        tripRevision += 1
+                    },
+                    onUpdateJourneyStatus = { tripId, status ->
+                        appRepository.updateConfirmedJourneyStatus(tripId, status).also { tripRevision += 1 }
+                    },
+                    onCompleteJourney = { tripId ->
+                        appRepository.completeJourney(tripId).also {
+                            tripRevision += 1
+                            profileRevision += 1
                         }
                     },
                     onTravelTogetherAgain = openRepeatJourney,

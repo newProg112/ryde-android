@@ -51,18 +51,43 @@ import uk.rydeapp.ryde.domain.model.SavePlaceResult
 import uk.rydeapp.ryde.domain.model.SavedPlacePolicy
 import uk.rydeapp.ryde.domain.model.TrustedPerson
 import uk.rydeapp.ryde.domain.model.UpdateTrustedPersonResult
+import uk.rydeapp.ryde.domain.model.CompleteJourneyResult
+import uk.rydeapp.ryde.domain.model.ConversationId
+import uk.rydeapp.ryde.domain.model.ConversationThread
+import uk.rydeapp.ryde.domain.model.CoordinationActivityItem
+import uk.rydeapp.ryde.domain.model.CoordinationActivityType
+import uk.rydeapp.ryde.domain.model.CoordinationMessage
+import uk.rydeapp.ryde.domain.model.CoordinationMessagePolicy
+import uk.rydeapp.ryde.domain.model.CoordinationUnreadCounts
+import uk.rydeapp.ryde.domain.model.GetConversationResult
+import uk.rydeapp.ryde.domain.model.JourneyLifecyclePolicy
+import uk.rydeapp.ryde.domain.model.JourneyLifecycleStatus
+import uk.rydeapp.ryde.domain.model.JourneyParticipant
+import uk.rydeapp.ryde.domain.model.JourneyParticipantRole
+import uk.rydeapp.ryde.domain.model.JourneyStatusUpdateResult
+import uk.rydeapp.ryde.domain.model.MessageRejectionReason
+import uk.rydeapp.ryde.domain.model.MessagingUnavailableReason
+import uk.rydeapp.ryde.domain.model.SendMessageResult
 
-class FakeRydeRepository : RydeRepository {
+class FakeRydeRepository(
+    jamieSafetyStatus: PersonalSafetyStatus = PersonalSafetyStatus.CLEAR,
+) : RydeRepository {
     private val requestsByMatchId = linkedMapOf<String, SeatRequest>()
     private val offeredJourneys = mutableListOf<OfferedJourney>()
     private val incomingRequests = mutableListOf<IncomingSeatRequest>()
     private val confirmedTrips = mutableListOf<ConfirmedSharedTrip>()
+    private val tripRecordsById = linkedMapOf<String, ConfirmedSharedTrip>()
+    private val conversationsById = linkedMapOf<ConversationId, ConversationThread>()
+    private val conversationIdByTripId = linkedMapOf<String, ConversationId>()
+    private val coordinationActivities = mutableListOf<CoordinationActivityItem>()
+    private var messageSequence = 3
+    private var activitySequence = 0
     private val joinedCircleIds = mutableSetOf<String>()
     private val savedPlaces = mutableListOf(
         SavedPlace(label = "Home", area = "Sutton-in-Ashfield"),
         SavedPlace(label = "Work", area = "Nottingham"),
     )
-    private val completedJourneyHistory = listOf(
+    private val completedJourneyHistory = mutableListOf(
         CompletedJourneyHistory(
             id = "completed-jamie-nottingham-1",
             personId = "jamie-demo",
@@ -80,6 +105,7 @@ class FakeRydeRepository : RydeRepository {
             rating = 4.8,
             completedTripIds = setOf("completed-jamie-nottingham-1"),
             personallyTrusted = false,
+            safetyStatus = jamieSafetyStatus,
         ),
         "casey-demo" to TrustedPerson(
             id = "casey-demo",
@@ -96,7 +122,7 @@ class FakeRydeRepository : RydeRepository {
         return HomeContent(
             currentUser = RydeUser(
                 firstName = "Sam",
-                savedPlaces = savedPlaces,
+                savedPlaces = savedPlaces.toList(),
             ),
             suggestedMatch = SuggestedMatch(
                 driver = DriverProfile(
@@ -146,7 +172,7 @@ class FakeRydeRepository : RydeRepository {
     }
 
     override fun getFindRideContent() = FindRideContent(
-        savedPlaces = savedPlaces,
+        savedPlaces = savedPlaces.toList(),
         defaultCriteria = FindRideCriteria(
             origin = "Sutton-in-Ashfield",
             destination = "Nottingham",
@@ -250,7 +276,7 @@ class FakeRydeRepository : RydeRepository {
     }
 
     override fun getOfferRideContent() = OfferRideContent(
-        savedPlaces = savedPlaces,
+        savedPlaces = savedPlaces.toList(),
         defaultCriteria = OfferRideCriteria(
             originArea = savedPlaces.first { it.label == "Home" }.area,
             destinationArea = savedPlaces.first { it.label == "Work" }.area,
@@ -376,10 +402,162 @@ class FakeRydeRepository : RydeRepository {
             circle = request.circle,
         )
         confirmedTrips += confirmedTrip
+        tripRecordsById[confirmedTrip.id] = confirmedTrip
+        seedCoordinationFor(confirmedTrip)
         return DecideIncomingRequestResult.Decided(decidedRequest, confirmedJourney, confirmedTrip)
     }
 
     override fun getConfirmedSharedTrips(): List<ConfirmedSharedTrip> = confirmedTrips.toList()
+
+    override fun getConversationForConfirmedTrip(confirmedTripId: String): GetConversationResult {
+        val trip = tripRecordsById[confirmedTripId]
+            ?: return GetConversationResult.Unavailable(MessagingUnavailableReason.NO_CONFIRMED_TRIP)
+        if (!participantCanMessage()) {
+            return GetConversationResult.Unavailable(MessagingUnavailableReason.PARTICIPANT_BLOCKED_OR_REPORTED)
+        }
+        val conversationId = conversationIdByTripId[trip.id]
+            ?: return GetConversationResult.Unavailable(MessagingUnavailableReason.NO_CONFIRMED_TRIP)
+        val conversation = conversationsById.getValue(conversationId)
+        val canSend = trip.lifecycleStatus !in setOf(
+            JourneyLifecycleStatus.COMPLETED,
+            JourneyLifecycleStatus.CANCELLED,
+        )
+        return GetConversationResult.Available(
+            conversation.copy(
+                participants = conversation.participants.toList(),
+                messages = conversation.messages.toList(),
+                canSendMessages = canSend,
+            ),
+        )
+    }
+
+    override fun sendMessage(conversationId: ConversationId, body: String): SendMessageResult {
+        val conversation = conversationsById[conversationId]
+            ?: return SendMessageResult.Rejected(MessageRejectionReason.CONVERSATION_NOT_FOUND)
+        if (!participantCanMessage()) {
+            return SendMessageResult.Rejected(MessageRejectionReason.PARTICIPANT_BLOCKED_OR_REPORTED)
+        }
+        val trip = tripRecordsById[conversation.confirmedTripId]
+            ?: return SendMessageResult.Rejected(MessageRejectionReason.CONVERSATION_NOT_FOUND)
+        when (trip.lifecycleStatus) {
+            JourneyLifecycleStatus.CANCELLED ->
+                return SendMessageResult.Rejected(MessageRejectionReason.JOURNEY_CANCELLED)
+            JourneyLifecycleStatus.COMPLETED ->
+                return SendMessageResult.Rejected(MessageRejectionReason.JOURNEY_COMPLETED)
+            else -> Unit
+        }
+        CoordinationMessagePolicy.rejectionReason(body)?.let {
+            return SendMessageResult.Rejected(it)
+        }
+        messageSequence += 1
+        val message = CoordinationMessage(
+            id = "message-${conversation.confirmedTripId}-$messageSequence",
+            senderId = CURRENT_USER_ID,
+            body = body.trim(),
+            sentAtEpochMillis = 1_780_000_000_000L + messageSequence * 60_000L,
+            displayTime = "08:${messageSequence.toString().padStart(2, '0')}",
+            isRead = true,
+        )
+        val updated = conversation.copy(messages = conversation.messages + message)
+        conversationsById[conversationId] = updated
+        return SendMessageResult.Sent(message, updated.copy(messages = updated.messages.toList()))
+    }
+
+    override fun markConversationRead(conversationId: ConversationId): GetConversationResult {
+        val conversation = conversationsById[conversationId]
+            ?: return GetConversationResult.Unavailable(MessagingUnavailableReason.NO_CONFIRMED_TRIP)
+        if (!participantCanMessage()) {
+            return GetConversationResult.Unavailable(MessagingUnavailableReason.PARTICIPANT_BLOCKED_OR_REPORTED)
+        }
+        conversationsById[conversationId] = conversation.copy(
+            messages = conversation.messages.map { message ->
+                if (message.senderId != CURRENT_USER_ID) message.copy(isRead = true) else message
+            },
+        )
+        coordinationActivities.indices.forEach { index ->
+            val item = coordinationActivities[index]
+            if (item.conversationId == conversationId && item.type == CoordinationActivityType.NEW_MESSAGE) {
+                coordinationActivities[index] = item.copy(isRead = true)
+            }
+        }
+        return getConversationForConfirmedTrip(conversation.confirmedTripId)
+    }
+
+    override fun getCoordinationUnreadCounts(): CoordinationUnreadCounts = CoordinationUnreadCounts(
+        messages = if (participantCanMessage()) {
+            conversationsById.values.sumOf { conversation ->
+                conversation.messages.count { !it.isRead && it.senderId != CURRENT_USER_ID }
+            }
+        } else {
+            0
+        },
+        activity = visibleCoordinationActivities().count { !it.isRead },
+    )
+
+    override fun getCoordinationActivityItems(): List<CoordinationActivityItem> =
+        visibleCoordinationActivities().toList()
+
+    override fun markCoordinationActivityRead(activityId: String): Boolean {
+        val index = coordinationActivities.indexOfFirst { it.id == activityId }
+        if (index < 0) return false
+        coordinationActivities[index] = coordinationActivities[index].copy(isRead = true)
+        return true
+    }
+
+    override fun updateConfirmedJourneyStatus(
+        confirmedTripId: String,
+        status: JourneyLifecycleStatus,
+    ): JourneyStatusUpdateResult {
+        val trip = tripRecordsById[confirmedTripId]
+            ?: return JourneyStatusUpdateResult.Rejected(null, status)
+        if (!JourneyLifecyclePolicy.canTransition(trip.lifecycleStatus, status)) {
+            return JourneyStatusUpdateResult.Rejected(trip.lifecycleStatus, status)
+        }
+        val updated = trip.copy(lifecycleStatus = status)
+        tripRecordsById[confirmedTripId] = updated
+        val activeIndex = confirmedTrips.indexOfFirst { it.id == confirmedTripId }
+        if (activeIndex >= 0) confirmedTrips[activeIndex] = updated
+
+        when (status) {
+            JourneyLifecycleStatus.DRIVER_EN_ROUTE -> addActivity(
+                trip = updated,
+                type = CoordinationActivityType.DRIVER_EN_ROUTE,
+                title = "Driver en route",
+                body = "Sam is heading to the public pickup point.",
+                displayTime = "08:10",
+            )
+            JourneyLifecycleStatus.READY_AT_PICKUP -> addActivity(
+                trip = updated,
+                type = CoordinationActivityType.READY_AT_PICKUP,
+                title = "Ready at pickup",
+                body = "Sam is ready at the agreed public pickup point.",
+                displayTime = "08:15",
+            )
+            JourneyLifecycleStatus.COMPLETED -> archiveCompletedJourney(updated)
+            JourneyLifecycleStatus.CANCELLED -> confirmedTrips.removeAll { it.id == confirmedTripId }
+            JourneyLifecycleStatus.CONFIRMED,
+            JourneyLifecycleStatus.JOURNEY_UNDERWAY,
+            -> Unit
+        }
+        return JourneyStatusUpdateResult.Updated(updated)
+    }
+
+    override fun completeJourney(confirmedTripId: String): CompleteJourneyResult {
+        completedJourneyHistory.firstOrNull { it.id == confirmedTripId }?.let {
+            return CompleteJourneyResult.AlreadyCompleted(it)
+        }
+        return when (
+            val result = updateConfirmedJourneyStatus(
+                confirmedTripId,
+                JourneyLifecycleStatus.COMPLETED,
+            )
+        ) {
+            is JourneyStatusUpdateResult.Updated -> CompleteJourneyResult.Completed(
+                completedJourneyHistory.first { it.id == result.trip.id },
+            )
+            is JourneyStatusUpdateResult.Rejected -> CompleteJourneyResult.Rejected(result.currentStatus)
+        }
+    }
 
     override fun getProfileContent() = ProfileContent(
         identity = DemoProfileIdentity(
@@ -439,6 +617,121 @@ class FakeRydeRepository : RydeRepository {
                 originArea = trip.originArea,
                 destinationArea = trip.destinationArea,
             ),
+        )
+    }
+
+    private fun seedCoordinationFor(trip: ConfirmedSharedTrip) {
+        val conversationId = ConversationId("conversation-${trip.id}")
+        val messages = listOf(
+            CoordinationMessage(
+                id = "message-${trip.id}-1",
+                senderId = JAMIE_ID,
+                body = "Hi Sam — I’ll meet you at the agreed public pickup point.",
+                sentAtEpochMillis = 1_780_000_060_000L,
+                displayTime = "08:01",
+                isRead = true,
+            ),
+            CoordinationMessage(
+                id = "message-${trip.id}-2",
+                senderId = CURRENT_USER_ID,
+                body = "Great — I’ll look for you at the public pickup point.",
+                sentAtEpochMillis = 1_780_000_120_000L,
+                displayTime = "08:02",
+                isRead = true,
+            ),
+            CoordinationMessage(
+                id = "message-${trip.id}-3",
+                senderId = JAMIE_ID,
+                body = "Thanks — I’m on my way.",
+                sentAtEpochMillis = 1_780_000_180_000L,
+                displayTime = "08:03",
+                isRead = false,
+            ),
+        )
+        conversationsById[conversationId] = ConversationThread(
+            id = conversationId,
+            confirmedTripId = trip.id,
+            journeyLabel = "${trip.originArea} to ${trip.destinationArea}",
+            participants = listOf(
+                JourneyParticipant(CURRENT_USER_ID, "Sam", JourneyParticipantRole.DRIVER),
+                JourneyParticipant(JAMIE_ID, trip.rider.firstName, JourneyParticipantRole.RIDER),
+            ),
+            messages = messages,
+            canSendMessages = true,
+        )
+        conversationIdByTripId[trip.id] = conversationId
+        addActivity(
+            trip = trip,
+            type = CoordinationActivityType.REQUEST_ACCEPTED,
+            title = "Request accepted",
+            body = "Your shared trip with Jamie is confirmed.",
+            displayTime = "08:00",
+        )
+        addActivity(
+            trip = trip,
+            type = CoordinationActivityType.NEW_MESSAGE,
+            title = "New message from Jamie",
+            body = "Thanks — I’m on my way.",
+            displayTime = "08:03",
+            conversationId = conversationId,
+        )
+    }
+
+    private fun participantCanMessage(): Boolean =
+        peopleById[JAMIE_ID]?.safetyStatus == PersonalSafetyStatus.CLEAR
+
+    private fun visibleCoordinationActivities(): List<CoordinationActivityItem> =
+        if (participantCanMessage()) {
+            coordinationActivities
+        } else {
+            coordinationActivities.filter { it.type != CoordinationActivityType.NEW_MESSAGE }
+        }
+
+    private fun addActivity(
+        trip: ConfirmedSharedTrip,
+        type: CoordinationActivityType,
+        title: String,
+        body: String,
+        displayTime: String,
+        conversationId: ConversationId? = null,
+    ) {
+        activitySequence += 1
+        coordinationActivities.add(
+            index = 0,
+            element = CoordinationActivityItem(
+                id = "activity-${trip.id}-$activitySequence",
+                confirmedTripId = trip.id,
+                conversationId = conversationId,
+                type = type,
+                title = title,
+                body = body,
+                displayTime = displayTime,
+                isRead = false,
+            ),
+        )
+    }
+
+    private fun archiveCompletedJourney(trip: ConfirmedSharedTrip) {
+        if (completedJourneyHistory.none { it.id == trip.id }) {
+            completedJourneyHistory += CompletedJourneyHistory(
+                id = trip.id,
+                personId = JAMIE_ID,
+                personName = trip.rider.firstName,
+                originArea = trip.originArea,
+                destinationArea = trip.destinationArea,
+                completedLabel = "Completed just now",
+            )
+        }
+        confirmedTrips.removeAll { it.id == trip.id }
+        peopleById[JAMIE_ID]?.let { person ->
+            peopleById[JAMIE_ID] = person.copy(completedTripIds = person.completedTripIds + trip.id)
+        }
+        addActivity(
+            trip = trip,
+            type = CoordinationActivityType.JOURNEY_COMPLETED,
+            title = "Journey completed",
+            body = "Your shared journey with Jamie is now in trip history.",
+            displayTime = "08:55",
         )
     }
 
@@ -512,6 +805,8 @@ class FakeRydeRepository : RydeRepository {
 
     private companion object {
         const val DEMO_SERVICE_FEE_PENCE = 50
+        const val CURRENT_USER_ID = "sam-demo"
+        const val JAMIE_ID = "jamie-demo"
     }
 
     private fun joinedCircle(circleId: String?): HostedCircle? =

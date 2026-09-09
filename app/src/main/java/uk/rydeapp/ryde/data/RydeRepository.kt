@@ -27,6 +27,14 @@ import uk.rydeapp.ryde.domain.model.SavePlaceResult
 import uk.rydeapp.ryde.domain.model.SavedPlace
 import uk.rydeapp.ryde.domain.model.TrustedPerson
 import uk.rydeapp.ryde.domain.model.UpdateTrustedPersonResult
+import uk.rydeapp.ryde.domain.model.CompleteJourneyResult
+import uk.rydeapp.ryde.domain.model.ConversationId
+import uk.rydeapp.ryde.domain.model.CoordinationActivityItem
+import uk.rydeapp.ryde.domain.model.CoordinationUnreadCounts
+import uk.rydeapp.ryde.domain.model.GetConversationResult
+import uk.rydeapp.ryde.domain.model.JourneyLifecycleStatus
+import uk.rydeapp.ryde.domain.model.JourneyStatusUpdateResult
+import uk.rydeapp.ryde.domain.model.SendMessageResult
 
 interface RydeRepository {
     fun getHomeContent(): HomeContent
@@ -50,6 +58,17 @@ interface RydeRepository {
         decision: IncomingRequestDecision,
     ): DecideIncomingRequestResult
     fun getConfirmedSharedTrips(): List<ConfirmedSharedTrip>
+    fun getConversationForConfirmedTrip(confirmedTripId: String): GetConversationResult
+    fun sendMessage(conversationId: ConversationId, body: String): SendMessageResult
+    fun markConversationRead(conversationId: ConversationId): GetConversationResult
+    fun getCoordinationUnreadCounts(): CoordinationUnreadCounts
+    fun getCoordinationActivityItems(): List<CoordinationActivityItem>
+    fun markCoordinationActivityRead(activityId: String): Boolean
+    fun updateConfirmedJourneyStatus(
+        confirmedTripId: String,
+        status: JourneyLifecycleStatus,
+    ): JourneyStatusUpdateResult
+    fun completeJourney(confirmedTripId: String): CompleteJourneyResult
     fun getProfileContent(): ProfileContent
     fun getSavedPlaces(): List<SavedPlace>
     fun savePlace(place: SavedPlace): SavePlaceResult

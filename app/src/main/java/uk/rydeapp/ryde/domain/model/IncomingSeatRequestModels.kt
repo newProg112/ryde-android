@@ -53,6 +53,7 @@ data class ConfirmedSharedTrip(
     val serviceFeePence: Int,
     val serviceFeeResponsibility: ServiceFeeResponsibility = ServiceFeeResponsibility.RIDER,
     val circle: CircleIdentity? = null,
+    val lifecycleStatus: JourneyLifecycleStatus = JourneyLifecycleStatus.CONFIRMED,
 ) {
     val pricing: JourneyPricing
         get() = JourneyPricing(contributionPence, serviceFeePence, serviceFeeResponsibility)
