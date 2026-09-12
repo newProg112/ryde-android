@@ -1,5 +1,7 @@
 package uk.rydeapp.ryde.data
 
+import kotlinx.coroutines.runBlocking
+
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -15,7 +17,7 @@ class FakeRydeRepositorySeatRequestTest {
     }
 
     @Test
-    fun `creating a request stores it as pending`() {
+    fun `creating a request stores it as pending`() = runBlocking {
         val (repository, criteria) = repositoryAndCriteria()
 
         val result = repository.createSeatRequest("alex-mansfield-nottingham", criteria)
@@ -27,7 +29,7 @@ class FakeRydeRepositorySeatRequestTest {
     }
 
     @Test
-    fun `duplicate active request returns existing record without adding another`() {
+    fun `duplicate active request returns existing record without adding another`() = runBlocking {
         val (repository, criteria) = repositoryAndCriteria()
         val first = repository.createSeatRequest("alex-mansfield-nottingham", criteria) as CreateSeatRequestResult.Created
 
@@ -39,7 +41,7 @@ class FakeRydeRepositorySeatRequestTest {
     }
 
     @Test
-    fun `request captures seat count and contribution totals`() {
+    fun `request captures seat count and contribution totals`() = runBlocking {
         val (repository, criteria) = repositoryAndCriteria()
 
         val request = (repository.createSeatRequest(
@@ -55,7 +57,7 @@ class FakeRydeRepositorySeatRequestTest {
     }
 
     @Test
-    fun `pending request can be cancelled and remains as history`() {
+    fun `pending request can be cancelled and remains as history`() = runBlocking {
         val (repository, criteria) = repositoryAndCriteria()
         val created = repository.createSeatRequest("alex-mansfield-nottingham", criteria) as CreateSeatRequestResult.Created
 
@@ -66,7 +68,7 @@ class FakeRydeRepositorySeatRequestTest {
     }
 
     @Test
-    fun `cancelling a non-pending or unknown request is safely rejected`() {
+    fun `cancelling a non-pending or unknown request is safely rejected`() = runBlocking {
         val (repository, criteria) = repositoryAndCriteria()
         val created = repository.createSeatRequest("alex-mansfield-nottingham", criteria) as CreateSeatRequestResult.Created
         repository.cancelSeatRequest(created.request.id)
@@ -81,7 +83,7 @@ class FakeRydeRepositorySeatRequestTest {
     }
 
     @Test
-    fun `request state remains available across repository reads in one session`() {
+    fun `request state remains available across repository reads in one session`() = runBlocking {
         val (repository, criteria) = repositoryAndCriteria()
         val created = repository.createSeatRequest("alex-mansfield-nottingham", criteria) as CreateSeatRequestResult.Created
 

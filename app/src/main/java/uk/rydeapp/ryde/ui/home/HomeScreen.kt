@@ -42,7 +42,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import uk.rydeapp.ryde.R
-import uk.rydeapp.ryde.data.FakeRydeRepository
+import uk.rydeapp.ryde.data.AppMode
+import uk.rydeapp.ryde.data.RydeAppComposition
 import uk.rydeapp.ryde.domain.model.HomeContent
 import uk.rydeapp.ryde.domain.model.CircleMembership
 import uk.rydeapp.ryde.domain.model.HostedCircle
@@ -408,9 +409,10 @@ private fun formatPence(pence: Int): String =
 @Composable
 private fun HomeScreenPreview() {
     RydeTheme(darkTheme = false) {
+        val repository = RydeAppComposition.repository(AppMode.LOCAL_DEMO)
         HomeScreen(
-            content = FakeRydeRepository().getHomeContent(),
-            circleMembership = FakeRydeRepository().getCircleMembership("nottingham-live")!!,
+            content = repository.getHomeContent(),
+            circleMembership = repository.getCircleMembership("nottingham-live")!!,
             onJoinCircle = {},
             onLeaveCircle = {},
             onFindRide = {},

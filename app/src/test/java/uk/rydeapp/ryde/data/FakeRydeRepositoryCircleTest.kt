@@ -1,5 +1,7 @@
 package uk.rydeapp.ryde.data
 
+import kotlinx.coroutines.runBlocking
+
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -20,7 +22,7 @@ class FakeRydeRepositoryCircleTest {
     private val circleId = "nottingham-live"
 
     @Test
-    fun `membership starts unjoined and is retained across reads`() {
+    fun `membership starts unjoined and is retained across reads`() = runBlocking {
         val repository = FakeRydeRepository()
 
         assertFalse(repository.getCircleMembership(circleId)!!.isJoined)
@@ -31,7 +33,7 @@ class FakeRydeRepositoryCircleTest {
     }
 
     @Test
-    fun `join prevents duplicates and leave permits rejoin`() {
+    fun `join prevents duplicates and leave permits rejoin`() = runBlocking {
         val repository = FakeRydeRepository()
 
         assertTrue(repository.joinCircle(circleId) is JoinCircleResult.Joined)
@@ -43,7 +45,7 @@ class FakeRydeRepositoryCircleTest {
     }
 
     @Test
-    fun `circle search keeps deterministic matches and applies host-covered pricing`() {
+    fun `circle search keeps deterministic matches and applies host-covered pricing`() = runBlocking {
         val repository = FakeRydeRepository()
         repository.joinCircle(circleId)
         val criteria = repository.getFindRideContent().defaultCriteria.copy(
@@ -77,7 +79,7 @@ class FakeRydeRepositoryCircleTest {
     }
 
     @Test
-    fun `circle identity is retained on seat request`() {
+    fun `circle identity is retained on seat request`() = runBlocking {
         val repository = FakeRydeRepository()
         repository.joinCircle(circleId)
         val criteria = repository.getFindRideContent().defaultCriteria.copy(
@@ -96,7 +98,7 @@ class FakeRydeRepositoryCircleTest {
     }
 
     @Test
-    fun `circle identity flows from offer through incoming request to confirmed trip`() {
+    fun `circle identity flows from offer through incoming request to confirmed trip`() = runBlocking {
         val repository = FakeRydeRepository()
         repository.joinCircle(circleId)
         val criteria = repository.getOfferRideContent().defaultCriteria.copy(
@@ -124,7 +126,7 @@ class FakeRydeRepositoryCircleTest {
     }
 
     @Test
-    fun `leaving circle does not erase historical circle identity`() {
+    fun `leaving circle does not erase historical circle identity`() = runBlocking {
         val repository = FakeRydeRepository()
         repository.joinCircle(circleId)
         val criteria = repository.getOfferRideContent().defaultCriteria.copy(circleId = circleId)
@@ -141,7 +143,7 @@ class FakeRydeRepositoryCircleTest {
     }
 
     @Test
-    fun `non-circle request and offer flows remain ordinary`() {
+    fun `non-circle request and offer flows remain ordinary`() = runBlocking {
         val repository = FakeRydeRepository()
 
         val request = (repository.createSeatRequest(
@@ -169,7 +171,7 @@ class FakeRydeRepositoryCircleTest {
     }
 
     @Test
-    fun `ordinary tomorrow offer remains tomorrow`() {
+    fun `ordinary tomorrow offer remains tomorrow`() = runBlocking {
         val repository = FakeRydeRepository()
         val criteria = repository.getOfferRideContent().defaultCriteria.copy(travelDate = DemoTravelDate.TOMORROW)
 
@@ -180,7 +182,7 @@ class FakeRydeRepositoryCircleTest {
     }
 
     @Test
-    fun `date policy switches modes without retaining a mismatched date`() {
+    fun `date policy switches modes without retaining a mismatched date`() = runBlocking {
         val repository = FakeRydeRepository()
         val circle = repository.getCircleMembership(circleId)!!.circle
 
@@ -196,7 +198,7 @@ class FakeRydeRepositoryCircleTest {
     }
 
     @Test
-    fun `departure policy keeps ordinary and circle modes valid when switching`() {
+    fun `departure policy keeps ordinary and circle modes valid when switching`() = runBlocking {
         assertEquals(
             listOf(17 * 60, 17 * 60 + 30, 18 * 60),
             DemoDepartureTimePolicy.circleChoices,

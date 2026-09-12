@@ -1,5 +1,7 @@
 package uk.rydeapp.ryde.data
 
+import kotlinx.coroutines.runBlocking
+
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -19,7 +21,7 @@ class FakeRydeRepositoryOfferedJourneyTest {
     }
 
     @Test
-    fun `valid offer creation stores an open deterministic journey`() {
+    fun `valid offer creation stores an open deterministic journey`() = runBlocking {
         val (repository, criteria) = repositoryAndCriteria()
 
         val result = repository.createOfferedJourney(criteria)
@@ -32,7 +34,7 @@ class FakeRydeRepositoryOfferedJourneyTest {
     }
 
     @Test
-    fun `offer areas are trimmed and whitespace is normalised`() {
+    fun `offer areas are trimmed and whitespace is normalised`() = runBlocking {
         val (repository, criteria) = repositoryAndCriteria()
 
         val result = repository.createOfferedJourney(
@@ -44,7 +46,7 @@ class FakeRydeRepositoryOfferedJourneyTest {
     }
 
     @Test
-    fun `identical normalised endpoints are invalid`() {
+    fun `identical normalised endpoints are invalid`() = runBlocking {
         val (_, criteria) = repositoryAndCriteria()
 
         val errors = OfferRideValidator.validate(
@@ -55,7 +57,7 @@ class FakeRydeRepositoryOfferedJourneyTest {
     }
 
     @Test
-    fun `spare seat count outside one to four is invalid`() {
+    fun `spare seat count outside one to four is invalid`() = runBlocking {
         val (_, criteria) = repositoryAndCriteria()
 
         val errors = OfferRideValidator.validate(criteria.copy(spareSeats = 5))
@@ -64,7 +66,7 @@ class FakeRydeRepositoryOfferedJourneyTest {
     }
 
     @Test
-    fun `unsupported detour choice is invalid`() {
+    fun `unsupported detour choice is invalid`() = runBlocking {
         val (_, criteria) = repositoryAndCriteria()
 
         val errors = OfferRideValidator.validate(criteria.copy(maximumDetourMiles = 2))
@@ -73,7 +75,7 @@ class FakeRydeRepositoryOfferedJourneyTest {
     }
 
     @Test
-    fun `normalised active route date and time cannot be duplicated`() {
+    fun `normalised active route date and time cannot be duplicated`() = runBlocking {
         val (repository, criteria) = repositoryAndCriteria()
         val created = repository.createOfferedJourney(criteria) as CreateOfferedJourneyResult.Created
 
@@ -87,7 +89,7 @@ class FakeRydeRepositoryOfferedJourneyTest {
     }
 
     @Test
-    fun `open offer can be cancelled and remains as history`() {
+    fun `open offer can be cancelled and remains as history`() = runBlocking {
         val (repository, criteria) = repositoryAndCriteria()
         val created = repository.createOfferedJourney(criteria) as CreateOfferedJourneyResult.Created
 
@@ -98,7 +100,7 @@ class FakeRydeRepositoryOfferedJourneyTest {
     }
 
     @Test
-    fun `cancelling non-open or unknown offer is safely rejected`() {
+    fun `cancelling non-open or unknown offer is safely rejected`() = runBlocking {
         val (repository, criteria) = repositoryAndCriteria()
         val created = repository.createOfferedJourney(criteria) as CreateOfferedJourneyResult.Created
         repository.cancelOfferedJourney(created.journey.id)
@@ -113,7 +115,7 @@ class FakeRydeRepositoryOfferedJourneyTest {
     }
 
     @Test
-    fun `offer state is retained across reads in the same repository session`() {
+    fun `offer state is retained across reads in the same repository session`() = runBlocking {
         val (repository, criteria) = repositoryAndCriteria()
         val created = repository.createOfferedJourney(criteria) as CreateOfferedJourneyResult.Created
 
@@ -122,7 +124,7 @@ class FakeRydeRepositoryOfferedJourneyTest {
     }
 
     @Test
-    fun `existing seat request behaviour remains intact alongside offers`() {
+    fun `existing seat request behaviour remains intact alongside offers`() = runBlocking {
         val repository = FakeRydeRepository()
         val offer = repository.createOfferedJourney(repository.getOfferRideContent().defaultCriteria)
         val request = repository.createSeatRequest(

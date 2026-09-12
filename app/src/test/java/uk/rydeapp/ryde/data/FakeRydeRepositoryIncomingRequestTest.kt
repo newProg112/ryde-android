@@ -1,5 +1,7 @@
 package uk.rydeapp.ryde.data
 
+import kotlinx.coroutines.runBlocking
+
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -15,7 +17,7 @@ import uk.rydeapp.ryde.domain.model.OfferedJourneyStatus
 import uk.rydeapp.ryde.domain.model.SeatRequestStatus
 
 class FakeRydeRepositoryIncomingRequestTest {
-    private fun repositoryWithOffer(spareSeats: Int = 2): Pair<FakeRydeRepository, OfferedJourney> {
+    private suspend fun repositoryWithOffer(spareSeats: Int = 2): Pair<FakeRydeRepository, OfferedJourney> {
         val repository = FakeRydeRepository()
         val criteria = repository.getOfferRideContent().defaultCriteria.copy(spareSeats = spareSeats)
         val offer = (repository.createOfferedJourney(criteria) as CreateOfferedJourneyResult.Created).journey
@@ -23,7 +25,7 @@ class FakeRydeRepositoryIncomingRequestTest {
     }
 
     @Test
-    fun `open offer deterministically creates one fictional incoming request`() {
+    fun `open offer deterministically creates one fictional incoming request`() = runBlocking {
         val (repository, offer) = repositoryWithOffer()
 
         val firstRead = repository.getIncomingSeatRequests().single()
@@ -37,7 +39,7 @@ class FakeRydeRepositoryIncomingRequestTest {
     }
 
     @Test
-    fun `incoming request is associated with its offered journey and overlapping route`() {
+    fun `incoming request is associated with its offered journey and overlapping route`() = runBlocking {
         val (repository, offer) = repositoryWithOffer()
         val request = repository.getIncomingSeatRequests().single()
 
@@ -47,7 +49,7 @@ class FakeRydeRepositoryIncomingRequestTest {
     }
 
     @Test
-    fun `incoming request pricing uses contribution calculator and current fee`() {
+    fun `incoming request pricing uses contribution calculator and current fee`() = runBlocking {
         val (repository, _) = repositoryWithOffer()
         val request = repository.getIncomingSeatRequests().single()
 
@@ -58,7 +60,7 @@ class FakeRydeRepositoryIncomingRequestTest {
     }
 
     @Test
-    fun `accepting pending request confirms journey and creates shared trip`() {
+    fun `accepting pending request confirms journey and creates shared trip`() = runBlocking {
         val (repository, offer) = repositoryWithOffer()
         val request = repository.getIncomingSeatRequests().single()
 
@@ -73,7 +75,7 @@ class FakeRydeRepositoryIncomingRequestTest {
     }
 
     @Test
-    fun `acceptance reduces spare seats once and duplicate acceptance is rejected`() {
+    fun `acceptance reduces spare seats once and duplicate acceptance is rejected`() = runBlocking {
         val (repository, _) = repositoryWithOffer(spareSeats = 3)
         val request = repository.getIncomingSeatRequests().single()
         repository.decideIncomingSeatRequest(request.id, IncomingRequestDecision.ACCEPT)
@@ -86,7 +88,7 @@ class FakeRydeRepositoryIncomingRequestTest {
     }
 
     @Test
-    fun `declining pending request retains history and leaves offer open`() {
+    fun `declining pending request retains history and leaves offer open`() = runBlocking {
         val (repository, _) = repositoryWithOffer(spareSeats = 3)
         val request = repository.getIncomingSeatRequests().single()
 
@@ -101,7 +103,7 @@ class FakeRydeRepositoryIncomingRequestTest {
     }
 
     @Test
-    fun `decision is rejected when related offer was cancelled`() {
+    fun `decision is rejected when related offer was cancelled`() = runBlocking {
         val (repository, offer) = repositoryWithOffer()
         val request = repository.getIncomingSeatRequests().single()
         repository.cancelOfferedJourney(offer.id)
@@ -114,7 +116,7 @@ class FakeRydeRepositoryIncomingRequestTest {
     }
 
     @Test
-    fun `accepted and declined decisions remain stable across repository reads`() {
+    fun `accepted and declined decisions remain stable across repository reads`() = runBlocking {
         val (acceptedRepository, _) = repositoryWithOffer()
         val accepted = acceptedRepository.getIncomingSeatRequests().single()
         acceptedRepository.decideIncomingSeatRequest(accepted.id, IncomingRequestDecision.ACCEPT)
@@ -130,7 +132,7 @@ class FakeRydeRepositoryIncomingRequestTest {
     }
 
     @Test
-    fun `existing outgoing request and offered journey reads remain intact`() {
+    fun `existing outgoing request and offered journey reads remain intact`() = runBlocking {
         val (repository, offer) = repositoryWithOffer()
         val outgoing = repository.createSeatRequest(
             "alex-mansfield-nottingham",

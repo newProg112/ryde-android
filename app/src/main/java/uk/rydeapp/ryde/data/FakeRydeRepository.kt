@@ -1,5 +1,8 @@
 package uk.rydeapp.ryde.data
 
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import uk.rydeapp.ryde.domain.ContributionCalculator
 import uk.rydeapp.ryde.domain.FindRideMatcher
 import uk.rydeapp.ryde.domain.model.DemoTravelDate
@@ -72,6 +75,16 @@ import uk.rydeapp.ryde.domain.model.SendMessageResult
 class FakeRydeRepository(
     jamieSafetyStatus: PersonalSafetyStatus = PersonalSafetyStatus.CLEAR,
 ) : RydeRepository {
+    private val mutableSessionState = MutableStateFlow<AccountSession>(
+        AccountSession.Authenticated(
+            accountId = "fictional-sam-demo",
+            displayName = "Sam",
+            isFictionalDemo = true,
+        ),
+    )
+    override val sessionState: StateFlow<AccountSession> = mutableSessionState.asStateFlow()
+    private val mutableAppState = MutableStateFlow<AsyncState<RydeSnapshot>>(AsyncState.Loading)
+    override val appState: StateFlow<AsyncState<RydeSnapshot>> = mutableAppState.asStateFlow()
     private val requestsByMatchId = linkedMapOf<String, SeatRequest>()
     private val offeredJourneys = mutableListOf<OfferedJourney>()
     private val incomingRequests = mutableListOf<IncomingSeatRequest>()
@@ -117,6 +130,26 @@ class FakeRydeRepository(
         ),
     )
 
+    override suspend fun refresh() {
+        val home = getHomeContent()
+        mutableAppState.value = AsyncState.Data(
+            RydeSnapshot(
+                homeContent = home,
+                findRideContent = getFindRideContent(),
+                offerRideContent = getOfferRideContent(),
+                circleMembership = checkNotNull(getCircleMembership(home.hostedCircle.id)),
+                seatRequests = getSeatRequests(),
+                offeredJourneys = getOfferedJourneys(),
+                incomingRequests = getIncomingSeatRequests(),
+                confirmedTrips = getConfirmedSharedTrips(),
+                completedJourneyHistory = getCompletedJourneyHistory(),
+                coordinationActivities = getCoordinationActivityItems(),
+                coordinationUnreadCounts = getCoordinationUnreadCounts(),
+                profileContent = getProfileContent(),
+            ),
+        )
+    }
+
     override fun getHomeContent(): HomeContent {
         val sharedMiles = 17
         return HomeContent(
@@ -151,7 +184,7 @@ class FakeRydeRepository(
     override fun getCircleMembership(circleId: String): CircleMembership? =
         demoCircle.takeIf { it.id == circleId }?.let { CircleMembership(it, circleId in joinedCircleIds) }
 
-    override fun joinCircle(circleId: String): JoinCircleResult {
+    override suspend fun joinCircle(circleId: String): JoinCircleResult {
         val circle = demoCircle.takeIf { it.id == circleId } ?: return JoinCircleResult.CircleNotFound
         val membership = CircleMembership(circle, isJoined = true)
         return if (joinedCircleIds.add(circleId)) {
@@ -161,7 +194,7 @@ class FakeRydeRepository(
         }
     }
 
-    override fun leaveCircle(circleId: String): LeaveCircleResult {
+    override suspend fun leaveCircle(circleId: String): LeaveCircleResult {
         if (circleId != demoCircle.id) return LeaveCircleResult.NotJoined(null)
         val membership = CircleMembership(demoCircle, isJoined = false)
         return if (joinedCircleIds.remove(circleId)) {
@@ -222,7 +255,7 @@ class FakeRydeRepository(
     override fun getSeatRequestForMatch(matchId: String, circleId: String?): SeatRequest? =
         requestsByMatchId[requestKey(matchId, circleId)]
 
-    override fun createSeatRequest(
+    override suspend fun createSeatRequest(
         matchId: String,
         criteria: FindRideCriteria,
     ): CreateSeatRequestResult {
@@ -265,7 +298,7 @@ class FakeRydeRepository(
         return CreateSeatRequestResult.Created(request)
     }
 
-    override fun cancelSeatRequest(requestId: String): CancelSeatRequestResult {
+    override suspend fun cancelSeatRequest(requestId: String): CancelSeatRequestResult {
         val existing = requestsByMatchId.values.firstOrNull { it.id == requestId }
         if (existing?.status != SeatRequestStatus.PENDING) {
             return CancelSeatRequestResult.NotPending(existing)
@@ -290,7 +323,7 @@ class FakeRydeRepository(
 
     override fun getOfferedJourneys(): List<OfferedJourney> = offeredJourneys.toList()
 
-    override fun createOfferedJourney(criteria: OfferRideCriteria): CreateOfferedJourneyResult {
+    override suspend fun createOfferedJourney(criteria: OfferRideCriteria): CreateOfferedJourneyResult {
         val errors = OfferRideValidator.validate(criteria)
         if (errors.isNotEmpty()) return CreateOfferedJourneyResult.Invalid(errors)
 
@@ -328,7 +361,7 @@ class FakeRydeRepository(
         return CreateOfferedJourneyResult.Created(journey)
     }
 
-    override fun cancelOfferedJourney(journeyId: String): CancelOfferedJourneyResult {
+    override suspend fun cancelOfferedJourney(journeyId: String): CancelOfferedJourneyResult {
         val index = offeredJourneys.indexOfFirst { it.id == journeyId }
         val existing = offeredJourneys.getOrNull(index)
         if (existing?.status != OfferedJourneyStatus.OPEN) {
@@ -344,7 +377,7 @@ class FakeRydeRepository(
     override fun getIncomingSeatRequestForJourney(journeyId: String): IncomingSeatRequest? =
         incomingRequests.firstOrNull { it.offeredJourneyId == journeyId }
 
-    override fun decideIncomingSeatRequest(
+    override suspend fun decideIncomingSeatRequest(
         requestId: String,
         decision: IncomingRequestDecision,
     ): DecideIncomingRequestResult {
@@ -431,7 +464,7 @@ class FakeRydeRepository(
         )
     }
 
-    override fun sendMessage(conversationId: ConversationId, body: String): SendMessageResult {
+    override suspend fun sendMessage(conversationId: ConversationId, body: String): SendMessageResult {
         val conversation = conversationsById[conversationId]
             ?: return SendMessageResult.Rejected(MessageRejectionReason.CONVERSATION_NOT_FOUND)
         if (!participantCanMessage()) {
@@ -463,7 +496,7 @@ class FakeRydeRepository(
         return SendMessageResult.Sent(message, updated.copy(messages = updated.messages.toList()))
     }
 
-    override fun markConversationRead(conversationId: ConversationId): GetConversationResult {
+    override suspend fun markConversationRead(conversationId: ConversationId): GetConversationResult {
         val conversation = conversationsById[conversationId]
             ?: return GetConversationResult.Unavailable(MessagingUnavailableReason.NO_CONFIRMED_TRIP)
         if (!participantCanMessage()) {
@@ -497,14 +530,14 @@ class FakeRydeRepository(
     override fun getCoordinationActivityItems(): List<CoordinationActivityItem> =
         visibleCoordinationActivities().toList()
 
-    override fun markCoordinationActivityRead(activityId: String): Boolean {
+    override suspend fun markCoordinationActivityRead(activityId: String): Boolean {
         val index = coordinationActivities.indexOfFirst { it.id == activityId }
         if (index < 0) return false
         coordinationActivities[index] = coordinationActivities[index].copy(isRead = true)
         return true
     }
 
-    override fun updateConfirmedJourneyStatus(
+    override suspend fun updateConfirmedJourneyStatus(
         confirmedTripId: String,
         status: JourneyLifecycleStatus,
     ): JourneyStatusUpdateResult {
@@ -542,7 +575,7 @@ class FakeRydeRepository(
         return JourneyStatusUpdateResult.Updated(updated)
     }
 
-    override fun completeJourney(confirmedTripId: String): CompleteJourneyResult {
+    override suspend fun completeJourney(confirmedTripId: String): CompleteJourneyResult {
         completedJourneyHistory.firstOrNull { it.id == confirmedTripId }?.let {
             return CompleteJourneyResult.AlreadyCompleted(it)
         }
@@ -576,7 +609,7 @@ class FakeRydeRepository(
 
     override fun getSavedPlaces(): List<SavedPlace> = savedPlaces.toList()
 
-    override fun savePlace(place: SavedPlace): SavePlaceResult {
+    override suspend fun savePlace(place: SavedPlace): SavePlaceResult {
         if (!SavedPlacePolicy.isBroadDisplayArea(place.area)) return SavePlaceResult.PrivateOrInvalidArea
         val normalized = place.copy(label = place.label.trim(), area = place.area.trim())
         val existingIndex = savedPlaces.indexOfFirst { it.label.equals(normalized.label, ignoreCase = true) }
@@ -588,7 +621,7 @@ class FakeRydeRepository(
 
     override fun getTrustedPeople(): List<TrustedPerson> = peopleById.values.filter { it.isTrusted }
 
-    override fun setPersonTrusted(personId: String, trusted: Boolean): UpdateTrustedPersonResult {
+    override suspend fun setPersonTrusted(personId: String, trusted: Boolean): UpdateTrustedPersonResult {
         val person = peopleById[personId] ?: return UpdateTrustedPersonResult.NotEligible(null)
         if (trusted && !person.isEligibleForTrust) return UpdateTrustedPersonResult.NotEligible(person)
         val updated = person.copy(

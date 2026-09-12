@@ -34,6 +34,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -48,7 +49,8 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import java.text.NumberFormat
 import java.util.Locale
-import uk.rydeapp.ryde.data.FakeRydeRepository
+import uk.rydeapp.ryde.data.AppMode
+import uk.rydeapp.ryde.data.RydeAppComposition
 import uk.rydeapp.ryde.domain.model.DemoTravelDate
 import uk.rydeapp.ryde.domain.model.FindRideContent
 import uk.rydeapp.ryde.domain.model.FindRideCriteria
@@ -70,6 +72,7 @@ import uk.rydeapp.ryde.ui.components.RouteMark
 import uk.rydeapp.ryde.ui.theme.ElectricBlue
 import uk.rydeapp.ryde.ui.theme.Mint
 import uk.rydeapp.ryde.ui.theme.RydeTheme
+import kotlinx.coroutines.launch
 
 private enum class FindStage { FORM, RESULTS, DETAILS, CONFIRM, SUCCESS }
 
@@ -80,10 +83,11 @@ fun FindScreen(
     repeatPrefill: RepeatJourneyPrefill? = null,
     onSearch: (FindRideCriteria) -> FindRideSearchResult,
     requestForMatch: (String, String?) -> SeatRequest?,
-    onCreateRequest: (String, FindRideCriteria) -> CreateSeatRequestResult,
+    onCreateRequest: suspend (String, FindRideCriteria) -> CreateSeatRequestResult?,
     onOpenTrips: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val commandScope = rememberCoroutineScope()
     val defaults = content.defaultCriteria
     var origin by rememberSaveable { mutableStateOf(defaults.origin) }
     var destination by rememberSaveable { mutableStateOf(defaults.destination) }
@@ -151,11 +155,14 @@ fun FindScreen(
             match = selectedMatch,
             onBack = { stage = FindStage.DETAILS },
             onConfirm = {
-                when (onCreateRequest(selectedMatch.id, result!!.criteria)) {
-                    is CreateSeatRequestResult.Created,
-                    is CreateSeatRequestResult.DuplicateActive -> stage = FindStage.SUCCESS
-                    CreateSeatRequestResult.InvalidSeatCount,
-                    CreateSeatRequestResult.MatchNotFound -> stage = FindStage.DETAILS
+                commandScope.launch {
+                    when (onCreateRequest(selectedMatch.id, result!!.criteria)) {
+                        is CreateSeatRequestResult.Created,
+                        is CreateSeatRequestResult.DuplicateActive -> stage = FindStage.SUCCESS
+                        CreateSeatRequestResult.InvalidSeatCount,
+                        CreateSeatRequestResult.MatchNotFound -> stage = FindStage.DETAILS
+                        null -> Unit
+                    }
                 }
             },
             modifier = modifier,
@@ -746,7 +753,7 @@ private fun seatLabel(count: Int): String = "$count ${if (count == 1) "seat" els
 @Composable
 private fun FindScreenPreview() {
     RydeTheme(darkTheme = false) {
-        val repository = remember { FakeRydeRepository() }
+        val repository = remember { RydeAppComposition.repository(AppMode.LOCAL_DEMO) }
         FindScreen(
             content = repository.getFindRideContent(),
             joinedCircle = null,

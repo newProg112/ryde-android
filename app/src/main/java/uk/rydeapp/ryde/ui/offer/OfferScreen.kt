@@ -32,6 +32,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -56,6 +57,7 @@ import uk.rydeapp.ryde.domain.model.formatDemoTime
 import uk.rydeapp.ryde.ui.components.InfoCard
 import uk.rydeapp.ryde.ui.components.LabelPill
 import uk.rydeapp.ryde.ui.components.RouteMark
+import kotlinx.coroutines.launch
 
 private enum class OfferStage { FORM, REVIEW, SUCCESS }
 
@@ -65,10 +67,11 @@ fun OfferScreen(
     joinedCircle: HostedCircle?,
     offeredJourneys: List<OfferedJourney>,
     validate: (OfferRideCriteria) -> List<OfferRideValidationError>,
-    onCreateOffer: (OfferRideCriteria) -> CreateOfferedJourneyResult,
+    onCreateOffer: suspend (OfferRideCriteria) -> CreateOfferedJourneyResult?,
     onOpenTrips: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val commandScope = rememberCoroutineScope()
     val defaults = content.defaultCriteria
     val initialActive = offeredJourneys.lastOrNull { it.status == OfferedJourneyStatus.OPEN }
     var origin by rememberSaveable { mutableStateOf(defaults.originArea) }
@@ -149,20 +152,23 @@ fun OfferScreen(
             onAcknowledgedChange = { acknowledgement = it },
             onBack = { stage = OfferStage.FORM },
             onPublish = {
-                when (val result = onCreateOffer(criteria)) {
-                    is CreateOfferedJourneyResult.Created -> {
-                        publishedOfferId = result.journey.id
-                        duplicateMessage = false
-                        stage = OfferStage.SUCCESS
-                    }
-                    is CreateOfferedJourneyResult.DuplicateActive -> {
-                        publishedOfferId = result.journey.id
-                        duplicateMessage = true
-                        stage = OfferStage.SUCCESS
-                    }
-                    is CreateOfferedJourneyResult.Invalid -> {
-                        errors = result.errors
-                        stage = OfferStage.FORM
+                commandScope.launch {
+                    when (val result = onCreateOffer(criteria)) {
+                        is CreateOfferedJourneyResult.Created -> {
+                            publishedOfferId = result.journey.id
+                            duplicateMessage = false
+                            stage = OfferStage.SUCCESS
+                        }
+                        is CreateOfferedJourneyResult.DuplicateActive -> {
+                            publishedOfferId = result.journey.id
+                            duplicateMessage = true
+                            stage = OfferStage.SUCCESS
+                        }
+                        is CreateOfferedJourneyResult.Invalid -> {
+                            errors = result.errors
+                            stage = OfferStage.FORM
+                        }
+                        null -> Unit
                     }
                 }
             },

@@ -1,5 +1,7 @@
 package uk.rydeapp.ryde.data
 
+import kotlinx.coroutines.runBlocking
+
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -19,7 +21,7 @@ import uk.rydeapp.ryde.domain.model.PersonalSafetyStatus
 import uk.rydeapp.ryde.domain.model.SendMessageResult
 
 class FakeRydeRepositoryCoordinationTest {
-    private fun confirmedTrip(
+    private suspend fun confirmedTrip(
         repository: FakeRydeRepository = FakeRydeRepository(),
     ): Pair<FakeRydeRepository, String> {
         val offer = repository.createOfferedJourney(repository.getOfferRideContent().defaultCriteria)
@@ -30,7 +32,7 @@ class FakeRydeRepositoryCoordinationTest {
         return repository to result.confirmedTrip!!.id
     }
 
-    private fun progressToUnderway(repository: FakeRydeRepository, tripId: String) {
+    private suspend fun progressToUnderway(repository: FakeRydeRepository, tripId: String) {
         listOf(
             JourneyLifecycleStatus.DRIVER_EN_ROUTE,
             JourneyLifecycleStatus.READY_AT_PICKUP,
@@ -41,7 +43,7 @@ class FakeRydeRepositoryCoordinationTest {
     }
 
     @Test
-    fun `messaging is unavailable without a confirmed trip`() {
+    fun `messaging is unavailable without a confirmed trip`() = runBlocking {
         val repository = FakeRydeRepository()
 
         val result = repository.getConversationForConfirmedTrip("missing")
@@ -57,7 +59,7 @@ class FakeRydeRepositoryCoordinationTest {
     }
 
     @Test
-    fun `blocked and reported participants cannot message`() {
+    fun `blocked and reported participants cannot message`() = runBlocking {
         listOf(PersonalSafetyStatus.BLOCKED, PersonalSafetyStatus.REPORTED).forEach { safetyStatus ->
             val (repository, tripId) = confirmedTrip(FakeRydeRepository(safetyStatus))
 
@@ -76,7 +78,7 @@ class FakeRydeRepositoryCoordinationTest {
     }
 
     @Test
-    fun `cancelled and completed trips reject new messages but retain history`() {
+    fun `cancelled and completed trips reject new messages but retain history`() = runBlocking {
         val (cancelledRepository, cancelledTripId) = confirmedTrip()
         val cancelledConversation = (
             cancelledRepository.getConversationForConfirmedTrip(cancelledTripId) as GetConversationResult.Available
@@ -110,7 +112,7 @@ class FakeRydeRepositoryCoordinationTest {
     }
 
     @Test
-    fun `opening a conversation clears its unread message count`() {
+    fun `opening a conversation clears its unread message count`() = runBlocking {
         val (repository, tripId) = confirmedTrip()
         val conversation = (repository.getConversationForConfirmedTrip(tripId) as GetConversationResult.Available).conversation
         assertEquals(1, repository.getCoordinationUnreadCounts().messages)
@@ -130,7 +132,7 @@ class FakeRydeRepositoryCoordinationTest {
     }
 
     @Test
-    fun `opening an activity marks that in-app item read`() {
+    fun `opening an activity marks that in-app item read`() = runBlocking {
         val (repository, _) = confirmedTrip()
         val item = repository.getCoordinationActivityItems().first { !it.isRead }
         val before = repository.getCoordinationUnreadCounts().activity
@@ -142,7 +144,7 @@ class FakeRydeRepositoryCoordinationTest {
     }
 
     @Test
-    fun `only valid lifecycle transitions succeed`() {
+    fun `only valid lifecycle transitions succeed`() = runBlocking {
         val (repository, tripId) = confirmedTrip()
 
         assertFalse(
@@ -163,7 +165,7 @@ class FakeRydeRepositoryCoordinationTest {
     }
 
     @Test
-    fun `completion archives once and feeds trust eligibility`() {
+    fun `completion archives once and feeds trust eligibility`() = runBlocking {
         val (repository, tripId) = confirmedTrip()
         progressToUnderway(repository, tripId)
 
@@ -181,7 +183,7 @@ class FakeRydeRepositoryCoordinationTest {
     }
 
     @Test
-    fun `coordination content is privacy safe and never claims live sharing`() {
+    fun `coordination content is privacy safe and never claims live sharing`() = runBlocking {
         val (repository, tripId) = confirmedTrip()
         val conversation = (repository.getConversationForConfirmedTrip(tripId) as GetConversationResult.Available).conversation
         val exposedText = buildString {

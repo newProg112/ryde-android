@@ -1,44 +1,51 @@
 package uk.rydeapp.ryde.ui
 
 import androidx.annotation.StringRes
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 import uk.rydeapp.ryde.R
-import uk.rydeapp.ryde.data.FakeRydeRepository
+import uk.rydeapp.ryde.app.RydeAppStateHolder
+import uk.rydeapp.ryde.app.RydeAppUiState
+import uk.rydeapp.ryde.data.AppMode
+import uk.rydeapp.ryde.data.RydeAppComposition
 import uk.rydeapp.ryde.data.RydeRepository
+import uk.rydeapp.ryde.domain.model.OfferRideValidator
+import uk.rydeapp.ryde.domain.model.RepeatJourneyPrefillResult
 import uk.rydeapp.ryde.ui.components.DestinationIcon
 import uk.rydeapp.ryde.ui.components.DestinationIconType
 import uk.rydeapp.ryde.ui.destinations.ProfileScreen
 import uk.rydeapp.ryde.ui.destinations.TripsScreen
-import uk.rydeapp.ryde.ui.offer.OfferScreen
-import uk.rydeapp.ryde.domain.model.OfferRideValidator
-import uk.rydeapp.ryde.domain.model.RepeatJourneyPrefill
-import uk.rydeapp.ryde.domain.model.RepeatJourneyPrefillResult
-import uk.rydeapp.ryde.domain.model.GetConversationResult
-import uk.rydeapp.ryde.ui.home.HomeScreen
 import uk.rydeapp.ryde.ui.find.FindScreen
+import uk.rydeapp.ryde.ui.home.HomeScreen
+import uk.rydeapp.ryde.ui.offer.OfferScreen
 import uk.rydeapp.ryde.ui.theme.RydeTheme
 
-private enum class RydeDestination(
-    @param:StringRes val labelRes: Int,
-    val iconType: DestinationIconType,
-) {
+private enum class RydeDestination(@param:StringRes val labelRes: Int, val iconType: DestinationIconType) {
     HOME(R.string.nav_home, DestinationIconType.HOME),
     FIND(R.string.nav_find, DestinationIconType.FIND),
     OFFER(R.string.nav_offer, DestinationIconType.OFFER),
@@ -47,42 +54,39 @@ private enum class RydeDestination(
 }
 
 @Composable
-fun RydeApp(repository: RydeRepository? = null) {
-    val appRepository = remember(repository) { repository ?: FakeRydeRepository() }
+fun RydeApp(
+    repository: RydeRepository? = null,
+    appMode: AppMode = AppMode.LOCAL_DEMO,
+) {
+    val appRepository = remember(repository, appMode) {
+        RydeAppComposition.repository(appMode, repository)
+    }
+    val commandScope = rememberCoroutineScope()
+    val controller = remember(appRepository, appMode, commandScope) {
+        RydeAppStateHolder(appRepository, appMode, commandScope)
+    }
+    val uiState by controller.uiState.collectAsState()
+
+    when (val state = uiState) {
+        RydeAppUiState.Loading -> AppLoading()
+        RydeAppUiState.SignedOut -> AppSignedOut()
+        is RydeAppUiState.Error -> AppError(state.userMessage, controller::retry)
+        is RydeAppUiState.Ready -> ReadyApp(state, controller, commandScope)
+    }
+}
+
+@Composable
+private fun ReadyApp(
+    state: RydeAppUiState.Ready,
+    controller: RydeAppStateHolder,
+    commandScope: kotlinx.coroutines.CoroutineScope,
+) {
     var selectedDestination by rememberSaveable { mutableStateOf(RydeDestination.HOME) }
-    var tripRevision by remember { mutableIntStateOf(0) }
-    var circleRevision by remember { mutableIntStateOf(0) }
-    var profileRevision by remember { mutableIntStateOf(0) }
-    var repeatPrefill by remember { mutableStateOf<RepeatJourneyPrefill?>(null) }
     val stateHolder = rememberSaveableStateHolder()
-    val homeContent = remember(appRepository) { appRepository.getHomeContent() }
-    val findContent = remember(appRepository) { appRepository.getFindRideContent() }
-    val offerContent = remember(appRepository) { appRepository.getOfferRideContent() }
-    val circleMembership = remember(appRepository, circleRevision) {
-        appRepository.getCircleMembership(homeContent.hostedCircle.id)!!
-    }
-    val requests = remember(appRepository, tripRevision) { appRepository.getSeatRequests() }
-    val offeredJourneys = remember(appRepository, tripRevision) { appRepository.getOfferedJourneys() }
-    val incomingRequests = remember(appRepository, tripRevision) { appRepository.getIncomingSeatRequests() }
-    val confirmedTrips = remember(appRepository, tripRevision) { appRepository.getConfirmedSharedTrips() }
-    val completedJourneyHistory = remember(appRepository, tripRevision, profileRevision) {
-        appRepository.getCompletedJourneyHistory()
-    }
-    val coordinationActivities = remember(appRepository, tripRevision) {
-        appRepository.getCoordinationActivityItems()
-    }
-    val coordinationUnreadCounts = remember(appRepository, tripRevision) {
-        appRepository.getCoordinationUnreadCounts()
-    }
-    val profileContent = remember(appRepository, profileRevision) { appRepository.getProfileContent() }
+    val snapshot = state.snapshot
     val openRepeatJourney: (String, String) -> Unit = { tripId, personId ->
-        when (val result = appRepository.prepareRepeatJourney(tripId, personId)) {
-            is RepeatJourneyPrefillResult.Ready -> {
-                repeatPrefill = result.prefill
-                selectedDestination = RydeDestination.FIND
-            }
-            RepeatJourneyPrefillResult.CompletedTripNotFound,
-            RepeatJourneyPrefillResult.PersonNotOnCompletedTrip -> Unit
+        if (controller.prepareRepeatJourney(tripId, personId) is RepeatJourneyPrefillResult.Ready) {
+            selectedDestination = RydeDestination.FIND
         }
     }
 
@@ -111,95 +115,59 @@ fun RydeApp(repository: RydeRepository? = null) {
         stateHolder.SaveableStateProvider(selectedDestination.name) {
             when (selectedDestination) {
                 RydeDestination.HOME -> HomeScreen(
-                    content = homeContent,
-                    circleMembership = circleMembership,
+                    content = snapshot.homeContent,
+                    circleMembership = snapshot.circleMembership,
                     onJoinCircle = {
-                        appRepository.joinCircle(homeContent.hostedCircle.id)
-                        circleRevision += 1
+                        commandScope.launch { controller.joinCircle(snapshot.homeContent.hostedCircle.id) }
                     },
                     onLeaveCircle = {
-                        appRepository.leaveCircle(homeContent.hostedCircle.id)
-                        circleRevision += 1
+                        commandScope.launch { controller.leaveCircle(snapshot.homeContent.hostedCircle.id) }
                     },
                     onFindRide = { selectedDestination = RydeDestination.FIND },
                     onOfferRide = { selectedDestination = RydeDestination.OFFER },
                     modifier = Modifier.padding(innerPadding),
                 )
                 RydeDestination.FIND -> FindScreen(
-                    content = findContent,
-                    joinedCircle = circleMembership.takeIf { it.isJoined }?.circle,
-                    repeatPrefill = repeatPrefill,
-                    onSearch = appRepository::findRides,
-                    requestForMatch = appRepository::getSeatRequestForMatch,
-                    onCreateRequest = { matchId, criteria ->
-                        appRepository.createSeatRequest(matchId, criteria).also { tripRevision += 1 }
-                    },
+                    content = snapshot.findRideContent,
+                    joinedCircle = snapshot.circleMembership.takeIf { it.isJoined }?.circle,
+                    repeatPrefill = state.repeatJourneyPrefill,
+                    onSearch = controller::findRides,
+                    requestForMatch = controller::seatRequestForMatch,
+                    onCreateRequest = controller::createSeatRequest,
                     onOpenTrips = { selectedDestination = RydeDestination.TRIPS },
                     modifier = Modifier.padding(innerPadding),
                 )
                 RydeDestination.OFFER -> OfferScreen(
-                    content = offerContent,
-                    joinedCircle = circleMembership.takeIf { it.isJoined }?.circle,
-                    offeredJourneys = offeredJourneys,
+                    content = snapshot.offerRideContent,
+                    joinedCircle = snapshot.circleMembership.takeIf { it.isJoined }?.circle,
+                    offeredJourneys = snapshot.offeredJourneys,
                     validate = OfferRideValidator::validate,
-                    onCreateOffer = { criteria ->
-                        appRepository.createOfferedJourney(criteria).also { tripRevision += 1 }
-                    },
+                    onCreateOffer = controller::createOfferedJourney,
                     onOpenTrips = { selectedDestination = RydeDestination.TRIPS },
                     modifier = Modifier.padding(innerPadding),
                 )
                 RydeDestination.TRIPS -> TripsScreen(
-                    requests = requests,
-                    offeredJourneys = offeredJourneys,
-                    incomingRequests = incomingRequests,
-                    confirmedTrips = confirmedTrips,
-                    completedJourneyHistory = completedJourneyHistory,
-                    coordinationActivities = coordinationActivities,
-                    unreadCounts = coordinationUnreadCounts,
-                    onCancelRequest = { requestId ->
-                        appRepository.cancelSeatRequest(requestId)
-                        tripRevision += 1
-                    },
-                    onCancelOffer = { journeyId ->
-                        appRepository.cancelOfferedJourney(journeyId)
-                        tripRevision += 1
-                    },
-                    onDecideIncomingRequest = { requestId, decision ->
-                        appRepository.decideIncomingSeatRequest(requestId, decision).also {
-                            tripRevision += 1
-                        }
-                    },
-                    onOpenConversation = { tripId ->
-                        when (val result = appRepository.getConversationForConfirmedTrip(tripId)) {
-                            is GetConversationResult.Available ->
-                                appRepository.markConversationRead(result.conversation.id)
-                            is GetConversationResult.Unavailable -> result
-                        }.also { tripRevision += 1 }
-                    },
-                    onSendMessage = { conversationId, body ->
-                        appRepository.sendMessage(conversationId, body).also { tripRevision += 1 }
-                    },
-                    onMarkActivityRead = { activityId ->
-                        appRepository.markCoordinationActivityRead(activityId)
-                        tripRevision += 1
-                    },
-                    onUpdateJourneyStatus = { tripId, status ->
-                        appRepository.updateConfirmedJourneyStatus(tripId, status).also { tripRevision += 1 }
-                    },
-                    onCompleteJourney = { tripId ->
-                        appRepository.completeJourney(tripId).also {
-                            tripRevision += 1
-                            profileRevision += 1
-                        }
-                    },
+                    requests = snapshot.seatRequests,
+                    offeredJourneys = snapshot.offeredJourneys,
+                    incomingRequests = snapshot.incomingRequests,
+                    confirmedTrips = snapshot.confirmedTrips,
+                    completedJourneyHistory = snapshot.completedJourneyHistory,
+                    coordinationActivities = snapshot.coordinationActivities,
+                    unreadCounts = snapshot.coordinationUnreadCounts,
+                    onCancelRequest = { controller.cancelSeatRequest(it); Unit },
+                    onCancelOffer = { controller.cancelOfferedJourney(it); Unit },
+                    onDecideIncomingRequest = controller::decideIncomingSeatRequest,
+                    onOpenConversation = controller::openConversation,
+                    onSendMessage = controller::sendMessage,
+                    onMarkActivityRead = { controller.markActivityRead(it); Unit },
+                    onUpdateJourneyStatus = controller::updateJourneyStatus,
+                    onCompleteJourney = controller::completeJourney,
                     onTravelTogetherAgain = openRepeatJourney,
                     modifier = Modifier.padding(innerPadding),
                 )
                 RydeDestination.PROFILE -> ProfileScreen(
-                    content = profileContent,
-                    onSetPersonTrusted = { personId, trusted ->
-                        appRepository.setPersonTrusted(personId, trusted).also { profileRevision += 1 }
-                    },
+                    content = snapshot.profileContent,
+                    onSetPersonTrusted = controller::setPersonTrusted,
                     onTravelTogetherAgain = openRepeatJourney,
                     modifier = Modifier.padding(innerPadding),
                 )
@@ -208,10 +176,38 @@ fun RydeApp(repository: RydeRepository? = null) {
     }
 }
 
+@Composable
+private fun AppLoading() {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            CircularProgressIndicator()
+            Text("Loading Ryde…")
+        }
+    }
+}
+
+@Composable
+private fun AppSignedOut() {
+    Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("You're signed out", style = MaterialTheme.typography.titleMedium)
+            Text("Sign in will be available in a future update.", style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+@Composable
+private fun AppError(message: String, onRetry: () -> Unit) {
+    Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(message, style = MaterialTheme.typography.bodyLarge)
+            Button(onClick = onRetry) { Text("Try again") }
+        }
+    }
+}
+
 @Preview(showBackground = true, showSystemUi = true)
 @Composable
 private fun RydeAppPreview() {
-    RydeTheme(darkTheme = false) {
-        RydeApp()
-    }
+    RydeTheme(darkTheme = false) { RydeApp() }
 }

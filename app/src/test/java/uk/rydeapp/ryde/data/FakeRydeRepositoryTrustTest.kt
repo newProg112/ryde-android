@@ -1,5 +1,7 @@
 package uk.rydeapp.ryde.data
 
+import kotlinx.coroutines.runBlocking
+
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -17,7 +19,7 @@ import uk.rydeapp.ryde.domain.model.UpdateTrustedPersonResult
 
 class FakeRydeRepositoryTrustTest {
     @Test
-    fun `only a person from a completed shared trip can become trusted`() {
+    fun `only a person from a completed shared trip can become trusted`() = runBlocking {
         val repository = FakeRydeRepository()
 
         val eligible = repository.setPersonTrusted("jamie-demo", true)
@@ -29,7 +31,7 @@ class FakeRydeRepositoryTrustTest {
     }
 
     @Test
-    fun `blocked or reported status overrides a personal trusted choice`() {
+    fun `blocked or reported status overrides a personal trusted choice`() = runBlocking {
         fun person(status: PersonalSafetyStatus) = TrustedPerson(
             id = "demo",
             firstName = "Jamie",
@@ -46,7 +48,7 @@ class FakeRydeRepositoryTrustTest {
     }
 
     @Test
-    fun `saved places expose broad areas and reject private-looking addresses`() {
+    fun `saved places expose broad areas and reject private-looking addresses`() = runBlocking {
         val repository = FakeRydeRepository()
 
         assertEquals(listOf("Sutton-in-Ashfield", "Nottingham"), repository.getSavedPlaces().map { it.displayArea })
@@ -58,7 +60,7 @@ class FakeRydeRepositoryTrustTest {
     }
 
     @Test
-    fun `repeat journey prefill uses selected trip and person without creating a trip`() {
+    fun `repeat journey prefill uses selected trip and person without creating a trip`() = runBlocking {
         val repository = FakeRydeRepository()
         val trip = repository.getCompletedJourneyHistory().single()
         val before = Triple(
@@ -79,7 +81,7 @@ class FakeRydeRepositoryTrustTest {
     }
 
     @Test
-    fun `location sharing cannot start without explicit consent`() {
+    fun `location sharing cannot start without explicit consent`() = runBlocking {
         assertEquals(
             LocationSharingState.CONSENT_REQUIRED,
             LocationSharingPolicy.transition(

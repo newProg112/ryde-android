@@ -30,6 +30,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -77,6 +78,7 @@ import uk.rydeapp.ryde.ui.components.RouteMark
 import uk.rydeapp.ryde.ui.theme.Mint
 import java.text.NumberFormat
 import java.util.Locale
+import kotlinx.coroutines.launch
 
 @Composable
 fun TripsScreen(
@@ -87,17 +89,18 @@ fun TripsScreen(
     completedJourneyHistory: List<CompletedJourneyHistory>,
     coordinationActivities: List<CoordinationActivityItem>,
     unreadCounts: CoordinationUnreadCounts,
-    onCancelRequest: (String) -> Unit,
-    onCancelOffer: (String) -> Unit,
-    onDecideIncomingRequest: (String, IncomingRequestDecision) -> DecideIncomingRequestResult,
-    onOpenConversation: (String) -> GetConversationResult,
-    onSendMessage: (ConversationId, String) -> SendMessageResult,
-    onMarkActivityRead: (String) -> Unit,
-    onUpdateJourneyStatus: (String, JourneyLifecycleStatus) -> JourneyStatusUpdateResult,
-    onCompleteJourney: (String) -> CompleteJourneyResult,
+    onCancelRequest: suspend (String) -> Unit,
+    onCancelOffer: suspend (String) -> Unit,
+    onDecideIncomingRequest: suspend (String, IncomingRequestDecision) -> DecideIncomingRequestResult?,
+    onOpenConversation: suspend (String) -> GetConversationResult?,
+    onSendMessage: suspend (ConversationId, String) -> SendMessageResult?,
+    onMarkActivityRead: suspend (String) -> Unit,
+    onUpdateJourneyStatus: suspend (String, JourneyLifecycleStatus) -> JourneyStatusUpdateResult?,
+    onCompleteJourney: suspend (String) -> CompleteJourneyResult?,
     onTravelTogetherAgain: (String, String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val commandScope = rememberCoroutineScope()
     var selectedRequestId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedOfferId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedIncomingRequestId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -143,18 +146,21 @@ fun TripsScreen(
             },
             confirmButton = {
                 Button(onClick = {
-                    when (val result = onCompleteJourney(selectedConfirmedTrip.id)) {
-                        is CompleteJourneyResult.Completed -> {
-                            selectedConfirmedTripId = null
-                            selectedCompletedJourneyId = result.journey.id
+                    commandScope.launch {
+                        when (val result = onCompleteJourney(selectedConfirmedTrip.id)) {
+                            is CompleteJourneyResult.Completed -> {
+                                selectedConfirmedTripId = null
+                                selectedCompletedJourneyId = result.journey.id
+                            }
+                            is CompleteJourneyResult.AlreadyCompleted -> {
+                                selectedConfirmedTripId = null
+                                selectedCompletedJourneyId = result.journey.id
+                            }
+                            is CompleteJourneyResult.Rejected -> Unit
+                            null -> Unit
                         }
-                        is CompleteJourneyResult.AlreadyCompleted -> {
-                            selectedConfirmedTripId = null
-                            selectedCompletedJourneyId = result.journey.id
-                        }
-                        is CompleteJourneyResult.Rejected -> Unit
+                        showCompleteConfirmation = false
                     }
-                    showCompleteConfirmation = false
                 }) { Text("Complete journey") }
             },
             dismissButton = {
@@ -180,13 +186,15 @@ fun TripsScreen(
             },
             confirmButton = {
                 Button(onClick = {
-                    val result = onDecideIncomingRequest(selectedIncomingRequest.id, decision)
-                    pendingDecision = null
-                    if (result is DecideIncomingRequestResult.Decided) {
-                        selectedIncomingRequestId = null
-                        result.confirmedTrip?.let {
-                            selectedOfferId = null
-                            selectedConfirmedTripId = it.id
+                    commandScope.launch {
+                        val result = onDecideIncomingRequest(selectedIncomingRequest.id, decision)
+                        pendingDecision = null
+                        if (result is DecideIncomingRequestResult.Decided) {
+                            selectedIncomingRequestId = null
+                            result.confirmedTrip?.let {
+                                selectedOfferId = null
+                                selectedConfirmedTripId = it.id
+                            }
                         }
                     }
                 }) { Text(if (accepting) "Accept request" else "Decline request") }
@@ -212,9 +220,11 @@ fun TripsScreen(
             },
             confirmButton = {
                 Button(onClick = {
-                    selectedOffer?.let { onCancelOffer(it.id) }
-                    selectedRequest?.let { onCancelRequest(it.id) }
-                    showCancelConfirmation = false
+                    commandScope.launch {
+                        selectedOffer?.let { onCancelOffer(it.id) }
+                        selectedRequest?.let { onCancelRequest(it.id) }
+                        showCancelConfirmation = false
+                    }
                 }) { Text(if (selectedOffer != null) "Cancel offer" else "Cancel request") }
             },
             dismissButton = {
@@ -251,6 +261,7 @@ fun TripsScreen(
                             conversationNotice = messageRejectionLabel(result)
                             false
                         }
+                        null -> false
                     }
                 },
             )
@@ -261,13 +272,16 @@ fun TripsScreen(
                     onTravelTogetherAgain(selectedCompletedJourney.id, selectedCompletedJourney.personId)
                 },
                 onOpenMessages = {
-                    when (val result = onOpenConversation(selectedCompletedJourney.id)) {
-                        is GetConversationResult.Available -> {
-                            openConversation = result.conversation
-                            conversationNotice = null
-                        }
-                        is GetConversationResult.Unavailable -> {
-                            conversationNotice = "No conversation is stored for this seeded history item."
+                    commandScope.launch {
+                        when (val result = onOpenConversation(selectedCompletedJourney.id)) {
+                            is GetConversationResult.Available -> {
+                                openConversation = result.conversation
+                                conversationNotice = null
+                            }
+                            is GetConversationResult.Unavailable -> {
+                                conversationNotice = "No conversation is stored for this seeded history item."
+                            }
+                            null -> Unit
                         }
                     }
                 },
@@ -277,17 +291,22 @@ fun TripsScreen(
                 trip = selectedConfirmedTrip,
                 onBack = { selectedConfirmedTripId = null },
                 onMessage = {
-                    when (val result = onOpenConversation(selectedConfirmedTrip.id)) {
-                        is GetConversationResult.Available -> {
-                            openConversation = result.conversation
-                            conversationNotice = null
-                        }
-                        is GetConversationResult.Unavailable -> {
-                            conversationNotice = "Messaging is unavailable because this participant is blocked or reported."
+                    commandScope.launch {
+                        when (val result = onOpenConversation(selectedConfirmedTrip.id)) {
+                            is GetConversationResult.Available -> {
+                                openConversation = result.conversation
+                                conversationNotice = null
+                            }
+                            is GetConversationResult.Unavailable -> {
+                                conversationNotice = "Messaging is unavailable because this participant is blocked or reported."
+                            }
+                            null -> Unit
                         }
                     }
                 },
-                onNextStatus = { status -> onUpdateJourneyStatus(selectedConfirmedTrip.id, status) },
+                onNextStatus = { status ->
+                    commandScope.launch { onUpdateJourneyStatus(selectedConfirmedTrip.id, status) }
+                },
                 onComplete = { showCompleteConfirmation = true },
                 messageNotice = conversationNotice,
             )
@@ -316,21 +335,24 @@ fun TripsScreen(
                     activities = coordinationActivities,
                     unreadCounts = unreadCounts,
                     onOpen = { activity ->
-                        onMarkActivityRead(activity.id)
-                        if (activity.type == CoordinationActivityType.NEW_MESSAGE) {
-                            when (val result = onOpenConversation(activity.confirmedTripId)) {
-                                is GetConversationResult.Available -> {
-                                    openConversation = result.conversation
-                                    conversationNotice = null
+                        commandScope.launch {
+                            onMarkActivityRead(activity.id)
+                            if (activity.type == CoordinationActivityType.NEW_MESSAGE) {
+                                when (val result = onOpenConversation(activity.confirmedTripId)) {
+                                    is GetConversationResult.Available -> {
+                                        openConversation = result.conversation
+                                        conversationNotice = null
+                                    }
+                                    is GetConversationResult.Unavailable -> {
+                                        conversationNotice = "Messaging is unavailable for this participant."
+                                    }
+                                    null -> Unit
                                 }
-                                is GetConversationResult.Unavailable -> {
-                                    conversationNotice = "Messaging is unavailable for this participant."
-                                }
+                            } else if (confirmedTrips.any { it.id == activity.confirmedTripId }) {
+                                selectedConfirmedTripId = activity.confirmedTripId
+                            } else if (completedJourneyHistory.any { it.id == activity.confirmedTripId }) {
+                                selectedCompletedJourneyId = activity.confirmedTripId
                             }
-                        } else if (confirmedTrips.any { it.id == activity.confirmedTripId }) {
-                            selectedConfirmedTripId = activity.confirmedTripId
-                        } else if (completedJourneyHistory.any { it.id == activity.confirmedTripId }) {
-                            selectedCompletedJourneyId = activity.confirmedTripId
                         }
                     },
                 )
@@ -433,8 +455,9 @@ private fun ConversationDetail(
     conversation: ConversationThread,
     notice: String?,
     onBack: () -> Unit,
-    onSendMessage: (String) -> Boolean,
+    onSendMessage: suspend (String) -> Boolean,
 ) {
+    val commandScope = rememberCoroutineScope()
     var draft by rememberSaveable(conversation.id.value) { mutableStateOf("") }
     val currentUserId = conversation.participants.firstOrNull {
         it.role == uk.rydeapp.ryde.domain.model.JourneyParticipantRole.DRIVER
@@ -487,7 +510,7 @@ private fun ConversationDetail(
                 supportingText = { Text("Public pickup coordination only") },
             )
             Button(
-                onClick = { if (onSendMessage(draft)) draft = "" },
+                onClick = { commandScope.launch { if (onSendMessage(draft)) draft = "" } },
                 enabled = draft.isNotBlank(),
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Send demo message") }
@@ -515,10 +538,11 @@ private fun messageRejectionLabel(result: SendMessageResult.Rejected): String = 
 @Composable
 fun ProfileScreen(
     content: ProfileContent,
-    onSetPersonTrusted: (String, Boolean) -> UpdateTrustedPersonResult,
+    onSetPersonTrusted: suspend (String, Boolean) -> UpdateTrustedPersonResult?,
     onTravelTogetherAgain: (String, String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val commandScope = rememberCoroutineScope()
     DestinationShell(
         headingRes = R.string.profile_heading,
         bodyRes = R.string.profile_body,
@@ -551,7 +575,9 @@ fun ProfileScreen(
                             initials = person.initials,
                             rating = person.rating,
                             isTrusted = person.isTrusted,
-                            onToggleTrust = { onSetPersonTrusted(person.id, !person.isTrusted) },
+                            onToggleTrust = {
+                                commandScope.launch { onSetPersonTrusted(person.id, !person.isTrusted) }
+                            },
                             onRepeat = completedTrip?.takeIf { person.isTrusted }?.let { trip ->
                                 { onTravelTogetherAgain(trip.id, person.id) }
                             },
@@ -1044,7 +1070,7 @@ private fun ConfirmedSharedTripDetail(
     trip: ConfirmedSharedTrip,
     onBack: () -> Unit,
     onMessage: () -> Unit,
-    onNextStatus: (JourneyLifecycleStatus) -> JourneyStatusUpdateResult,
+    onNextStatus: (JourneyLifecycleStatus) -> Unit,
     onComplete: () -> Unit,
     messageNotice: String?,
 ) {
