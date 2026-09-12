@@ -11,6 +11,17 @@ interface AccountSessionRepository {
     val sessionState: StateFlow<AccountSession>
 }
 
+interface AccountAccessRepository {
+    suspend fun register(email: String, password: String, displayName: String): AccountCommandResult
+    suspend fun signIn(email: String, password: String): AccountCommandResult
+    suspend fun signOut(): AccountCommandResult
+    suspend fun updateConnectedProfile(
+        displayName: String,
+        homeArea: String,
+        workArea: String,
+    ): AccountCommandResult
+}
+
 interface ProfileRepository {
     fun getProfileContent(): ProfileContent
     fun getSavedPlaces(): List<SavedPlace>
@@ -80,6 +91,7 @@ interface ObservableRydeRepository {
 interface RydeRepository :
     HomeContentRepository,
     AccountSessionRepository,
+    AccountAccessRepository,
     ProfileRepository,
     RideDiscoveryRepository,
     OfferedJourneyRepository,

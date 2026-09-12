@@ -44,6 +44,9 @@ import uk.rydeapp.ryde.ui.find.FindScreen
 import uk.rydeapp.ryde.ui.home.HomeScreen
 import uk.rydeapp.ryde.ui.offer.OfferScreen
 import uk.rydeapp.ryde.ui.theme.RydeTheme
+import uk.rydeapp.ryde.data.AccountSession
+import uk.rydeapp.ryde.ui.account.ConnectedProfileScreen
+import uk.rydeapp.ryde.ui.account.SignedOutAccountScreen
 
 private enum class RydeDestination(@param:StringRes val labelRes: Int, val iconType: DestinationIconType) {
     HOME(R.string.nav_home, DestinationIconType.HOME),
@@ -69,9 +72,22 @@ fun RydeApp(
 
     when (val state = uiState) {
         RydeAppUiState.Loading -> AppLoading()
-        RydeAppUiState.SignedOut -> AppSignedOut()
+        RydeAppUiState.SignedOut -> if (appMode == AppMode.CONNECTED) {
+            SignedOutAccountScreen(controller::register, controller::signIn)
+        } else {
+            AppSignedOut()
+        }
         is RydeAppUiState.Error -> AppError(state.userMessage, controller::retry)
-        is RydeAppUiState.Ready -> ReadyApp(state, controller, commandScope)
+        is RydeAppUiState.Ready -> if (state.mode == AppMode.CONNECTED) {
+            ConnectedProfileScreen(
+                session = state.session as AccountSession.Authenticated,
+                profile = state.snapshot.profileContent,
+                onSave = controller::updateConnectedProfile,
+                onSignOut = controller::signOut,
+            )
+        } else {
+            ReadyApp(state, controller, commandScope)
+        }
     }
 }
 

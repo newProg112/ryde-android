@@ -18,6 +18,7 @@ class BackendReadinessContractTest {
         val aggregate: RydeRepository = FakeRydeRepository()
         assertTrue(aggregate is HomeContentRepository)
         assertTrue(aggregate is AccountSessionRepository)
+        assertTrue(aggregate is AccountAccessRepository)
         assertTrue(aggregate is ProfileRepository)
         assertTrue(aggregate is RideDiscoveryRepository)
         assertTrue(aggregate is OfferedJourneyRepository)

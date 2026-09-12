@@ -4,6 +4,12 @@ import uk.rydeapp.ryde.domain.model.*
 
 enum class AppMode { LOCAL_DEMO, CONNECTED }
 
+sealed interface AccountCommandResult {
+    data object Success : AccountCommandResult
+    data class InvalidInput(val userMessage: String) : AccountCommandResult
+    data class Failure(val userMessage: String) : AccountCommandResult
+}
+
 sealed interface AccountSession {
     data object Checking : AccountSession
     data object SignedOut : AccountSession

@@ -1,0 +1,11 @@
+{
+  "name": "ryde-firebase-rules-tests",
+  "private": true,
+  "scripts": {
+    "test:rules": "node --test tests/firestore.rules.test.mjs"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "5.0.2",
+    "firebase": "12.19.0"
+  }
+}

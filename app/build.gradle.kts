@@ -3,6 +3,22 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+val requestedRydeMode = providers.gradleProperty("rydeAppMode")
+    .orElse("LOCAL_DEMO")
+    .map { it.uppercase() }
+
+require(requestedRydeMode.get() in setOf("LOCAL_DEMO", "CONNECTED")) {
+    "rydeAppMode must be LOCAL_DEMO or CONNECTED"
+}
+
+val hasGoogleServicesConfig = file("google-services.json").isFile
+if (hasGoogleServicesConfig) {
+    apply(plugin = "com.google.gms.google-services")
+}
+require(requestedRydeMode.get() != "CONNECTED" || hasGoogleServicesConfig) {
+    "CONNECTED debug mode requires the ignored app/google-services.json file"
+}
+
 android {
     namespace = "uk.rydeapp.ryde"
     compileSdk {
@@ -20,7 +36,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            buildConfigField("String", "RYDE_APP_MODE", "\"${requestedRydeMode.get()}\"")
+        }
         release {
+            buildConfigField("String", "RYDE_APP_MODE", "\"LOCAL_DEMO\"")
             optimization {
                 enable = false
             }
@@ -32,6 +52,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -45,6 +66,10 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.kotlinx.coroutines.play.services)
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.auth)
+    implementation(libs.firebase.firestore)
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)

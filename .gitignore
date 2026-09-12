@@ -14,3 +14,10 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Local Firebase Android configuration
+/app/google-services.json
+/node_modules/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log

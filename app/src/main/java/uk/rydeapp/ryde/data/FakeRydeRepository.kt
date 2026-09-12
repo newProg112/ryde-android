@@ -75,6 +75,18 @@ import uk.rydeapp.ryde.domain.model.SendMessageResult
 class FakeRydeRepository(
     jamieSafetyStatus: PersonalSafetyStatus = PersonalSafetyStatus.CLEAR,
 ) : RydeRepository {
+    override suspend fun register(email: String, password: String, displayName: String) =
+        AccountCommandResult.Failure("Account access is available only in connected debug mode.")
+
+    override suspend fun signIn(email: String, password: String) =
+        AccountCommandResult.Failure("Account access is available only in connected debug mode.")
+
+    override suspend fun signOut() =
+        AccountCommandResult.Failure("The fictional local demo remains signed in.")
+
+    override suspend fun updateConnectedProfile(displayName: String, homeArea: String, workArea: String) =
+        AccountCommandResult.Failure("Persistent profiles are available only in connected debug mode.")
+
     private val mutableSessionState = MutableStateFlow<AccountSession>(
         AccountSession.Authenticated(
             accountId = "fictional-sam-demo",

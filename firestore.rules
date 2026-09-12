@@ -1,0 +1,55 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function owns(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    function validDisplayName(value) {
+      return value is string && value.size() > 0 && value.size() <= 60;
+    }
+
+    function validBroadArea(value) {
+      return value is string
+        && value.size() > 0
+        && value.size() <= 60
+        && !value.matches('.*[0-9,].*');
+    }
+
+    match /users/{uid} {
+      allow read, delete: if owns(uid);
+      allow create: if owns(uid)
+        && request.resource.data.keys().hasOnly(['uid', 'displayName'])
+        && request.resource.data.uid == uid
+        && validDisplayName(request.resource.data.displayName);
+      allow update: if owns(uid)
+        && request.resource.data.keys().hasOnly(['uid', 'displayName'])
+        && request.resource.data.uid == uid
+        && request.resource.data.uid == resource.data.uid
+        && validDisplayName(request.resource.data.displayName);
+
+      match /savedPlaces/{placeId} {
+        allow read, delete: if owns(uid);
+        allow create: if owns(uid)
+          && placeId in ['home', 'work']
+          && request.resource.data.keys().hasOnly(['uid', 'label', 'area'])
+          && request.resource.data.uid == uid
+          && request.resource.data.label == (placeId == 'home' ? 'Home' : 'Work')
+          && validBroadArea(request.resource.data.area);
+        allow update: if owns(uid)
+          && placeId in ['home', 'work']
+          && request.resource.data.keys().hasOnly(['uid', 'label', 'area'])
+          && request.resource.data.uid == uid
+          && request.resource.data.uid == resource.data.uid
+          && request.resource.data.label == (placeId == 'home' ? 'Home' : 'Work')
+          && validBroadArea(request.resource.data.area);
+      }
+    }
+
+    // Explicit default deny: Phase 9B grants no access to any other collection.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

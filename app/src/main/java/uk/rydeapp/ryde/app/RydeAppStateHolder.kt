@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import uk.rydeapp.ryde.data.AccountSession
+import uk.rydeapp.ryde.data.AccountCommandResult
 import uk.rydeapp.ryde.data.AppMode
 import uk.rydeapp.ryde.data.AsyncState
 import uk.rydeapp.ryde.data.RydeRepository
@@ -88,6 +89,33 @@ class RydeAppStateHolder(
     suspend fun savePlace(place: SavedPlace) = command { repository.savePlace(place) }
     suspend fun setPersonTrusted(personId: String, trusted: Boolean) =
         command { repository.setPersonTrusted(personId, trusted) }
+
+    suspend fun register(email: String, password: String, displayName: String): AccountCommandResult? =
+        accountCommand { repository.register(email, password, displayName) }
+
+    suspend fun signIn(email: String, password: String): AccountCommandResult? =
+        accountCommand { repository.signIn(email, password) }
+
+    suspend fun signOut(): AccountCommandResult? = accountCommand { repository.signOut() }
+
+    suspend fun updateConnectedProfile(
+        displayName: String,
+        homeArea: String,
+        workArea: String,
+    ): AccountCommandResult? = accountCommand {
+        repository.updateConnectedProfile(displayName, homeArea, workArea)
+    }
+
+    private suspend fun accountCommand(action: suspend () -> AccountCommandResult): AccountCommandResult? {
+        return try {
+            action().also { render(repository.sessionState.value, repository.appState.value) }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Throwable) {
+            mutableUiState.value = RydeAppUiState.Error(SAFE_LOAD_ERROR)
+            null
+        }
+    }
 
     private suspend fun <T> command(action: suspend () -> T): T? {
         return try {
