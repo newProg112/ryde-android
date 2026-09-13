@@ -131,6 +131,11 @@ The first 9C slice adds only these emulator-owned documents:
   driverUid: string          # must equal the referenced journey owner; immutable
   riderUid: string           # authenticated creator; immutable
   status: "PENDING" | "ACCEPTED" | "DECLINED"
+
+/journeyAcceptanceGuards/{journeyId}
+  driverUid: string          # equals the referenced journey owner; immutable
+  acceptanceCount: int       # initially 0; equals capacity minus remaining
+  lastAcceptedRequestId: string | null
 ```
 
 Any authenticated emulator user may read the intentionally small journey document so that
@@ -143,18 +148,30 @@ Acceptance is a Firestore transaction. Its request update is allowed only when t
 write changes `seatsRemaining` from N to N-1 and N was positive. Firestore transaction retries
 plus `getAfter()` rules prevent simultaneous accepts from overbooking. Rules still cannot make
 a client-supplied `driverUid` magically server-authored; instead they compare it to the immutable
-journey owner on every create and keep it immutable. A malicious driver could reduce the seat
-count without accepting a request, because client rules cannot prove that an arbitrary journey
-update corresponds to one unknown request document. This is an availability limitation affecting
-only that driver's own offer, not an ownership, forged-acceptance, or overbooking weakness. A
-trusted backend would be required to prevent that denial of availability completely.
+journey owner on every create and keep it immutable.
+
+Every journey and its private acceptance guard are created atomically. Existing journeys without
+a guard fail closed: client rules cannot create a guard later, create requests against the journey,
+decrement it, or decide its requests. The guard is readable only by its driver, cannot be listed or
+deleted, and is not exposed through the broadly readable journey document.
+
+Acceptance atomically updates the journey, request and guard. Rules require exactly one positive
+seat decrement, exactly one `PENDING -> ACCEPTED` request named by the guard, an incremented guard
+count, and agreement between that count and `seatCapacity - seatsRemaining` before and after the
+write. Each of the three write rules checks the other two documents with `get()` and `getAfter()`.
+This reverse link prevents a driver from reducing availability without accepting the matching
+request; the request's terminal state prevents replay. Declines change only the guarded request.
+The rules cannot establish real-world seat occupancy, prevent colluding accounts, compel a driver
+to accept fairly, repair legacy or privileged-server writes, or keep a pending request available
+after another acceptance consumes the last seat.
 
 State transitions in 9C-1 are deliberately limited:
 
 ```text
-journey:  create OPEN(capacity) -> OPEN(remaining decremented per acceptance)
-request:  create PENDING -> ACCEPTED
-                         -> DECLINED
+journey + guard:  create OPEN(capacity) + count 0
+                  -> OPEN(remaining - 1) + count + 1 per linked acceptance
+request:          create PENDING -> ACCEPTED
+                                 -> DECLINED
 ```
 
 There is no cancellation, reopening, trip lifecycle, private pickup/drop-off, exact/live

@@ -86,7 +86,12 @@ class FirestoreConnectedJourneyStore(private val firestore: FirebaseFirestore) :
     }
 
     override suspend fun create(uid: String, draft: ConnectedJourneyDraft) {
-        firestore.collection(JOURNEYS).document().set(FirestoreJourneyMapper.journeyData(uid, draft)).await()
+        val journeyRef = firestore.collection(JOURNEYS).document()
+        val guardRef = firestore.collection(ACCEPTANCE_GUARDS).document(journeyRef.id)
+        firestore.runBatch { batch ->
+            batch.set(journeyRef, FirestoreJourneyMapper.journeyData(uid, draft))
+            batch.set(guardRef, FirestoreJourneyMapper.initialAcceptanceGuardData(uid))
+        }.await()
     }
 
     override suspend fun requestSeat(uid: String, journeyId: String) {
@@ -111,7 +116,19 @@ class FirestoreConnectedJourneyStore(private val firestore: FirebaseFirestore) :
                 val journey = FirestoreJourneyMapper.journey(request.journeyId, transaction.get(journeyRef).data.orEmpty())
                     ?: error("Journey unavailable")
                 check(journey.driverUid == uid && journey.seatsRemaining > 0)
+                val guardRef = firestore.collection(ACCEPTANCE_GUARDS).document(request.journeyId)
+                val guard = FirestoreJourneyMapper.acceptanceGuard(transaction.get(guardRef).data.orEmpty())
+                    ?: error("Journey acceptance guard unavailable")
+                check(guard.driverUid == uid)
+                check(guard.acceptanceCount == journey.seatCapacity - journey.seatsRemaining)
                 transaction.update(journeyRef, "seatsRemaining", journey.seatsRemaining - 1)
+                transaction.update(
+                    guardRef,
+                    mapOf(
+                        "acceptanceCount" to guard.acceptanceCount + 1,
+                        "lastAcceptedRequestId" to requestId,
+                    ),
+                )
             }
             transaction.update(requestRef, "status", if (accept) "ACCEPTED" else "DECLINED")
         }.await()
@@ -120,5 +137,6 @@ class FirestoreConnectedJourneyStore(private val firestore: FirebaseFirestore) :
     private companion object {
         const val JOURNEYS = "journeys"
         const val REQUESTS = "seatRequests"
+        const val ACCEPTANCE_GUARDS = "journeyAcceptanceGuards"
     }
 }

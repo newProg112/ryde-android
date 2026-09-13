@@ -9,6 +9,35 @@ import org.junit.Test
 
 class ConnectedJourneyFlowTest {
     @Test
+    fun `acceptance guard mapping starts zeroed and rejects inconsistent states`() {
+        val initial = FirestoreJourneyMapper.initialAcceptanceGuardData("driver")
+        assertEquals(
+            ConnectedJourneyAcceptanceGuard("driver", 0, null),
+            FirestoreJourneyMapper.acceptanceGuard(initial),
+        )
+        assertEquals(
+            ConnectedJourneyAcceptanceGuard("driver", 1, "journey-1_rider"),
+            FirestoreJourneyMapper.acceptanceGuard(
+                mapOf(
+                    "driverUid" to "driver",
+                    "acceptanceCount" to 1,
+                    "lastAcceptedRequestId" to "journey-1_rider",
+                ),
+            ),
+        )
+        assertEquals(
+            null,
+            FirestoreJourneyMapper.acceptanceGuard(
+                mapOf(
+                    "driverUid" to "driver",
+                    "acceptanceCount" to 1,
+                    "lastAcceptedRequestId" to null,
+                ),
+            ),
+        )
+    }
+
+    @Test
     fun `offer validation rejects private-looking areas past times and seat limits`() {
         assertTrue(ConnectedJourneyValidator.offer("12 High Street", "Derby", "2099-01-01 10:00", "1") is ValidationResult.Invalid)
         assertTrue(ConnectedJourneyValidator.offer("Nottingham", "Derby", "2000-01-01 10:00", "1") is ValidationResult.Invalid)

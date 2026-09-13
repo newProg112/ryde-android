@@ -7,7 +7,7 @@ import {
   initializeTestEnvironment,
 } from "@firebase/rules-unit-testing";
 import {
-  Timestamp, collection, doc, getDoc, getDocs, query, setDoc, updateDoc, where, writeBatch,
+  Timestamp, collection, deleteDoc, doc, getDoc, getDocs, query, setDoc, updateDoc, where, writeBatch,
 } from "firebase/firestore";
 import { deleteApp, initializeApp } from "firebase/app";
 import {
@@ -57,6 +57,34 @@ const journey = (driverUid, seats = 2) => ({
 const request = (journeyId, driverUid, riderUid, status = "PENDING") => ({
   journeyId, driverUid, riderUid, status,
 });
+const guard = (driverUid, acceptanceCount = 0, lastAcceptedRequestId = null) => ({
+  driverUid, acceptanceCount, lastAcceptedRequestId,
+});
+
+const createJourney = (
+  db,
+  journeyId,
+  driverUid,
+  seats = 2,
+  guardData = guard(driverUid),
+  journeyData = journey(driverUid, seats),
+) => {
+  const batch = writeBatch(db);
+  batch.set(doc(db, `journeys/${journeyId}`), journeyData);
+  batch.set(doc(db, `journeyAcceptanceGuards/${journeyId}`), guardData);
+  return batch.commit();
+};
+
+const acceptRequest = (db, journeyId, requestId, seatsRemaining, acceptanceCount) => {
+  const batch = writeBatch(db);
+  batch.update(doc(db, `journeys/${journeyId}`), { seatsRemaining });
+  batch.update(doc(db, `seatRequests/${requestId}`), { status: "ACCEPTED" });
+  batch.update(doc(db, `journeyAcceptanceGuards/${journeyId}`), {
+    acceptanceCount,
+    lastAcceptedRequestId: requestId,
+  });
+  return batch.commit();
+};
 
 test("Auth emulator supports local email registration, sign-out and sign-in", async () => {
   const email = `phase9b-${Date.now()}@example.test`;
@@ -113,24 +141,42 @@ test("unrecognised collections remain denied", async () => {
   await assertFails(getDoc(doc(db, "messages/message-one")));
 });
 
-test("authenticated driver creates broad journey and authenticated rider discovers it", async () => {
+test("journey and private zeroed acceptance guard must be created atomically", async () => {
   const driver = environment.authenticatedContext("driver").firestore();
   const rider = environment.authenticatedContext("rider").firestore();
+  const stranger = environment.authenticatedContext("stranger").firestore();
   const anonymous = environment.unauthenticatedContext().firestore();
-  await assertSucceeds(setDoc(doc(driver, "journeys/j1"), journey("driver")));
+  await assertFails(setDoc(doc(driver, "journeys/unguarded"), journey("driver")));
+  await assertFails(setDoc(doc(driver, "journeyAcceptanceGuards/orphan"), guard("driver")));
+  await assertSucceeds(createJourney(driver, "j1", "driver"));
   await assertSucceeds(getDoc(doc(rider, "journeys/j1")));
   await assertSucceeds(getDocs(collection(rider, "journeys")));
+  await assertSucceeds(getDoc(doc(driver, "journeyAcceptanceGuards/j1")));
+  await assertFails(getDoc(doc(rider, "journeyAcceptanceGuards/j1")));
+  await assertFails(getDoc(doc(stranger, "journeyAcceptanceGuards/j1")));
+  await assertFails(getDocs(collection(driver, "journeyAcceptanceGuards")));
+  await assertFails(deleteDoc(doc(driver, "journeyAcceptanceGuards/j1")));
   await assertFails(getDocs(collection(anonymous, "journeys")));
-  await assertFails(setDoc(doc(rider, "journeys/forged"), journey("driver")));
-  await assertFails(setDoc(doc(driver, "journeys/private"), { ...journey("driver"), originArea: "12 High Street" }));
-  await assertFails(setDoc(doc(driver, "journeys/too-many"), journey("driver", 9)));
+
+  await assertFails(createJourney(rider, "forged", "driver"));
+  await assertFails(createJourney(
+    driver,
+    "private",
+    "driver",
+    2,
+    guard("driver"),
+    { ...journey("driver"), originArea: "12 High Street" },
+  ));
+  await assertFails(createJourney(driver, "too-many", "driver", 9));
+  await assertFails(createJourney(driver, "wrong-guard-owner", "driver", 2, guard("stranger")));
+  await assertFails(createJourney(driver, "nonzero-guard", "driver", 2, guard("driver", 1, "forged")));
 });
 
 test("requests enforce real participants deterministic ownership and self-request denial", async () => {
   const driver = environment.authenticatedContext("driver").firestore();
   const rider = environment.authenticatedContext("rider").firestore();
   const stranger = environment.authenticatedContext("stranger").firestore();
-  await assertSucceeds(setDoc(doc(driver, "journeys/j1"), journey("driver")));
+  await assertSucceeds(createJourney(driver, "j1", "driver"));
   await assertSucceeds(setDoc(doc(rider, "seatRequests/j1_rider"), request("j1", "driver", "rider")));
   await assertSucceeds(getDoc(doc(driver, "seatRequests/j1_rider")));
   await assertSucceeds(getDoc(doc(rider, "seatRequests/j1_rider")));
@@ -146,7 +192,7 @@ test("requests enforce real participants deterministic ownership and self-reques
 test("only the driver may decide and acceptance requires an atomic one-seat decrement", async () => {
   const driver = environment.authenticatedContext("driver").firestore();
   const rider = environment.authenticatedContext("rider").firestore();
-  await assertSucceeds(setDoc(doc(driver, "journeys/j1"), journey("driver", 2)));
+  await assertSucceeds(createJourney(driver, "j1", "driver", 2));
   await assertSucceeds(setDoc(doc(rider, "seatRequests/j1_rider"), request("j1", "driver", "rider")));
   await assertFails(updateDoc(doc(rider, "seatRequests/j1_rider"), { status: "ACCEPTED" }));
   await assertFails(updateDoc(doc(driver, "seatRequests/j1_rider"), { status: "ACCEPTED" }));
@@ -154,32 +200,163 @@ test("only the driver may decide and acceptance requires an atomic one-seat decr
   const batch = writeBatch(driver);
   batch.update(doc(driver, "journeys/j1"), { seatsRemaining: 1 });
   batch.update(doc(driver, "seatRequests/j1_rider"), { status: "ACCEPTED" });
+  batch.update(doc(driver, "journeyAcceptanceGuards/j1"), {
+    acceptanceCount: 1,
+    lastAcceptedRequestId: "j1_rider",
+  });
   await assertSucceeds(batch.commit());
   assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().seatsRemaining, 1);
+  assert.deepEqual((await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data(), guard("driver", 1, "j1_rider"));
   await assertFails(updateDoc(doc(driver, "seatRequests/j1_rider"), { status: "DECLINED" }));
+  await assertFails(acceptRequest(driver, "j1", "j1_rider", 0, 2));
+  assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().seatsRemaining, 1);
 });
 
-test("decline preserves seats and simultaneous candidates cannot overbook", async () => {
+test("two distinct pending requests can be accepted sequentially", async () => {
   const driver = environment.authenticatedContext("driver").firestore();
   const riderA = environment.authenticatedContext("rider-a").firestore();
   const riderB = environment.authenticatedContext("rider-b").firestore();
-  await assertSucceeds(setDoc(doc(driver, "journeys/j1"), journey("driver", 1)));
-  await assertSucceeds(setDoc(doc(driver, "journeys/j2"), journey("driver", 1)));
+  await assertSucceeds(createJourney(driver, "j1", "driver", 2));
+  await assertSucceeds(setDoc(doc(riderA, "seatRequests/j1_rider-a"), request("j1", "driver", "rider-a")));
+  await assertSucceeds(acceptRequest(driver, "j1", "j1_rider-a", 1, 1));
+  await assertSucceeds(setDoc(doc(riderB, "seatRequests/j1_rider-b"), request("j1", "driver", "rider-b")));
+  await assertSucceeds(acceptRequest(driver, "j1", "j1_rider-b", 0, 2));
+
+  assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().seatsRemaining, 0);
+  assert.deepEqual(
+    (await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data(),
+    guard("driver", 2, "j1_rider-b"),
+  );
+});
+
+test("decline preserves both the seat count and acceptance guard", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  const rider = environment.authenticatedContext("rider").firestore();
+  await assertSucceeds(createJourney(driver, "j1", "driver", 1));
+  await assertSucceeds(setDoc(doc(rider, "seatRequests/j1_rider"), request("j1", "driver", "rider")));
+
+  await assertSucceeds(updateDoc(doc(driver, "seatRequests/j1_rider"), { status: "DECLINED" }));
+
+  assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().seatsRemaining, 1);
+  assert.deepEqual(
+    (await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data(),
+    guard("driver"),
+  );
+});
+
+test("standalone partial forged and multi-request acceptance writes are denied", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  const riderA = environment.authenticatedContext("rider-a").firestore();
+  const riderB = environment.authenticatedContext("rider-b").firestore();
+  await assertSucceeds(createJourney(driver, "j1", "driver", 2));
+  await assertSucceeds(createJourney(driver, "j2", "driver", 1));
   await assertSucceeds(setDoc(doc(riderA, "seatRequests/j1_rider-a"), request("j1", "driver", "rider-a")));
   await assertSucceeds(setDoc(doc(riderB, "seatRequests/j1_rider-b"), request("j1", "driver", "rider-b")));
-  await assertSucceeds(setDoc(doc(riderB, "seatRequests/j2_rider-b"), request("j2", "driver", "rider-b")));
-  await assertSucceeds(updateDoc(doc(driver, "seatRequests/j2_rider-b"), { status: "DECLINED" }));
-  assert.equal((await getDoc(doc(driver, "journeys/j2"))).data().seatsRemaining, 1);
+  await assertSucceeds(setDoc(doc(riderA, "seatRequests/j2_rider-a"), request("j2", "driver", "rider-a")));
 
-  const accepted = writeBatch(driver);
-  accepted.update(doc(driver, "journeys/j1"), { seatsRemaining: 0 });
-  accepted.update(doc(driver, "seatRequests/j1_rider-a"), { status: "ACCEPTED" });
-  await assertSucceeds(accepted.commit());
-  await assertFails(updateDoc(doc(driver, "journeys/j1"), { seatsRemaining: -1 }));
-  const overbook = writeBatch(driver);
-  overbook.update(doc(driver, "journeys/j1"), { seatsRemaining: -1 });
-  overbook.update(doc(driver, "seatRequests/j1_rider-b"), { status: "ACCEPTED" });
-  await assertFails(overbook.commit());
+  await assertFails(updateDoc(doc(driver, "journeys/j1"), { seatsRemaining: 1 }));
+  await assertFails(updateDoc(doc(driver, "journeyAcceptanceGuards/j1"), {
+    acceptanceCount: 1,
+    lastAcceptedRequestId: "j1_rider-a",
+  }));
+
+  const noGuard = writeBatch(driver);
+  noGuard.update(doc(driver, "journeys/j1"), { seatsRemaining: 1 });
+  noGuard.update(doc(driver, "seatRequests/j1_rider-a"), { status: "ACCEPTED" });
+  await assertFails(noGuard.commit());
+
+  const noRequest = writeBatch(driver);
+  noRequest.update(doc(driver, "journeys/j1"), { seatsRemaining: 1 });
+  noRequest.update(doc(driver, "journeyAcceptanceGuards/j1"), {
+    acceptanceCount: 1,
+    lastAcceptedRequestId: "j1_rider-a",
+  });
+  await assertFails(noRequest.commit());
+
+  const noJourney = writeBatch(driver);
+  noJourney.update(doc(driver, "seatRequests/j1_rider-a"), { status: "ACCEPTED" });
+  noJourney.update(doc(driver, "journeyAcceptanceGuards/j1"), {
+    acceptanceCount: 1,
+    lastAcceptedRequestId: "j1_rider-a",
+  });
+  await assertFails(noJourney.commit());
+
+  const foreignRequest = writeBatch(driver);
+  foreignRequest.update(doc(driver, "journeys/j1"), { seatsRemaining: 1 });
+  foreignRequest.update(doc(driver, "seatRequests/j2_rider-a"), { status: "ACCEPTED" });
+  foreignRequest.update(doc(driver, "journeyAcceptanceGuards/j1"), {
+    acceptanceCount: 1,
+    lastAcceptedRequestId: "j2_rider-a",
+  });
+  await assertFails(foreignRequest.commit());
+
+  const twoRequests = writeBatch(driver);
+  twoRequests.update(doc(driver, "journeys/j1"), { seatsRemaining: 1 });
+  twoRequests.update(doc(driver, "seatRequests/j1_rider-a"), { status: "ACCEPTED" });
+  twoRequests.update(doc(driver, "seatRequests/j1_rider-b"), { status: "ACCEPTED" });
+  twoRequests.update(doc(driver, "journeyAcceptanceGuards/j1"), {
+    acceptanceCount: 1,
+    lastAcceptedRequestId: "j1_rider-a",
+  });
+  await assertFails(twoRequests.commit());
+
+  const skippedCount = writeBatch(driver);
+  skippedCount.update(doc(driver, "journeys/j1"), { seatsRemaining: 1 });
+  skippedCount.update(doc(driver, "seatRequests/j1_rider-a"), { status: "ACCEPTED" });
+  skippedCount.update(doc(driver, "journeyAcceptanceGuards/j1"), {
+    acceptanceCount: 2,
+    lastAcceptedRequestId: "j1_rider-a",
+  });
+  await assertFails(skippedCount.commit());
+
+  const extraGuardField = writeBatch(driver);
+  extraGuardField.update(doc(driver, "journeys/j1"), { seatsRemaining: 1 });
+  extraGuardField.update(doc(driver, "seatRequests/j1_rider-a"), { status: "ACCEPTED" });
+  extraGuardField.set(doc(driver, "journeyAcceptanceGuards/j1"), {
+    ...guard("driver", 1, "j1_rider-a"),
+    forged: true,
+  });
+  await assertFails(extraGuardField.commit());
+});
+
+test("existing unguarded journeys fail closed and cannot receive a client guard", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  const newRider = environment.authenticatedContext("other").firestore();
+  await environment.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await setDoc(doc(db, "journeys/legacy"), journey("driver", 1));
+    await setDoc(doc(db, "seatRequests/legacy_rider"), request("legacy", "driver", "rider"));
+  });
+
+  await assertFails(setDoc(doc(newRider, "seatRequests/legacy_other"), request("legacy", "driver", "other")));
+  await assertFails(updateDoc(doc(driver, "journeys/legacy"), { seatsRemaining: 0 }));
+  await assertFails(updateDoc(doc(driver, "seatRequests/legacy_rider"), { status: "ACCEPTED" }));
+  await assertFails(updateDoc(doc(driver, "seatRequests/legacy_rider"), { status: "DECLINED" }));
+  await assertFails(setDoc(doc(driver, "journeyAcceptanceGuards/legacy"), guard("driver")));
+});
+
+test("simultaneous candidates cannot overbook one seat", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  const riderA = environment.authenticatedContext("rider-a").firestore();
+  const riderB = environment.authenticatedContext("rider-b").firestore();
+  await assertSucceeds(createJourney(driver, "j1", "driver", 1));
+  await assertSucceeds(setDoc(doc(riderA, "seatRequests/j1_rider-a"), request("j1", "driver", "rider-a")));
+  await assertSucceeds(setDoc(doc(riderB, "seatRequests/j1_rider-b"), request("j1", "driver", "rider-b")));
+
+  const outcomes = await Promise.allSettled([
+    acceptRequest(driver, "j1", "j1_rider-a", 0, 1),
+    acceptRequest(driver, "j1", "j1_rider-b", 0, 1),
+  ]);
+  assert.equal(outcomes.filter(({ status }) => status === "fulfilled").length, 1);
+  assert.equal(outcomes.filter(({ status }) => status === "rejected").length, 1);
+
+  const requests = await Promise.all([
+    getDoc(doc(driver, "seatRequests/j1_rider-a")),
+    getDoc(doc(driver, "seatRequests/j1_rider-b")),
+  ]);
+  assert.equal(requests.filter((snapshot) => snapshot.data().status === "ACCEPTED").length, 1);
+  assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().seatsRemaining, 0);
+  assert.equal((await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data().acceptanceCount, 1);
 });
 
 test("the expected successful reads return documents", async () => {

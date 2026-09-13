@@ -94,6 +94,12 @@ data class ConnectedSeatRequest(
     val status: ConnectedRequestStatus,
 )
 
+data class ConnectedJourneyAcceptanceGuard(
+    val driverUid: String,
+    val acceptanceCount: Int,
+    val lastAcceptedRequestId: String?,
+)
+
 data class ConnectedJourneySnapshot(
     val journeys: List<ConnectedJourney> = emptyList(),
     val requests: List<ConnectedSeatRequest> = emptyList(),
@@ -151,6 +157,7 @@ object ConnectedJourneyValidator {
 object FirestoreJourneyMapper {
     private val journeyFields = setOf("driverUid", "originArea", "destinationArea", "departureAt", "seatCapacity", "seatsRemaining", "status")
     private val requestFields = setOf("journeyId", "driverUid", "riderUid", "status")
+    private val acceptanceGuardFields = setOf("driverUid", "acceptanceCount", "lastAcceptedRequestId")
 
     fun journeyData(driverUid: String, draft: ConnectedJourneyDraft): Map<String, Any> = mapOf(
         "driverUid" to driverUid,
@@ -167,6 +174,12 @@ object FirestoreJourneyMapper {
         "driverUid" to journey.driverUid,
         "riderUid" to riderUid,
         "status" to ConnectedRequestStatus.PENDING.name,
+    )
+
+    fun initialAcceptanceGuardData(driverUid: String): Map<String, Any?> = mapOf(
+        "driverUid" to driverUid,
+        "acceptanceCount" to 0,
+        "lastAcceptedRequestId" to null,
     )
 
     fun journey(id: String, data: Map<String, Any?>): ConnectedJourney? {
@@ -190,6 +203,21 @@ object FirestoreJourneyMapper {
             data["driverUid"] as? String ?: return null,
             data["riderUid"] as? String ?: return null, status,
         ).takeIf { it.id == "${it.journeyId}_${it.riderUid}" && it.driverUid != it.riderUid }
+    }
+
+    fun acceptanceGuard(data: Map<String, Any?>): ConnectedJourneyAcceptanceGuard? {
+        if (data.keys != acceptanceGuardFields) return null
+        val count = (data["acceptanceCount"] as? Number)?.toInt() ?: return null
+        val lastRequestId = data["lastAcceptedRequestId"] as? String
+        return ConnectedJourneyAcceptanceGuard(
+            driverUid = data["driverUid"] as? String ?: return null,
+            acceptanceCount = count,
+            lastAcceptedRequestId = lastRequestId,
+        ).takeIf {
+            it.driverUid.isNotBlank() && it.acceptanceCount in 0..8 &&
+                ((it.acceptanceCount == 0 && it.lastAcceptedRequestId == null) ||
+                    (it.acceptanceCount > 0 && !it.lastAcceptedRequestId.isNullOrBlank()))
+        }
     }
 
     private fun isValidJourney(journey: ConnectedJourney): Boolean =
