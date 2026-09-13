@@ -16,12 +16,13 @@ import uk.rydeapp.ryde.domain.model.ProfileContent
 import uk.rydeapp.ryde.domain.model.SavePlaceResult
 import uk.rydeapp.ryde.domain.model.SavedPlace
 
-/** Phase 9B repository: Firebase owns identity/profile; later capabilities remain behind 9A contracts. */
+/** Firebase-emulator repository. Connected capabilities are explicit; demo data is never rendered in connected UI. */
 class ConnectedRydeRepository(
     private val auth: ConnectedAuthGateway,
     private val profiles: ConnectedProfileStore,
     private val legacyCapabilities: RydeRepository = FakeRydeRepository(),
     private val firebaseOperationTimeoutMillis: Long = FIREBASE_OPERATION_TIMEOUT_MILLIS,
+    private val journeys: ConnectedJourneyStore? = null,
 ) : RydeRepository by legacyCapabilities {
     private val mutableSessionState = MutableStateFlow<AccountSession>(
         if (auth.currentUserId == null) AccountSession.SignedOut else AccountSession.Checking,
@@ -32,6 +33,8 @@ class ConnectedRydeRepository(
     override val appState: StateFlow<AsyncState<RydeSnapshot>> = mutableAppState.asStateFlow()
 
     private var connectedProfile: ConnectedProfile? = null
+    private val mutableJourneyState = MutableStateFlow(ConnectedJourneySnapshot())
+    val journeyState: StateFlow<ConnectedJourneySnapshot> = mutableJourneyState.asStateFlow()
 
     override suspend fun register(email: String, password: String, displayName: String): AccountCommandResult {
         val input = when (val result = ConnectedAccountValidator.registration(email, password, displayName)) {
@@ -111,6 +114,25 @@ class ConnectedRydeRepository(
         }
     }
 
+    suspend fun createConnectedJourney(
+        originArea: String,
+        destinationArea: String,
+        departure: String,
+        seats: String,
+    ): ConnectedJourneyCommandResult {
+        val draft = when (val validated = ConnectedJourneyValidator.offer(originArea, destinationArea, departure, seats)) {
+            is ValidationResult.Invalid -> return ConnectedJourneyCommandResult.InvalidInput(validated.userMessage)
+            is ValidationResult.Valid -> validated.value
+        }
+        return journeyCommand { store, uid -> store.create(uid, draft) }
+    }
+
+    suspend fun requestConnectedSeat(journeyId: String): ConnectedJourneyCommandResult =
+        journeyCommand { store, uid -> store.requestSeat(uid, journeyId) }
+
+    suspend fun decideConnectedRequest(requestId: String, accept: Boolean): ConnectedJourneyCommandResult =
+        journeyCommand { store, uid -> store.decide(uid, requestId, accept) }
+
     override suspend fun refresh() {
         val uid = auth.currentUserId
         if (uid == null) {
@@ -126,6 +148,7 @@ class ConnectedRydeRepository(
         }
         try {
             val profile = requireNotNull(firebaseCall { profiles.load(uid) })
+            val connectedJourneys = journeys?.let { firebaseCall { it.load(uid) } } ?: ConnectedJourneySnapshot()
             legacyCapabilities.refresh()
             val base = (legacyCapabilities.appState.value as? AsyncState.Data)?.value
                 ?: error("Phase 9A fallback capabilities did not provide a snapshot")
@@ -149,6 +172,7 @@ class ConnectedRydeRepository(
                 ),
             )
             connectedProfile = profile
+            mutableJourneyState.value = connectedJourneys
             mutableSessionState.value = AccountSession.Authenticated(uid, displayName, isFictionalDemo = false)
             mutableAppState.value = AsyncState.Data(connectedSnapshot)
         } catch (cancelled: CancellationException) {
@@ -196,6 +220,22 @@ class ConnectedRydeRepository(
         AccountCommandResult.Failure(SAFE_ACCOUNT_ERROR)
     }
 
+    private suspend fun journeyCommand(
+        action: suspend (ConnectedJourneyStore, String) -> Unit,
+    ): ConnectedJourneyCommandResult {
+        val store = journeys ?: return ConnectedJourneyCommandResult.Failure(SAFE_JOURNEY_ERROR)
+        val uid = auth.currentUserId ?: return ConnectedJourneyCommandResult.Failure(SAFE_JOURNEY_ERROR)
+        return try {
+            firebaseCall { action(store, uid) }
+            refresh()
+            ConnectedJourneyCommandResult.Success
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Throwable) {
+            ConnectedJourneyCommandResult.Failure(SAFE_JOURNEY_ERROR)
+        }
+    }
+
     private suspend fun <T> firebaseCall(action: suspend () -> T): T = try {
         withTimeout(firebaseOperationTimeoutMillis) { action() }
     } catch (_: TimeoutCancellationException) {
@@ -204,6 +244,7 @@ class ConnectedRydeRepository(
 
     private fun clearSignedOut() {
         connectedProfile = null
+        mutableJourneyState.value = ConnectedJourneySnapshot()
         mutableAppState.value = AsyncState.Empty
         mutableSessionState.value = AccountSession.SignedOut
     }
@@ -218,6 +259,7 @@ class ConnectedRydeRepository(
     companion object {
         const val FIREBASE_OPERATION_TIMEOUT_MILLIS = 15_000L
         const val SAFE_ACCOUNT_ERROR = "Ryde couldn't complete that account request. Check the local emulators and try again."
+        const val SAFE_JOURNEY_ERROR = "Ryde couldn't complete that journey request. Refresh and check the local emulators."
     }
 }
 

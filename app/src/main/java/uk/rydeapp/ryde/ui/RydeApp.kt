@@ -45,8 +45,9 @@ import uk.rydeapp.ryde.ui.home.HomeScreen
 import uk.rydeapp.ryde.ui.offer.OfferScreen
 import uk.rydeapp.ryde.ui.theme.RydeTheme
 import uk.rydeapp.ryde.data.AccountSession
-import uk.rydeapp.ryde.ui.account.ConnectedProfileScreen
+import uk.rydeapp.ryde.ui.account.ConnectedJourneyScreen
 import uk.rydeapp.ryde.ui.account.SignedOutAccountScreen
+import uk.rydeapp.ryde.data.connected.ConnectedRydeRepository
 
 private enum class RydeDestination(@param:StringRes val labelRes: Int, val iconType: DestinationIconType) {
     HOME(R.string.nav_home, DestinationIconType.HOME),
@@ -79,11 +80,13 @@ fun RydeApp(
         }
         is RydeAppUiState.Error -> AppError(state.userMessage, controller::retry)
         is RydeAppUiState.Ready -> if (state.mode == AppMode.CONNECTED) {
-            ConnectedProfileScreen(
+            ConnectedJourneyScreen(
                 session = state.session as AccountSession.Authenticated,
                 profile = state.snapshot.profileContent,
+                repository = appRepository as ConnectedRydeRepository,
                 onSave = controller::updateConnectedProfile,
                 onSignOut = controller::signOut,
+                onRefresh = controller::retry,
             )
         } else {
             ReadyApp(state, controller, commandScope)

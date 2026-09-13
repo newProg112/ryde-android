@@ -1,5 +1,10 @@
 package uk.rydeapp.ryde.data.connected
 
+import com.google.firebase.Timestamp
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
 import uk.rydeapp.ryde.domain.model.SavedPlace
 import uk.rydeapp.ryde.domain.model.SavedPlacePolicy
 
@@ -68,6 +73,131 @@ data class ConnectedProfileDraft(
     val homeArea: String,
     val workArea: String,
 )
+
+enum class ConnectedRequestStatus { PENDING, ACCEPTED, DECLINED }
+
+data class ConnectedJourney(
+    val id: String,
+    val driverUid: String,
+    val originArea: String,
+    val destinationArea: String,
+    val departureEpochMillis: Long,
+    val seatCapacity: Int,
+    val seatsRemaining: Int,
+)
+
+data class ConnectedSeatRequest(
+    val id: String,
+    val journeyId: String,
+    val driverUid: String,
+    val riderUid: String,
+    val status: ConnectedRequestStatus,
+)
+
+data class ConnectedJourneySnapshot(
+    val journeys: List<ConnectedJourney> = emptyList(),
+    val requests: List<ConnectedSeatRequest> = emptyList(),
+)
+
+data class ConnectedJourneyDraft(
+    val originArea: String,
+    val destinationArea: String,
+    val departureEpochMillis: Long,
+    val seats: Int,
+)
+
+sealed interface ConnectedJourneyCommandResult {
+    data object Success : ConnectedJourneyCommandResult
+    data class InvalidInput(val userMessage: String) : ConnectedJourneyCommandResult
+    data class Failure(val userMessage: String) : ConnectedJourneyCommandResult
+}
+
+object ConnectedJourneyValidator {
+    private val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+
+    fun offer(
+        originArea: String,
+        destinationArea: String,
+        departure: String,
+        seatsText: String,
+        nowEpochMillis: Long = System.currentTimeMillis(),
+        zoneId: ZoneId = ZoneId.systemDefault(),
+    ): ValidationResult<ConnectedJourneyDraft> {
+        val origin = originArea.trim()
+        val destination = destinationArea.trim()
+        if (!isBroadArea(origin) || !isBroadArea(destination)) {
+            return ValidationResult.Invalid("Use broad town or district names only, without digits or commas.")
+        }
+        if (origin.equals(destination, ignoreCase = true)) {
+            return ValidationResult.Invalid("Origin and destination must be different broad areas.")
+        }
+        val seats = seatsText.toIntOrNull()
+        if (seats !in 1..8) return ValidationResult.Invalid("Enter between 1 and 8 seats.")
+        val departureMillis = try {
+            LocalDateTime.parse(departure.trim(), formatter).atZone(zoneId).toInstant().toEpochMilli()
+        } catch (_: DateTimeParseException) {
+            return ValidationResult.Invalid("Use departure format YYYY-MM-DD HH:mm.")
+        }
+        if (departureMillis <= nowEpochMillis) {
+            return ValidationResult.Invalid("Departure must be in the future.")
+        }
+        return ValidationResult.Valid(ConnectedJourneyDraft(origin, destination, departureMillis, seats!!))
+    }
+
+    fun isBroadArea(value: String): Boolean = value.isNotBlank() && value.length <= 60 &&
+        value.none { it.isDigit() || it == ',' || it.isISOControl() }
+}
+
+object FirestoreJourneyMapper {
+    private val journeyFields = setOf("driverUid", "originArea", "destinationArea", "departureAt", "seatCapacity", "seatsRemaining", "status")
+    private val requestFields = setOf("journeyId", "driverUid", "riderUid", "status")
+
+    fun journeyData(driverUid: String, draft: ConnectedJourneyDraft): Map<String, Any> = mapOf(
+        "driverUid" to driverUid,
+        "originArea" to draft.originArea,
+        "destinationArea" to draft.destinationArea,
+        "departureAt" to Timestamp(draft.departureEpochMillis / 1000, ((draft.departureEpochMillis % 1000) * 1_000_000).toInt()),
+        "seatCapacity" to draft.seats,
+        "seatsRemaining" to draft.seats,
+        "status" to "OPEN",
+    )
+
+    fun requestData(journey: ConnectedJourney, riderUid: String): Map<String, Any> = mapOf(
+        "journeyId" to journey.id,
+        "driverUid" to journey.driverUid,
+        "riderUid" to riderUid,
+        "status" to ConnectedRequestStatus.PENDING.name,
+    )
+
+    fun journey(id: String, data: Map<String, Any?>): ConnectedJourney? {
+        if (data.keys != journeyFields || data["status"] != "OPEN") return null
+        val capacity = (data["seatCapacity"] as? Number)?.toInt() ?: return null
+        val remaining = (data["seatsRemaining"] as? Number)?.toInt() ?: return null
+        return ConnectedJourney(
+            id, data["driverUid"] as? String ?: return null,
+            data["originArea"] as? String ?: return null,
+            data["destinationArea"] as? String ?: return null,
+            (data["departureAt"] as? Timestamp)?.toDate()?.time ?: return null,
+            capacity, remaining,
+        ).takeIf { isValidJourney(it) }
+    }
+
+    fun request(id: String, data: Map<String, Any?>): ConnectedSeatRequest? {
+        if (data.keys != requestFields) return null
+        val status = runCatching { ConnectedRequestStatus.valueOf(data["status"] as? String ?: return null) }.getOrNull() ?: return null
+        return ConnectedSeatRequest(
+            id, data["journeyId"] as? String ?: return null,
+            data["driverUid"] as? String ?: return null,
+            data["riderUid"] as? String ?: return null, status,
+        ).takeIf { it.id == "${it.journeyId}_${it.riderUid}" && it.driverUid != it.riderUid }
+    }
+
+    private fun isValidJourney(journey: ConnectedJourney): Boolean =
+        journey.driverUid.isNotBlank() && ConnectedJourneyValidator.isBroadArea(journey.originArea) &&
+            ConnectedJourneyValidator.isBroadArea(journey.destinationArea) &&
+            !journey.originArea.equals(journey.destinationArea, true) &&
+            journey.seatCapacity in 1..8 && journey.seatsRemaining in 0..journey.seatCapacity
+}
 
 object FirestoreProfileMapper {
     const val UID = "uid"

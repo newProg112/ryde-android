@@ -5,14 +5,13 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreSettings
 import com.google.firebase.firestore.MemoryCacheSettings
 import uk.rydeapp.ryde.BuildConfig
-import uk.rydeapp.ryde.data.RydeRepository
 
 object FirebaseConnectedRepositoryFactory {
     private const val EMULATOR_HOST = "10.0.2.2"
     private const val AUTH_PORT = 9099
     private const val FIRESTORE_PORT = 8080
 
-    val repository: RydeRepository by lazy {
+    val repository: ConnectedRydeRepository by lazy {
         check(BuildConfig.DEBUG) { "Firebase connected mode is emulator-only and unavailable in release builds" }
         val auth = FirebaseAuth.getInstance().apply {
             useEmulator(EMULATOR_HOST, AUTH_PORT)
@@ -26,6 +25,7 @@ object FirebaseConnectedRepositoryFactory {
         ConnectedRydeRepository(
             auth = FirebaseAuthGateway(auth),
             profiles = FirestoreConnectedProfileStore(firestore),
+            journeys = FirestoreConnectedJourneyStore(firestore),
         )
     }
 }

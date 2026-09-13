@@ -17,6 +17,31 @@ service cloud.firestore {
         && !value.matches('.*[0-9,].*');
     }
 
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function journeyPath(journeyId) {
+      return /databases/$(database)/documents/journeys/$(journeyId);
+    }
+
+    function validJourney(data) {
+      return data.keys().hasOnly([
+          'driverUid', 'originArea', 'destinationArea', 'departureAt',
+          'seatCapacity', 'seatsRemaining', 'status'
+        ])
+        && data.driverUid is string
+        && validBroadArea(data.originArea)
+        && validBroadArea(data.destinationArea)
+        && data.originArea != data.destinationArea
+        && data.departureAt is timestamp
+        && data.seatCapacity is int
+        && data.seatCapacity >= 1 && data.seatCapacity <= 8
+        && data.seatsRemaining is int
+        && data.seatsRemaining >= 0 && data.seatsRemaining <= data.seatCapacity
+        && data.status == 'OPEN';
+    }
+
     match /users/{uid} {
       allow read, delete: if owns(uid);
       allow create: if owns(uid)
@@ -47,7 +72,52 @@ service cloud.firestore {
       }
     }
 
-    // Explicit default deny: Phase 9B grants no access to any other collection.
+    match /journeys/{journeyId} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.driverUid == request.auth.uid
+        && validJourney(request.resource.data)
+        && request.resource.data.seatsRemaining == request.resource.data.seatCapacity
+        && request.resource.data.departureAt > request.time;
+      allow update: if signedIn()
+        && resource.data.driverUid == request.auth.uid
+        && validJourney(resource.data)
+        && validJourney(request.resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['seatsRemaining'])
+        && resource.data.seatsRemaining > 0
+        && request.resource.data.seatsRemaining == resource.data.seatsRemaining - 1;
+      allow delete: if false;
+    }
+
+    match /seatRequests/{requestId} {
+      allow read: if signedIn()
+        && (resource.data.riderUid == request.auth.uid || resource.data.driverUid == request.auth.uid);
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['journeyId', 'driverUid', 'riderUid', 'status'])
+        && request.resource.data.journeyId is string
+        && request.resource.data.riderUid == request.auth.uid
+        && request.resource.data.driverUid is string
+        && request.resource.data.driverUid != request.auth.uid
+        && requestId == request.resource.data.journeyId + '_' + request.auth.uid
+        && request.resource.data.status == 'PENDING'
+        && exists(journeyPath(request.resource.data.journeyId))
+        && get(journeyPath(request.resource.data.journeyId)).data.driverUid == request.resource.data.driverUid
+        && get(journeyPath(request.resource.data.journeyId)).data.status == 'OPEN'
+        && get(journeyPath(request.resource.data.journeyId)).data.seatsRemaining > 0;
+      allow update: if signedIn()
+        && resource.data.driverUid == request.auth.uid
+        && get(journeyPath(resource.data.journeyId)).data.driverUid == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+        && resource.data.status == 'PENDING'
+        && request.resource.data.status in ['ACCEPTED', 'DECLINED']
+        && (request.resource.data.status == 'DECLINED'
+          || (get(journeyPath(resource.data.journeyId)).data.seatsRemaining > 0
+            && getAfter(journeyPath(resource.data.journeyId)).data.seatsRemaining
+              == get(journeyPath(resource.data.journeyId)).data.seatsRemaining - 1));
+      allow delete: if false;
+    }
+
+    // Explicit default deny: all unmigrated capabilities remain inaccessible.
     match /{document=**} {
       allow read, write: if false;
     }

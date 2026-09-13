@@ -1,11 +1,11 @@
 # Backend migration boundary
 
-## Phase 9B architecture and schema
+## Phase 9C-1 architecture and schema
 
 `LOCAL_DEMO` remains Firebase-free and permanently available. In `CONNECTED`, Firebase Auth
-owns the session and Firestore owns only the profile slice. Firebase types stay behind
-`ConnectedAuthGateway` and `ConnectedProfileStore`; the connected Phase 9B UI does not expose
-capabilities awaiting Phase 9C. Reads use the Firestore server source and an in-memory cache.
+owns the session and Firestore owns the profile plus the narrow 9C-1 journey/request slice.
+Firebase types stay behind connected gateways/stores; the connected UI does not expose
+unmigrated capabilities. Reads use the Firestore server source and an in-memory cache.
 Failures become safe messages, cancellation is rethrown, and sign-out clears session data.
 Firebase calls have a 15-second boundary timeout. A background refresh keeps an existing
 Ready profile visible; initial load failures transition to the safe error state rather than
@@ -68,9 +68,9 @@ checks `BuildConfig.DEBUG`.
 
 ## Deployment status
 
-Nothing in Phase 9B has been deployed. The commands above create only disposable emulator
+Nothing in Phase 9C-1 has been deployed. The commands above create only disposable emulator
 users/documents and load rules locally. Production Firestore retains its existing deny-all
-rules. Phase 9C still needs discovery, journeys, offers, requests, Circles and trip lifecycle;
+rules. Later Phase 9C slices still need Circles and trip lifecycle;
 messaging, notifications, maps/GPS, payments, Functions, Storage and other excluded services
 also remain out of this slice.
 
@@ -99,8 +99,9 @@ backend-to-domain conversion.
 
 ## Migration sequence
 
-- **9B (this slice):** Firebase-emulator session/Auth, profile and saved places.
-- **9C:** migrate discovery, offers, seat requests, Circles and trip lifecycle while the
+- **9B:** Firebase-emulator session/Auth, profile and saved places.
+- **9C-1 (this slice):** broad-area discovery, offers and one-seat request decisions.
+- **Later 9C:** migrate Circles and trip lifecycle while the
   local fake remains available for demos and tests.
 - **9D:** replace conversation/activity snapshots with realtime messaging and coordination
   streams.
@@ -110,3 +111,72 @@ participant access and journey lifecycle transitions remain Compose-, Context- a
 Firebase-free domain policies. Connected phases must enforce the same invariants with
 Firebase Security Rules and trusted server operations. UI checks are guidance only; they
 must never become authoritative authorization or integrity controls.
+
+### 9C-1 two-account journey slice
+
+The first 9C slice adds only these emulator-owned documents:
+
+```text
+/journeys/{journeyId}
+  driverUid: string          # authenticated creator; immutable
+  originArea: string         # broad area, 1..60 chars, no digit or comma
+  destinationArea: string    # broad area, 1..60 chars, no digit or comma
+  departureAt: timestamp
+  seatCapacity: int          # 1..8; immutable
+  seatsRemaining: int        # initially capacity; 0..capacity
+  status: "OPEN"             # immutable in this slice
+
+/seatRequests/{journeyId}_{riderUid}
+  journeyId: string          # immutable
+  driverUid: string          # must equal the referenced journey owner; immutable
+  riderUid: string           # authenticated creator; immutable
+  status: "PENDING" | "ACCEPTED" | "DECLINED"
+```
+
+Any authenticated emulator user may read the intentionally small journey document so that
+offers can be discovered. Only the driver may create their journey or change its remaining
+seat count. A request can be read only by its rider or the referenced driver. Rules require
+the deterministic request ID, derive/verify both participants against Auth and the referenced
+journey, reject self-requests, and permit only `PENDING -> ACCEPTED|DECLINED` by the driver.
+
+Acceptance is a Firestore transaction. Its request update is allowed only when the same atomic
+write changes `seatsRemaining` from N to N-1 and N was positive. Firestore transaction retries
+plus `getAfter()` rules prevent simultaneous accepts from overbooking. Rules still cannot make
+a client-supplied `driverUid` magically server-authored; instead they compare it to the immutable
+journey owner on every create and keep it immutable. A malicious driver could reduce the seat
+count without accepting a request, because client rules cannot prove that an arbitrary journey
+update corresponds to one unknown request document. This is an availability limitation affecting
+only that driver's own offer, not an ownership, forged-acceptance, or overbooking weakness. A
+trusted backend would be required to prevent that denial of availability completely.
+
+State transitions in 9C-1 are deliberately limited:
+
+```text
+journey:  create OPEN(capacity) -> OPEN(remaining decremented per acceptance)
+request:  create PENDING -> ACCEPTED
+                         -> DECLINED
+```
+
+There is no cancellation, reopening, trip lifecycle, private pickup/drop-off, exact/live
+location, pricing/payment, messaging, notification, Circle, trust, rating, Function or Storage
+data in connected mode.
+
+## Manual two-emulator test
+
+1. Start disposable emulators with
+   `firebase emulators:start --only auth,firestore --project ryde-79893`.
+2. Install the explicit connected debug build on two Android emulators with
+   `.\gradlew.bat installDebug -PrydeAppMode=CONNECTED` (select each emulator as needed).
+3. On emulator A create/sign into a driver account, create an offer using town/district areas,
+   a future `YYYY-MM-DD HH:mm` departure, and 1..8 seats.
+4. On emulator B create/sign into a different rider account, tap **Refresh**, find the offer,
+   and request one seat. The driver's own offer is never requestable.
+5. On A tap **Refresh**, then accept or decline the pending request. On B tap **Refresh** and
+   confirm the same final status. Force-stop/relaunch both apps and refresh to confirm persistence.
+6. For the acceptance path, repeat with a one-seat offer and two rider accounts; only one pending
+   request can be accepted and the other acceptance must fail without a negative seat count.
+
+Remaining 9C work includes offer/request cancellation policy, journey and confirmed-trip
+lifecycle, richer discovery/query design, Circles, and any trusted backend operation needed for
+stronger multi-document invariants. None of those capabilities are silently delegated to the
+fictional local-demo repository in connected mode.

@@ -6,7 +6,9 @@ import {
   assertSucceeds,
   initializeTestEnvironment,
 } from "@firebase/rules-unit-testing";
-import { doc, getDoc, setDoc, updateDoc } from "firebase/firestore";
+import {
+  Timestamp, collection, doc, getDoc, getDocs, query, setDoc, updateDoc, where, writeBatch,
+} from "firebase/firestore";
 import { deleteApp, initializeApp } from "firebase/app";
 import {
   connectAuthEmulator,
@@ -43,6 +45,18 @@ after(async () => {
 
 const profile = (uid, displayName = "Alex") => ({ uid, displayName });
 const place = (uid, label, area) => ({ uid, label, area });
+const journey = (driverUid, seats = 2) => ({
+  driverUid,
+  originArea: "Mansfield",
+  destinationArea: "Nottingham",
+  departureAt: Timestamp.fromMillis(Date.now() + 86_400_000),
+  seatCapacity: seats,
+  seatsRemaining: seats,
+  status: "OPEN",
+});
+const request = (journeyId, driverUid, riderUid, status = "PENDING") => ({
+  journeyId, driverUid, riderUid, status,
+});
 
 test("Auth emulator supports local email registration, sign-out and sign-in", async () => {
   const email = `phase9b-${Date.now()}@example.test`;
@@ -95,8 +109,77 @@ test("identity mutation, extra fields, private-looking areas and extra place IDs
 
 test("unrecognised collections remain denied", async () => {
   const db = environment.authenticatedContext("alex").firestore();
-  await assertFails(setDoc(doc(db, "journeys/journey-one"), { ownerUid: "alex" }));
-  await assertFails(getDoc(doc(db, "journeys/journey-one")));
+  await assertFails(setDoc(doc(db, "messages/message-one"), { ownerUid: "alex" }));
+  await assertFails(getDoc(doc(db, "messages/message-one")));
+});
+
+test("authenticated driver creates broad journey and authenticated rider discovers it", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  const rider = environment.authenticatedContext("rider").firestore();
+  const anonymous = environment.unauthenticatedContext().firestore();
+  await assertSucceeds(setDoc(doc(driver, "journeys/j1"), journey("driver")));
+  await assertSucceeds(getDoc(doc(rider, "journeys/j1")));
+  await assertSucceeds(getDocs(collection(rider, "journeys")));
+  await assertFails(getDocs(collection(anonymous, "journeys")));
+  await assertFails(setDoc(doc(rider, "journeys/forged"), journey("driver")));
+  await assertFails(setDoc(doc(driver, "journeys/private"), { ...journey("driver"), originArea: "12 High Street" }));
+  await assertFails(setDoc(doc(driver, "journeys/too-many"), journey("driver", 9)));
+});
+
+test("requests enforce real participants deterministic ownership and self-request denial", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  const rider = environment.authenticatedContext("rider").firestore();
+  const stranger = environment.authenticatedContext("stranger").firestore();
+  await assertSucceeds(setDoc(doc(driver, "journeys/j1"), journey("driver")));
+  await assertSucceeds(setDoc(doc(rider, "seatRequests/j1_rider"), request("j1", "driver", "rider")));
+  await assertSucceeds(getDoc(doc(driver, "seatRequests/j1_rider")));
+  await assertSucceeds(getDoc(doc(rider, "seatRequests/j1_rider")));
+  await assertSucceeds(getDocs(query(collection(driver, "seatRequests"), where("driverUid", "==", "driver"))));
+  await assertSucceeds(getDocs(query(collection(rider, "seatRequests"), where("riderUid", "==", "rider"))));
+  await assertFails(getDocs(collection(stranger, "seatRequests")));
+  await assertFails(getDoc(doc(stranger, "seatRequests/j1_rider")));
+  await assertFails(setDoc(doc(rider, "seatRequests/random"), request("j1", "driver", "rider")));
+  await assertFails(setDoc(doc(rider, "seatRequests/j1_rider"), request("j1", "stranger", "rider")));
+  await assertFails(setDoc(doc(driver, "seatRequests/j1_driver"), request("j1", "driver", "driver")));
+});
+
+test("only the driver may decide and acceptance requires an atomic one-seat decrement", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  const rider = environment.authenticatedContext("rider").firestore();
+  await assertSucceeds(setDoc(doc(driver, "journeys/j1"), journey("driver", 2)));
+  await assertSucceeds(setDoc(doc(rider, "seatRequests/j1_rider"), request("j1", "driver", "rider")));
+  await assertFails(updateDoc(doc(rider, "seatRequests/j1_rider"), { status: "ACCEPTED" }));
+  await assertFails(updateDoc(doc(driver, "seatRequests/j1_rider"), { status: "ACCEPTED" }));
+
+  const batch = writeBatch(driver);
+  batch.update(doc(driver, "journeys/j1"), { seatsRemaining: 1 });
+  batch.update(doc(driver, "seatRequests/j1_rider"), { status: "ACCEPTED" });
+  await assertSucceeds(batch.commit());
+  assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().seatsRemaining, 1);
+  await assertFails(updateDoc(doc(driver, "seatRequests/j1_rider"), { status: "DECLINED" }));
+});
+
+test("decline preserves seats and simultaneous candidates cannot overbook", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  const riderA = environment.authenticatedContext("rider-a").firestore();
+  const riderB = environment.authenticatedContext("rider-b").firestore();
+  await assertSucceeds(setDoc(doc(driver, "journeys/j1"), journey("driver", 1)));
+  await assertSucceeds(setDoc(doc(driver, "journeys/j2"), journey("driver", 1)));
+  await assertSucceeds(setDoc(doc(riderA, "seatRequests/j1_rider-a"), request("j1", "driver", "rider-a")));
+  await assertSucceeds(setDoc(doc(riderB, "seatRequests/j1_rider-b"), request("j1", "driver", "rider-b")));
+  await assertSucceeds(setDoc(doc(riderB, "seatRequests/j2_rider-b"), request("j2", "driver", "rider-b")));
+  await assertSucceeds(updateDoc(doc(driver, "seatRequests/j2_rider-b"), { status: "DECLINED" }));
+  assert.equal((await getDoc(doc(driver, "journeys/j2"))).data().seatsRemaining, 1);
+
+  const accepted = writeBatch(driver);
+  accepted.update(doc(driver, "journeys/j1"), { seatsRemaining: 0 });
+  accepted.update(doc(driver, "seatRequests/j1_rider-a"), { status: "ACCEPTED" });
+  await assertSucceeds(accepted.commit());
+  await assertFails(updateDoc(doc(driver, "journeys/j1"), { seatsRemaining: -1 }));
+  const overbook = writeBatch(driver);
+  overbook.update(doc(driver, "journeys/j1"), { seatsRemaining: -1 });
+  overbook.update(doc(driver, "seatRequests/j1_rider-b"), { status: "ACCEPTED" });
+  await assertFails(overbook.commit());
 });
 
 test("the expected successful reads return documents", async () => {

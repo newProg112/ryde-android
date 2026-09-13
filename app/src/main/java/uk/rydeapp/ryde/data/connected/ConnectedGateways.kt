@@ -19,6 +19,13 @@ interface ConnectedProfileStore {
     suspend fun save(uid: String, draft: ConnectedProfileDraft)
 }
 
+interface ConnectedJourneyStore {
+    suspend fun load(uid: String): ConnectedJourneySnapshot
+    suspend fun create(uid: String, draft: ConnectedJourneyDraft)
+    suspend fun requestSeat(uid: String, journeyId: String)
+    suspend fun decide(uid: String, requestId: String, accept: Boolean)
+}
+
 class FirebaseAuthGateway(private val auth: FirebaseAuth) : ConnectedAuthGateway {
     override val currentUserId: String? get() = auth.currentUser?.uid
 
@@ -62,5 +69,56 @@ class FirestoreConnectedProfileStore(private val firestore: FirebaseFirestore) :
     private companion object {
         const val USERS = "users"
         const val SAVED_PLACES = "savedPlaces"
+    }
+}
+
+class FirestoreConnectedJourneyStore(private val firestore: FirebaseFirestore) : ConnectedJourneyStore {
+    override suspend fun load(uid: String): ConnectedJourneySnapshot {
+        val journeys = firestore.collection(JOURNEYS).get(Source.SERVER).await().documents
+            .mapNotNull { FirestoreJourneyMapper.journey(it.id, it.data.orEmpty()) }
+            .sortedBy { it.departureEpochMillis }
+        val asDriver = firestore.collection(REQUESTS).whereEqualTo("driverUid", uid).get(Source.SERVER).await()
+        val asRider = firestore.collection(REQUESTS).whereEqualTo("riderUid", uid).get(Source.SERVER).await()
+        val requests = (asDriver.documents + asRider.documents)
+            .distinctBy { it.id }
+            .mapNotNull { FirestoreJourneyMapper.request(it.id, it.data.orEmpty()) }
+        return ConnectedJourneySnapshot(journeys, requests)
+    }
+
+    override suspend fun create(uid: String, draft: ConnectedJourneyDraft) {
+        firestore.collection(JOURNEYS).document().set(FirestoreJourneyMapper.journeyData(uid, draft)).await()
+    }
+
+    override suspend fun requestSeat(uid: String, journeyId: String) {
+        val journeyRef = firestore.collection(JOURNEYS).document(journeyId)
+        val requestRef = firestore.collection(REQUESTS).document("${journeyId}_$uid")
+        firestore.runTransaction { transaction ->
+            val journey = FirestoreJourneyMapper.journey(journeyId, transaction.get(journeyRef).data.orEmpty())
+                ?: error("Journey unavailable")
+            check(journey.driverUid != uid && journey.seatsRemaining > 0)
+            transaction.set(requestRef, FirestoreJourneyMapper.requestData(journey, uid))
+        }.await()
+    }
+
+    override suspend fun decide(uid: String, requestId: String, accept: Boolean) {
+        val requestRef = firestore.collection(REQUESTS).document(requestId)
+        firestore.runTransaction { transaction ->
+            val request = FirestoreJourneyMapper.request(requestId, transaction.get(requestRef).data.orEmpty())
+                ?: error("Request unavailable")
+            check(request.driverUid == uid && request.status == ConnectedRequestStatus.PENDING)
+            if (accept) {
+                val journeyRef = firestore.collection(JOURNEYS).document(request.journeyId)
+                val journey = FirestoreJourneyMapper.journey(request.journeyId, transaction.get(journeyRef).data.orEmpty())
+                    ?: error("Journey unavailable")
+                check(journey.driverUid == uid && journey.seatsRemaining > 0)
+                transaction.update(journeyRef, "seatsRemaining", journey.seatsRemaining - 1)
+            }
+            transaction.update(requestRef, "status", if (accept) "ACCEPTED" else "DECLINED")
+        }.await()
+    }
+
+    private companion object {
+        const val JOURNEYS = "journeys"
+        const val REQUESTS = "seatRequests"
     }
 }

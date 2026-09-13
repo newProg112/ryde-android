@@ -14,6 +14,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
@@ -28,6 +29,12 @@ import kotlinx.coroutines.launch
 import uk.rydeapp.ryde.data.AccountCommandResult
 import uk.rydeapp.ryde.data.AccountSession
 import uk.rydeapp.ryde.domain.model.ProfileContent
+import uk.rydeapp.ryde.data.connected.ConnectedJourneyCommandResult
+import uk.rydeapp.ryde.data.connected.ConnectedRequestStatus
+import uk.rydeapp.ryde.data.connected.ConnectedRydeRepository
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun SignedOutAccountScreen(
@@ -176,6 +183,124 @@ fun ConnectedProfileScreen(
         }
     }
 }
+
+@Composable
+fun ConnectedJourneyScreen(
+    session: AccountSession.Authenticated,
+    profile: ProfileContent,
+    repository: ConnectedRydeRepository,
+    onSave: suspend (String, String, String) -> AccountCommandResult?,
+    onSignOut: suspend () -> AccountCommandResult?,
+    onRefresh: () -> Unit,
+) {
+    val snapshot by repository.journeyState.collectAsState()
+    val initialHome = profile.savedPlaces.firstOrNull { it.label == "Home" }?.area.orEmpty()
+    val initialWork = profile.savedPlaces.firstOrNull { it.label == "Work" }?.area.orEmpty()
+    var displayName by rememberSaveable(session.accountId, session.displayName) { mutableStateOf(session.displayName) }
+    var homeArea by rememberSaveable(session.accountId, initialHome) { mutableStateOf(initialHome) }
+    var workArea by rememberSaveable(session.accountId, initialWork) { mutableStateOf(initialWork) }
+    var origin by rememberSaveable { mutableStateOf("") }
+    var destination by rememberSaveable { mutableStateOf("") }
+    var departure by rememberSaveable { mutableStateOf("") }
+    var seats by rememberSaveable { mutableStateOf("1") }
+    var message by rememberSaveable { mutableStateOf<String?>(null) }
+    var busy by rememberSaveable { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val mine = snapshot.journeys.filter { it.driverUid == session.accountId }
+    val requestByJourney = snapshot.requests.filter { it.riderUid == session.accountId }.associateBy { it.journeyId }
+    val discoverable = snapshot.journeys.filter {
+        it.driverUid != session.accountId && it.departureEpochMillis > System.currentTimeMillis()
+    }
+    val incoming = snapshot.requests.filter { it.driverUid == session.accountId }
+
+    fun runCommand(action: suspend () -> Any?) {
+        busy = true
+        message = null
+        scope.launch {
+            try {
+                message = when (val result = action()) {
+                    AccountCommandResult.Success, ConnectedJourneyCommandResult.Success -> "Saved to the local emulators."
+                    is AccountCommandResult.InvalidInput -> result.userMessage
+                    is AccountCommandResult.Failure -> result.userMessage
+                    is ConnectedJourneyCommandResult.InvalidInput -> result.userMessage
+                    is ConnectedJourneyCommandResult.Failure -> result.userMessage
+                    else -> "Refreshed from the local emulators."
+                }
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    Column(
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("Ryde journey lab", style = MaterialTheme.typography.headlineSmall)
+        Text("EMULATOR-ONLY · disposable Auth and Firestore data", color = MaterialTheme.colorScheme.primary)
+        Text("Signed in as ${session.displayName}. Connected mode never shows fictional people, ratings, trust, pricing or Circles.")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(enabled = !busy, onClick = { onRefresh(); message = "Refreshing from the local emulators…" }) { Text("Refresh") }
+            OutlinedButton(enabled = !busy, onClick = { runCommand { onSignOut() } }) { Text("Sign out") }
+        }
+
+        Text("Profile", style = MaterialTheme.typography.titleLarge)
+        OutlinedTextField(displayName, { displayName = it }, label = { Text("Display name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(homeArea, { homeArea = it }, label = { Text("Home broad area") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(workArea, { workArea = it }, label = { Text("Work broad area") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        Text("Never enter a street address, postcode, exact location or live location.", style = MaterialTheme.typography.bodySmall)
+        Button(enabled = !busy, onClick = { runCommand { onSave(displayName, homeArea, workArea) } }, modifier = Modifier.fillMaxWidth()) { Text("Save profile") }
+
+        Text("Offer a journey", style = MaterialTheme.typography.titleLarge)
+        OutlinedTextField(origin, { origin = it }, label = { Text("Origin broad area") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(destination, { destination = it }, label = { Text("Destination broad area") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(departure, { departure = it }, label = { Text("Departure (YYYY-MM-DD HH:mm)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(seats, { seats = it }, label = { Text("Seats (1–8)") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
+        Button(enabled = !busy, onClick = { runCommand { repository.createConnectedJourney(origin, destination, departure, seats) } }, modifier = Modifier.fillMaxWidth()) { Text("Create emulator offer") }
+
+        Text("Your offers", style = MaterialTheme.typography.titleLarge)
+        if (mine.isEmpty()) Text("No connected offers yet.")
+        mine.forEach { journey ->
+            Text("${journey.originArea} → ${journey.destinationArea} · ${formatDeparture(journey.departureEpochMillis)} · ${journey.seatsRemaining}/${journey.seatCapacity} seats")
+        }
+
+        Text("Discover offers", style = MaterialTheme.typography.titleLarge)
+        if (discoverable.isEmpty()) Text("No offers from other emulator accounts. Tap Refresh after the driver creates one.")
+        discoverable.forEach { journey ->
+            val request = requestByJourney[journey.id]
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("${journey.originArea} → ${journey.destinationArea}", style = MaterialTheme.typography.titleMedium)
+                Text("${formatDeparture(journey.departureEpochMillis)} · ${journey.seatsRemaining} seats remaining")
+                if (request == null && journey.seatsRemaining > 0) {
+                    Button(enabled = !busy, onClick = { runCommand { repository.requestConnectedSeat(journey.id) } }) { Text("Request one seat") }
+                } else {
+                    Text(request?.let { "Your request: ${it.status.name}" } ?: "No seats available")
+                }
+            }
+        }
+
+        Text("Incoming requests", style = MaterialTheme.typography.titleLarge)
+        if (incoming.isEmpty()) Text("No requests for your offers. Tap Refresh after the rider requests.")
+        incoming.forEach { request ->
+            val journey = snapshot.journeys.firstOrNull { it.id == request.journeyId }
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("${journey?.originArea ?: "Journey"} → ${journey?.destinationArea ?: request.journeyId}")
+                Text("Request status: ${request.status.name}")
+                if (request.status == ConnectedRequestStatus.PENDING) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(enabled = !busy, onClick = { runCommand { repository.decideConnectedRequest(request.id, true) } }) { Text("Accept") }
+                        OutlinedButton(enabled = !busy, onClick = { runCommand { repository.decideConnectedRequest(request.id, false) } }) { Text("Decline") }
+                    }
+                }
+            }
+        }
+        message?.let { Text(it, color = if (it.contains("couldn't") || it.startsWith("Use") || it.startsWith("Enter")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) }
+        Text("Unavailable here: payments, GPS/maps, messaging, notifications, Circles, trust/ratings and journey lifecycle.", style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+private fun formatDeparture(epochMillis: Long): String =
+    SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.UK).format(Date(epochMillis))
 
 private fun AccountCommandResult?.userMessageOrNull(): String? = when (this) {
     AccountCommandResult.Success -> null
