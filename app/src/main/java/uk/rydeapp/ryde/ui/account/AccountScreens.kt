@@ -1,17 +1,22 @@
 package uk.rydeapp.ryde.ui.account
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.PrimaryScrollableTabRow
+import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -21,6 +26,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.foundation.text.KeyboardOptions
@@ -184,6 +190,20 @@ fun ConnectedProfileScreen(
     }
 }
 
+internal enum class ConnectedJourneySection(val label: String) {
+    PROFILE("Profile"),
+    OFFER("Offer a journey"),
+    DISCOVER("Discover offers"),
+    YOUR_OFFERS("Your offers"),
+    INCOMING("Incoming requests"),
+}
+
+internal fun connectedSeatAvailabilityLabel(seatsRemaining: Int, seatCapacity: Int): String =
+    "$seatsRemaining/$seatCapacity seats remaining"
+
+internal fun connectedRequestStatusLabel(status: ConnectedRequestStatus): String =
+    "Status: ${status.name}"
+
 @Composable
 fun ConnectedJourneyScreen(
     session: AccountSession.Authenticated,
@@ -203,6 +223,7 @@ fun ConnectedJourneyScreen(
     var destination by rememberSaveable { mutableStateOf("") }
     var departure by rememberSaveable { mutableStateOf("") }
     var seats by rememberSaveable { mutableStateOf("1") }
+    var selectedSection by rememberSaveable { mutableStateOf(ConnectedJourneySection.PROFILE) }
     var message by rememberSaveable { mutableStateOf<String?>(null) }
     var busy by rememberSaveable { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -232,71 +253,205 @@ fun ConnectedJourneyScreen(
         }
     }
 
-    Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text("Ryde journey lab", style = MaterialTheme.typography.headlineSmall)
-        Text("EMULATOR-ONLY · disposable Auth and Firestore data", color = MaterialTheme.colorScheme.primary)
-        Text("Signed in as ${session.displayName}. Connected mode never shows fictional people, ratings, trust, pricing or Circles.")
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(enabled = !busy, onClick = { onRefresh(); message = "Refreshing from the local emulators…" }) { Text("Refresh") }
-            OutlinedButton(enabled = !busy, onClick = { runCommand { onSignOut() } }) { Text("Sign out") }
-        }
-
-        Text("Profile", style = MaterialTheme.typography.titleLarge)
-        OutlinedTextField(displayName, { displayName = it }, label = { Text("Display name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(homeArea, { homeArea = it }, label = { Text("Home broad area") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(workArea, { workArea = it }, label = { Text("Work broad area") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        Text("Never enter a street address, postcode, exact location or live location.", style = MaterialTheme.typography.bodySmall)
-        Button(enabled = !busy, onClick = { runCommand { onSave(displayName, homeArea, workArea) } }, modifier = Modifier.fillMaxWidth()) { Text("Save profile") }
-
-        Text("Offer a journey", style = MaterialTheme.typography.titleLarge)
-        OutlinedTextField(origin, { origin = it }, label = { Text("Origin broad area") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(destination, { destination = it }, label = { Text("Destination broad area") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(departure, { departure = it }, label = { Text("Departure (YYYY-MM-DD HH:mm)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(seats, { seats = it }, label = { Text("Seats (1–8)") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
-        Button(enabled = !busy, onClick = { runCommand { repository.createConnectedJourney(origin, destination, departure, seats) } }, modifier = Modifier.fillMaxWidth()) { Text("Create emulator offer") }
-
-        Text("Your offers", style = MaterialTheme.typography.titleLarge)
-        if (mine.isEmpty()) Text("No connected offers yet.")
-        mine.forEach { journey ->
-            Text("${journey.originArea} → ${journey.destinationArea} · ${formatDeparture(journey.departureEpochMillis)} · ${journey.seatsRemaining}/${journey.seatCapacity} seats")
-        }
-
-        Text("Discover offers", style = MaterialTheme.typography.titleLarge)
-        if (discoverable.isEmpty()) Text("No offers from other emulator accounts. Tap Refresh after the driver creates one.")
-        discoverable.forEach { journey ->
-            val request = requestByJourney[journey.id]
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("${journey.originArea} → ${journey.destinationArea}", style = MaterialTheme.typography.titleMedium)
-                Text("${formatDeparture(journey.departureEpochMillis)} · ${journey.seatsRemaining} seats remaining")
-                if (request == null && journey.seatsRemaining > 0) {
-                    Button(enabled = !busy, onClick = { runCommand { repository.requestConnectedSeat(journey.id) } }) { Text("Request one seat") }
-                } else {
-                    Text(request?.let { "Your request: ${it.status.name}" } ?: "No seats available")
-                }
+    Column(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .padding(horizontal = 20.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("Ryde journey lab", style = MaterialTheme.typography.headlineSmall)
+            Text("EMULATOR-ONLY · disposable Auth and Firestore data", color = MaterialTheme.colorScheme.primary)
+            Text("Signed in as ${session.displayName}. Connected mode never shows fictional people, ratings, trust, pricing or Circles.")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    enabled = !busy,
+                    onClick = {
+                        onRefresh()
+                        message = "Refreshing from the local emulators…"
+                    },
+                ) { Text("Refresh") }
+                OutlinedButton(enabled = !busy, onClick = { runCommand { onSignOut() } }) { Text("Sign out") }
+            }
+            message?.let {
+                Text(
+                    it,
+                    color = if (it.contains("couldn't") || it.startsWith("Use") || it.startsWith("Enter")) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    },
+                )
             }
         }
 
-        Text("Incoming requests", style = MaterialTheme.typography.titleLarge)
-        if (incoming.isEmpty()) Text("No requests for your offers. Tap Refresh after the rider requests.")
-        incoming.forEach { request ->
-            val journey = snapshot.journeys.firstOrNull { it.id == request.journeyId }
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("${journey?.originArea ?: "Journey"} → ${journey?.destinationArea ?: request.journeyId}")
-                Text("Request status: ${request.status.name}")
-                if (request.status == ConnectedRequestStatus.PENDING) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(enabled = !busy, onClick = { runCommand { repository.decideConnectedRequest(request.id, true) } }) { Text("Accept") }
-                        OutlinedButton(enabled = !busy, onClick = { runCommand { repository.decideConnectedRequest(request.id, false) } }) { Text("Decline") }
+        PrimaryScrollableTabRow(selectedTabIndex = selectedSection.ordinal, edgePadding = 12.dp) {
+            ConnectedJourneySection.entries.forEach { section ->
+                val itemCount = when (section) {
+                    ConnectedJourneySection.DISCOVER -> discoverable.size
+                    ConnectedJourneySection.YOUR_OFFERS -> mine.size
+                    ConnectedJourneySection.INCOMING -> incoming.size
+                    else -> null
+                }
+                Tab(
+                    selected = selectedSection == section,
+                    onClick = { selectedSection = section },
+                    text = { Text(itemCount?.let { "${section.label} ($it)" } ?: section.label) },
+                )
+            }
+        }
+
+        when (selectedSection) {
+            ConnectedJourneySection.PROFILE -> ConnectedSection(modifier = Modifier.weight(1f)) {
+                Text("Profile", style = MaterialTheme.typography.titleLarge)
+                OutlinedTextField(displayName, { displayName = it }, label = { Text("Display name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(homeArea, { homeArea = it }, label = { Text("Home broad area") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(workArea, { workArea = it }, label = { Text("Work broad area") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Text("Never enter a street address, postcode, exact location or live location.", style = MaterialTheme.typography.bodySmall)
+                Button(
+                    enabled = !busy,
+                    onClick = { runCommand { onSave(displayName, homeArea, workArea) } },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Save profile") }
+                ConnectedUnavailableNote()
+            }
+
+            ConnectedJourneySection.OFFER -> ConnectedSection(modifier = Modifier.weight(1f)) {
+                Text("Offer a journey", style = MaterialTheme.typography.titleLarge)
+                Text("Use broad areas only. Do not enter an address, postcode, exact location or live location.", style = MaterialTheme.typography.bodySmall)
+                OutlinedTextField(origin, { origin = it }, label = { Text("Origin broad area") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(destination, { destination = it }, label = { Text("Destination broad area") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(departure, { departure = it }, label = { Text("Departure (YYYY-MM-DD HH:mm)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(seats, { seats = it }, label = { Text("Seats (1–8)") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
+                Button(
+                    enabled = !busy,
+                    onClick = { runCommand { repository.createConnectedJourney(origin, destination, departure, seats) } },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Create emulator offer") }
+                ConnectedUnavailableNote()
+            }
+
+            ConnectedJourneySection.DISCOVER -> ConnectedSection(modifier = Modifier.weight(1f)) {
+                Text("Discover offers", style = MaterialTheme.typography.titleLarge)
+                if (discoverable.isEmpty()) {
+                    Text("No offers from other emulator accounts. Tap Refresh after the driver creates one.")
+                }
+                discoverable.forEach { journey ->
+                    val request = requestByJourney[journey.id]
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Text("${journey.originArea} → ${journey.destinationArea}", style = MaterialTheme.typography.titleMedium)
+                            Text(formatDeparture(journey.departureEpochMillis))
+                            Text(
+                                connectedSeatAvailabilityLabel(journey.seatsRemaining, journey.seatCapacity),
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                            if (request == null && journey.seatsRemaining > 0) {
+                                Button(
+                                    enabled = !busy,
+                                    onClick = { runCommand { repository.requestConnectedSeat(journey.id) } },
+                                ) { Text("Request one seat") }
+                            } else {
+                                Text(
+                                    request?.let { "Your request · ${connectedRequestStatusLabel(it.status)}" }
+                                        ?: "No seats available",
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                        }
                     }
                 }
+                ConnectedUnavailableNote()
+            }
+
+            ConnectedJourneySection.YOUR_OFFERS -> ConnectedSection(modifier = Modifier.weight(1f)) {
+                Text("Your offers", style = MaterialTheme.typography.titleLarge)
+                if (mine.isEmpty()) Text("No connected offers yet.")
+                mine.forEach { journey ->
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Text("${journey.originArea} → ${journey.destinationArea}", style = MaterialTheme.typography.titleMedium)
+                            Text(formatDeparture(journey.departureEpochMillis))
+                            Text(
+                                connectedSeatAvailabilityLabel(journey.seatsRemaining, journey.seatCapacity),
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    }
+                }
+                ConnectedUnavailableNote()
+            }
+
+            ConnectedJourneySection.INCOMING -> ConnectedSection(modifier = Modifier.weight(1f)) {
+                Text("Incoming requests", style = MaterialTheme.typography.titleLarge)
+                if (incoming.isEmpty()) Text("No requests for your offers. Tap Refresh after the rider requests.")
+                incoming.forEach { request ->
+                    val journey = snapshot.journeys.firstOrNull { it.id == request.journeyId }
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Text(
+                                "${journey?.originArea ?: "Journey"} → ${journey?.destinationArea ?: request.journeyId}",
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            journey?.let {
+                                Text(
+                                    connectedSeatAvailabilityLabel(it.seatsRemaining, it.seatCapacity),
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                            Text(connectedRequestStatusLabel(request.status), fontWeight = FontWeight.Bold)
+                            if (request.status == ConnectedRequestStatus.PENDING) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Button(
+                                        enabled = !busy,
+                                        onClick = { runCommand { repository.decideConnectedRequest(request.id, true) } },
+                                    ) { Text("Accept") }
+                                    OutlinedButton(
+                                        enabled = !busy,
+                                        onClick = { runCommand { repository.decideConnectedRequest(request.id, false) } },
+                                    ) { Text("Decline") }
+                                }
+                            }
+                        }
+                    }
+                }
+                ConnectedUnavailableNote()
             }
         }
-        message?.let { Text(it, color = if (it.contains("couldn't") || it.startsWith("Use") || it.startsWith("Enter")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) }
-        Text("Unavailable here: payments, GPS/maps, messaging, notifications, Circles, trust/ratings and journey lifecycle.", style = MaterialTheme.typography.bodySmall)
     }
+}
+
+@Composable
+private fun ConnectedSection(
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Column(
+        modifier = modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        content = content,
+    )
+}
+
+@Composable
+private fun ConnectedUnavailableNote() {
+    Text(
+        "Unavailable here: payments, GPS/maps, messaging, notifications, Circles, trust/ratings and journey lifecycle.",
+        style = MaterialTheme.typography.bodySmall,
+    )
 }
 
 private fun formatDeparture(epochMillis: Long): String =
