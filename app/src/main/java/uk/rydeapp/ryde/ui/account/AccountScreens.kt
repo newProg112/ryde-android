@@ -10,18 +10,30 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.PrimaryScrollableTabRow
+import androidx.compose.material3.SelectableDates
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TimePicker
+import androidx.compose.material3.rememberDatePickerState
+import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -39,6 +51,11 @@ import uk.rydeapp.ryde.data.connected.ConnectedJourneyCommandResult
 import uk.rydeapp.ryde.data.connected.ConnectedRequestStatus
 import uk.rydeapp.ryde.data.connected.ConnectedRydeRepository
 import java.text.SimpleDateFormat
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 import java.util.Date
 import java.util.Locale
 
@@ -204,6 +221,44 @@ internal fun connectedSeatAvailabilityLabel(seatsRemaining: Int, seatCapacity: I
 internal fun connectedRequestStatusLabel(status: ConnectedRequestStatus): String =
     "Status: ${status.name}"
 
+internal data class ConnectedDepartureSelection(
+    val dateEpochDay: Long,
+    val minuteOfDay: Int,
+)
+
+private val connectedDepartureContractFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+private val connectedDepartureDisplayFormatter = DateTimeFormatter.ofPattern("EEE, d MMM yyyy 'at' HH:mm", Locale.UK)
+
+internal fun defaultConnectedDeparture(
+    nowEpochMillis: Long = System.currentTimeMillis(),
+    zoneId: ZoneId = ZoneId.systemDefault(),
+): ConnectedDepartureSelection = ConnectedDepartureSelection(
+    dateEpochDay = Instant.ofEpochMilli(nowEpochMillis).atZone(zoneId).toLocalDate().plusDays(1).toEpochDay(),
+    minuteOfDay = 9 * 60,
+)
+
+internal fun formatConnectedDepartureForSubmission(selection: ConnectedDepartureSelection): String =
+    selection.toLocalDateTime().format(connectedDepartureContractFormatter)
+
+internal fun formatConnectedDepartureForDisplay(selection: ConnectedDepartureSelection): String =
+    selection.toLocalDateTime().format(connectedDepartureDisplayFormatter)
+
+internal fun isConnectedDepartureFuture(
+    selection: ConnectedDepartureSelection,
+    nowEpochMillis: Long = System.currentTimeMillis(),
+    zoneId: ZoneId = ZoneId.systemDefault(),
+): Boolean = selection.toLocalDateTime().atZone(zoneId).toInstant().toEpochMilli() > nowEpochMillis
+
+private fun ConnectedDepartureSelection.toLocalDateTime() =
+    LocalDate.ofEpochDay(dateEpochDay).atTime(minuteOfDay / 60, minuteOfDay % 60)
+
+private fun datePickerUtcMillis(dateEpochDay: Long): Long =
+    LocalDate.ofEpochDay(dateEpochDay).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+
+private fun datePickerEpochDay(utcMillis: Long): Long =
+    Instant.ofEpochMilli(utcMillis).atZone(ZoneOffset.UTC).toLocalDate().toEpochDay()
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ConnectedJourneyScreen(
     session: AccountSession.Authenticated,
@@ -221,7 +276,11 @@ fun ConnectedJourneyScreen(
     var workArea by rememberSaveable(session.accountId, initialWork) { mutableStateOf(initialWork) }
     var origin by rememberSaveable { mutableStateOf("") }
     var destination by rememberSaveable { mutableStateOf("") }
-    var departure by rememberSaveable { mutableStateOf("") }
+    val defaultDeparture = remember(session.accountId) { defaultConnectedDeparture() }
+    var departureDateEpochDay by rememberSaveable(session.accountId) { mutableLongStateOf(defaultDeparture.dateEpochDay) }
+    var departureMinuteOfDay by rememberSaveable(session.accountId) { mutableIntStateOf(defaultDeparture.minuteOfDay) }
+    var showDepartureDatePicker by rememberSaveable { mutableStateOf(false) }
+    var showDepartureTimePicker by rememberSaveable { mutableStateOf(false) }
     var seats by rememberSaveable { mutableStateOf("1") }
     var selectedSection by rememberSaveable { mutableStateOf(ConnectedJourneySection.PROFILE) }
     var message by rememberSaveable { mutableStateOf<String?>(null) }
@@ -233,6 +292,8 @@ fun ConnectedJourneyScreen(
         it.driverUid != session.accountId && it.departureEpochMillis > System.currentTimeMillis()
     }
     val incoming = snapshot.requests.filter { it.driverUid == session.accountId }
+    val departureSelection = ConnectedDepartureSelection(departureDateEpochDay, departureMinuteOfDay)
+    val departureIsFuture = isConnectedDepartureFuture(departureSelection)
 
     fun runCommand(action: suspend () -> Any?) {
         busy = true
@@ -322,11 +383,38 @@ fun ConnectedJourneyScreen(
                 Text("Use broad areas only. Do not enter an address, postcode, exact location or live location.", style = MaterialTheme.typography.bodySmall)
                 OutlinedTextField(origin, { origin = it }, label = { Text("Origin broad area") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(destination, { destination = it }, label = { Text("Destination broad area") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(departure, { departure = it }, label = { Text("Departure (YYYY-MM-DD HH:mm)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Text("Departure", style = MaterialTheme.typography.titleMedium)
+                Text(formatConnectedDepartureForDisplay(departureSelection), fontWeight = FontWeight.SemiBold)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = { showDepartureDatePicker = true },
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Choose date") }
+                    OutlinedButton(
+                        onClick = { showDepartureTimePicker = true },
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Choose time") }
+                }
+                if (!departureIsFuture) {
+                    Text(
+                        "Choose a departure in the future.",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
                 OutlinedTextField(seats, { seats = it }, label = { Text("Seats (1–8)") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
                 Button(
-                    enabled = !busy,
-                    onClick = { runCommand { repository.createConnectedJourney(origin, destination, departure, seats) } },
+                    enabled = !busy && departureIsFuture,
+                    onClick = {
+                        runCommand {
+                            repository.createConnectedJourney(
+                                origin,
+                                destination,
+                                formatConnectedDepartureForSubmission(departureSelection),
+                                seats,
+                            )
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text("Create emulator offer") }
                 ConnectedUnavailableNote()
@@ -431,6 +519,66 @@ fun ConnectedJourneyScreen(
                 ConnectedUnavailableNote()
             }
         }
+    }
+
+    if (showDepartureDatePicker) {
+        val todayEpochDay = Instant.ofEpochMilli(System.currentTimeMillis())
+            .atZone(ZoneId.systemDefault())
+            .toLocalDate()
+            .toEpochDay()
+        val datePickerState = rememberDatePickerState(
+            initialSelectedDateMillis = datePickerUtcMillis(departureDateEpochDay),
+            selectableDates = remember(todayEpochDay) {
+                object : SelectableDates {
+                    override fun isSelectableDate(utcTimeMillis: Long): Boolean =
+                        datePickerEpochDay(utcTimeMillis) >= todayEpochDay
+                }
+            },
+        )
+        DatePickerDialog(
+            onDismissRequest = { showDepartureDatePicker = false },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        datePickerState.selectedDateMillis?.let { departureDateEpochDay = datePickerEpochDay(it) }
+                        showDepartureDatePicker = false
+                    },
+                    enabled = datePickerState.selectedDateMillis != null,
+                ) { Text("OK") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDepartureDatePicker = false }) { Text("Cancel") }
+            },
+        ) {
+            DatePicker(
+                state = datePickerState,
+                title = { Text("Choose departure date", modifier = Modifier.padding(24.dp)) },
+            )
+        }
+    }
+
+    if (showDepartureTimePicker) {
+        val timePickerState = rememberTimePickerState(
+            initialHour = departureMinuteOfDay / 60,
+            initialMinute = departureMinuteOfDay % 60,
+            is24Hour = true,
+        )
+        AlertDialog(
+            onDismissRequest = { showDepartureTimePicker = false },
+            title = { Text("Choose departure time") },
+            text = { TimePicker(state = timePickerState) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        departureMinuteOfDay = timePickerState.hour * 60 + timePickerState.minute
+                        showDepartureTimePicker = false
+                    },
+                ) { Text("OK") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDepartureTimePicker = false }) { Text("Cancel") }
+            },
+        )
     }
 }
 
