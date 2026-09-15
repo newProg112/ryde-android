@@ -74,7 +74,7 @@ data class ConnectedProfileDraft(
     val workArea: String,
 )
 
-enum class ConnectedRequestStatus { PENDING, ACCEPTED, DECLINED }
+enum class ConnectedRequestStatus { PENDING, ACCEPTED, DECLINED, CANCELLED }
 
 data class ConnectedJourney(
     val id: String,

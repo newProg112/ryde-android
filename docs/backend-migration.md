@@ -41,11 +41,21 @@ firebase emulators:start --only auth,firestore --project ryde-79893
 
 Auth uses `9099`, Firestore `8080`, and the Emulator UI `4000`. The Android Emulator reaches
 the development host as `10.0.2.2`, which the debug Firebase factory configures before any
-SDK operation. Run isolated rules tests without deployment with:
+SDK operation. This is the manual CONNECTED environment; its disposable accounts, profiles,
+journeys and requests remain under project namespace `ryde-79893`.
+
+Run the automated rules suite in its separate demo namespace and on its dedicated ports with:
 
 ```powershell
-firebase emulators:exec --only auth,firestore --project ryde-79893 "npm run test:rules"
+npm run test:rules:emulator
 ```
+
+That command uses `firebase.rules-test.json`, project `demo-ryde-rules-test`, Auth `9199`, and
+Firestore `8180`. It can run while the manual emulators are running because neither its ports nor
+its project namespace overlap. The test harness fails before clearing Firestore unless Firebase
+CLI supplies those exact automated-test identifiers; do not run `npm run test:rules` directly.
+The rules-test demo project has no production resources, and `emulators:exec` starts and stops
+only its dedicated local emulators without deployment.
 
 ## Mode selection
 
@@ -130,7 +140,7 @@ The first 9C slice adds only these emulator-owned documents:
   journeyId: string          # immutable
   driverUid: string          # must equal the referenced journey owner; immutable
   riderUid: string           # authenticated creator; immutable
-  status: "PENDING" | "ACCEPTED" | "DECLINED"
+  status: "PENDING" | "ACCEPTED" | "DECLINED" | "CANCELLED"
 
 /journeyAcceptanceGuards/{journeyId}
   driverUid: string          # equals the referenced journey owner; immutable
@@ -143,6 +153,10 @@ offers can be discovered. Only the driver may create their journey or change its
 seat count. A request can be read only by its rider or the referenced driver. Rules require
 the deterministic request ID, derive/verify both participants against Auth and the referenced
 journey, reject self-requests, and permit only `PENDING -> ACCEPTED|DECLINED` by the driver.
+The rider alone may cancel a pending request. The rider may reopen that same deterministic
+document from `CANCELLED -> PENDING` only while the referenced journey is still upcoming, open,
+has capacity, and remains consistent with its acceptance guard. Drivers cannot decide a cancelled
+request, while accepted and declined requests are terminal.
 
 Acceptance is a Firestore transaction. Its request update is allowed only when the same atomic
 write changes `seatsRemaining` from N to N-1 and N was positive. Firestore transaction retries
@@ -172,28 +186,35 @@ journey + guard:  create OPEN(capacity) + count 0
                   -> OPEN(remaining - 1) + count + 1 per linked acceptance
 request:          create PENDING -> ACCEPTED
                                  -> DECLINED
+                                 -> CANCELLED -> PENDING while the journey is
+                                                 upcoming and has capacity
 ```
 
-There is no cancellation, reopening, trip lifecycle, private pickup/drop-off, exact/live
-location, pricing/payment, messaging, notification, Circle, trust, rating, Function or Storage
-data in connected mode.
+Only rider-owned pending-request cancellation and safe re-requesting are supported. Accepted
+and declined requests remain terminal. There is no offer cancellation, confirmed-trip or later
+journey lifecycle, private pickup/drop-off, exact/live location, pricing/payment, messaging,
+notification, Circle, trust, rating, Function or Storage data in connected mode.
 
 ## Manual two-emulator test
 
-1. Start disposable emulators with
+1. Start the disposable manual emulators with
    `firebase emulators:start --only auth,firestore --project ryde-79893`.
+   Do not use `npm run test:rules` against these ports. Automated rules verification uses
+   `npm run test:rules:emulator` and is isolated as described above.
 2. Install the explicit connected debug build on two Android emulators with
    `.\gradlew.bat installDebug -PrydeAppMode=CONNECTED` (select each emulator as needed).
 3. On emulator A create/sign into a driver account, create an offer using town/district areas,
    a future `YYYY-MM-DD HH:mm` departure, and 1..8 seats.
 4. On emulator B create/sign into a different rider account, tap **Refresh**, find the offer,
    and request one seat. The driver's own offer is never requestable.
-5. On A tap **Refresh**, then accept or decline the pending request. On B tap **Refresh** and
-   confirm the same final status. Force-stop/relaunch both apps and refresh to confirm persistence.
-6. For the acceptance path, repeat with a one-seat offer and two rider accounts; only one pending
+5. On B open **Your requests**, cancel the pending request, and confirm it remains Cancelled after
+   refresh or relaunch. Re-request it while the journey is upcoming and still has capacity.
+6. On A tap **Refresh**, then accept or decline the pending request. On B tap **Refresh** and
+   confirm the same terminal status; neither terminal status can be cancelled or re-requested.
+7. For the acceptance path, repeat with a one-seat offer and two rider accounts; only one pending
    request can be accepted and the other acceptance must fail without a negative seat count.
 
-Remaining 9C work includes offer/request cancellation policy, journey and confirmed-trip
-lifecycle, richer discovery/query design, Circles, and any trusted backend operation needed for
-stronger multi-document invariants. None of those capabilities are silently delegated to the
-fictional local-demo repository in connected mode.
+Remaining 9C work includes offer cancellation policy, journey and confirmed-trip lifecycle,
+richer discovery/query design, Circles, and any trusted backend operation needed for stronger
+multi-document invariants. None of those capabilities are silently delegated to the fictional
+local-demo repository in connected mode.

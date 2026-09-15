@@ -48,8 +48,11 @@ import uk.rydeapp.ryde.data.AccountCommandResult
 import uk.rydeapp.ryde.data.AccountSession
 import uk.rydeapp.ryde.domain.model.ProfileContent
 import uk.rydeapp.ryde.data.connected.ConnectedJourneyCommandResult
+import uk.rydeapp.ryde.data.connected.ConnectedJourney
+import uk.rydeapp.ryde.data.connected.ConnectedJourneySnapshot
 import uk.rydeapp.ryde.data.connected.ConnectedRequestStatus
 import uk.rydeapp.ryde.data.connected.ConnectedRydeRepository
+import uk.rydeapp.ryde.data.connected.ConnectedSeatRequest
 import java.text.SimpleDateFormat
 import java.time.Instant
 import java.time.LocalDate
@@ -211,6 +214,7 @@ internal enum class ConnectedJourneySection(val label: String) {
     PROFILE("Profile"),
     OFFER("Offer a journey"),
     DISCOVER("Discover offers"),
+    YOUR_REQUESTS("Your requests"),
     YOUR_OFFERS("Your offers"),
     INCOMING("Incoming requests"),
 }
@@ -220,6 +224,31 @@ internal fun connectedSeatAvailabilityLabel(seatsRemaining: Int, seatCapacity: I
 
 internal fun connectedRequestStatusLabel(status: ConnectedRequestStatus): String =
     "Status: ${status.name}"
+
+internal data class ConnectedRiderRequestItem(
+    val request: ConnectedSeatRequest,
+    val journey: ConnectedJourney,
+)
+
+internal fun connectedRiderRequestItems(
+    snapshot: ConnectedJourneySnapshot,
+    riderUid: String,
+): List<ConnectedRiderRequestItem> = snapshot.requests
+    .asSequence()
+    .filter { it.riderUid == riderUid }
+    .mapNotNull { request ->
+        snapshot.journeys.firstOrNull { it.id == request.journeyId }
+            ?.let { journey -> ConnectedRiderRequestItem(request, journey) }
+    }
+    .sortedBy { it.journey.departureEpochMillis }
+    .toList()
+
+internal fun canRerequestConnectedSeat(
+    item: ConnectedRiderRequestItem,
+    nowEpochMillis: Long = System.currentTimeMillis(),
+): Boolean = item.request.status == ConnectedRequestStatus.CANCELLED &&
+    item.journey.departureEpochMillis > nowEpochMillis &&
+    item.journey.seatsRemaining > 0
 
 internal data class ConnectedDepartureSelection(
     val dateEpochDay: Long,
@@ -281,6 +310,7 @@ fun ConnectedJourneyScreen(
     var departureMinuteOfDay by rememberSaveable(session.accountId) { mutableIntStateOf(defaultDeparture.minuteOfDay) }
     var showDepartureDatePicker by rememberSaveable { mutableStateOf(false) }
     var showDepartureTimePicker by rememberSaveable { mutableStateOf(false) }
+    var requestToCancelId by rememberSaveable { mutableStateOf<String?>(null) }
     var seats by rememberSaveable { mutableStateOf("1") }
     var selectedSection by rememberSaveable { mutableStateOf(ConnectedJourneySection.PROFILE) }
     var message by rememberSaveable { mutableStateOf<String?>(null) }
@@ -288,6 +318,7 @@ fun ConnectedJourneyScreen(
     val scope = rememberCoroutineScope()
     val mine = snapshot.journeys.filter { it.driverUid == session.accountId }
     val requestByJourney = snapshot.requests.filter { it.riderUid == session.accountId }.associateBy { it.journeyId }
+    val riderRequests = connectedRiderRequestItems(snapshot, session.accountId)
     val discoverable = snapshot.journeys.filter {
         it.driverUid != session.accountId && it.departureEpochMillis > System.currentTimeMillis()
     }
@@ -351,6 +382,7 @@ fun ConnectedJourneyScreen(
             ConnectedJourneySection.entries.forEach { section ->
                 val itemCount = when (section) {
                     ConnectedJourneySection.DISCOVER -> discoverable.size
+                    ConnectedJourneySection.YOUR_REQUESTS -> riderRequests.size
                     ConnectedJourneySection.YOUR_OFFERS -> mine.size
                     ConnectedJourneySection.INCOMING -> incoming.size
                     else -> null
@@ -457,6 +489,56 @@ fun ConnectedJourneyScreen(
                 ConnectedUnavailableNote()
             }
 
+            ConnectedJourneySection.YOUR_REQUESTS -> ConnectedSection(modifier = Modifier.weight(1f)) {
+                Text("Your requests", style = MaterialTheme.typography.titleLarge)
+                if (riderRequests.isEmpty()) {
+                    Text("No connected seat requests yet. Request a seat from Discover offers.")
+                }
+                riderRequests.forEach { item ->
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Text(
+                                "${item.journey.originArea} â†’ ${item.journey.destinationArea}",
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            Text(formatDeparture(item.journey.departureEpochMillis))
+                            Text(
+                                connectedRequestStatusLabel(item.request.status),
+                                fontWeight = FontWeight.Bold,
+                            )
+                            when {
+                                item.request.status == ConnectedRequestStatus.PENDING -> {
+                                    OutlinedButton(
+                                        enabled = !busy,
+                                        onClick = { requestToCancelId = item.request.id },
+                                    ) { Text("Cancel request") }
+                                }
+                                canRerequestConnectedSeat(item) -> {
+                                    Button(
+                                        enabled = !busy,
+                                        onClick = { runCommand { repository.requestConnectedSeat(item.journey.id) } },
+                                    ) { Text("Re-request seat") }
+                                }
+                                item.request.status == ConnectedRequestStatus.CANCELLED -> {
+                                    Text(
+                                        if (item.journey.seatsRemaining <= 0) {
+                                            "Re-request unavailable because no seats remain."
+                                        } else {
+                                            "Re-request unavailable because this departure has passed."
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                ConnectedUnavailableNote()
+            }
+
             ConnectedJourneySection.YOUR_OFFERS -> ConnectedSection(modifier = Modifier.weight(1f)) {
                 Text("Your offers", style = MaterialTheme.typography.titleLarge)
                 if (mine.isEmpty()) Text("No connected offers yet.")
@@ -555,6 +637,33 @@ fun ConnectedJourneyScreen(
                 title = { Text("Choose departure date", modifier = Modifier.padding(24.dp)) },
             )
         }
+    }
+
+    val requestToCancel = riderRequests.firstOrNull { it.request.id == requestToCancelId }
+    if (requestToCancel != null) {
+        AlertDialog(
+            onDismissRequest = { requestToCancelId = null },
+            title = { Text("Cancel seat request?") },
+            text = {
+                Text(
+                    "Cancel your request for ${requestToCancel.journey.originArea} to " +
+                        "${requestToCancel.journey.destinationArea}? You can re-request later only while " +
+                        "the journey is still upcoming and has a seat available.",
+                )
+            },
+            confirmButton = {
+                Button(
+                    enabled = !busy,
+                    onClick = {
+                        requestToCancelId = null
+                        runCommand { repository.cancelConnectedRequest(requestToCancel.request.id) }
+                    },
+                ) { Text("Cancel request") }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { requestToCancelId = null }) { Text("Keep request") }
+            },
+        )
     }
 
     if (showDepartureTimePicker) {

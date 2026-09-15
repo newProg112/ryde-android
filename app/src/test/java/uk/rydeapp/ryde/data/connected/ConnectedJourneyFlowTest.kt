@@ -35,6 +35,18 @@ class ConnectedJourneyFlowTest {
                 ),
             ),
         )
+        assertEquals(
+            ConnectedRequestStatus.CANCELLED,
+            FirestoreJourneyMapper.request(
+                "journey-1_rider",
+                mapOf(
+                    "journeyId" to "journey-1",
+                    "driverUid" to "driver",
+                    "riderUid" to "rider",
+                    "status" to "CANCELLED",
+                ),
+            )?.status,
+        )
     }
 
     @Test
@@ -43,6 +55,112 @@ class ConnectedJourneyFlowTest {
         assertTrue(ConnectedJourneyValidator.offer("Nottingham", "Derby", "2000-01-01 10:00", "1") is ValidationResult.Invalid)
         assertTrue(ConnectedJourneyValidator.offer("Nottingham", "Derby", "2099-01-01 10:00", "9") is ValidationResult.Invalid)
         assertTrue(ConnectedJourneyValidator.offer("Nottingham", "Derby", "2099-01-01 10:00", "1") is ValidationResult.Valid)
+    }
+
+    @Test
+    fun `pending request cancellation persists for rider and driver`() = runBlocking {
+        val store = MemoryJourneyStore()
+        val driver = repository("driver", store)
+        val rider = repository("rider", store)
+        driver.refresh()
+        driver.createConnectedJourney("Mansfield", "Nottingham", "2099-01-01 10:00", "1")
+        rider.refresh()
+        val journeyId = rider.journeyState.value.journeys.single().id
+        rider.requestConnectedSeat(journeyId)
+        val requestId = rider.journeyState.value.requests.single().id
+
+        assertEquals(ConnectedJourneyCommandResult.Success, rider.cancelConnectedRequest(requestId))
+        assertEquals(ConnectedRequestStatus.CANCELLED, rider.journeyState.value.requests.single().status)
+        driver.refresh()
+        assertEquals(ConnectedRequestStatus.CANCELLED, driver.journeyState.value.requests.single().status)
+    }
+
+    @Test
+    fun `cancelled request cannot be decided by driver`() = runBlocking {
+        val store = MemoryJourneyStore()
+        val driver = repository("driver", store)
+        val rider = repository("rider", store)
+        driver.refresh()
+        driver.createConnectedJourney("Mansfield", "Nottingham", "2099-01-01 10:00", "1")
+        rider.refresh()
+        rider.requestConnectedSeat(rider.journeyState.value.journeys.single().id)
+        val requestId = rider.journeyState.value.requests.single().id
+        rider.cancelConnectedRequest(requestId)
+
+        assertTrue(driver.decideConnectedRequest(requestId, true) is ConnectedJourneyCommandResult.Failure)
+        assertTrue(driver.decideConnectedRequest(requestId, false) is ConnectedJourneyCommandResult.Failure)
+        driver.refresh()
+        assertEquals(ConnectedRequestStatus.CANCELLED, driver.journeyState.value.requests.single().status)
+        assertEquals(1, driver.journeyState.value.journeys.single().seatsRemaining)
+    }
+
+    @Test
+    fun `rider can re-request a cancelled request while capacity remains`() = runBlocking {
+        val store = MemoryJourneyStore()
+        val driver = repository("driver", store)
+        val rider = repository("rider", store)
+        driver.refresh()
+        driver.createConnectedJourney("Mansfield", "Nottingham", "2099-01-01 10:00", "1")
+        rider.refresh()
+        val journeyId = rider.journeyState.value.journeys.single().id
+        rider.requestConnectedSeat(journeyId)
+        rider.cancelConnectedRequest(rider.journeyState.value.requests.single().id)
+
+        assertEquals(ConnectedJourneyCommandResult.Success, rider.requestConnectedSeat(journeyId))
+        assertEquals(ConnectedRequestStatus.PENDING, rider.journeyState.value.requests.single().status)
+    }
+
+    @Test
+    fun `re-request fails after another acceptance consumes remaining capacity`() = runBlocking {
+        val store = MemoryJourneyStore()
+        val driver = repository("driver", store)
+        val riderA = repository("rider-a", store)
+        val riderB = repository("rider-b", store)
+        driver.refresh()
+        driver.createConnectedJourney("Mansfield", "Nottingham", "2099-01-01 10:00", "1")
+        riderA.refresh()
+        val journeyId = riderA.journeyState.value.journeys.single().id
+        riderA.requestConnectedSeat(journeyId)
+        riderA.cancelConnectedRequest(riderA.journeyState.value.requests.single().id)
+        riderB.refresh()
+        riderB.requestConnectedSeat(journeyId)
+        driver.refresh()
+        driver.decideConnectedRequest(
+            driver.journeyState.value.requests.single { it.riderUid == "rider-b" }.id,
+            true,
+        )
+
+        assertTrue(riderA.requestConnectedSeat(journeyId) is ConnectedJourneyCommandResult.Failure)
+        riderA.refresh()
+        assertEquals(
+            ConnectedRequestStatus.CANCELLED,
+            riderA.journeyState.value.requests.single { it.riderUid == "rider-a" }.status,
+        )
+    }
+
+    @Test
+    fun `accepted and declined requests remain terminal for rider actions`() = runBlocking {
+        val store = MemoryJourneyStore()
+        val driver = repository("driver", store)
+        val acceptedRider = repository("accepted-rider", store)
+        val declinedRider = repository("declined-rider", store)
+        driver.refresh()
+        driver.createConnectedJourney("Mansfield", "Nottingham", "2099-01-01 10:00", "2")
+        acceptedRider.refresh()
+        val journeyId = acceptedRider.journeyState.value.journeys.single().id
+        acceptedRider.requestConnectedSeat(journeyId)
+        declinedRider.refresh()
+        declinedRider.requestConnectedSeat(journeyId)
+        driver.refresh()
+        val acceptedId = driver.journeyState.value.requests.single { it.riderUid == "accepted-rider" }.id
+        val declinedId = driver.journeyState.value.requests.single { it.riderUid == "declined-rider" }.id
+        driver.decideConnectedRequest(acceptedId, true)
+        driver.decideConnectedRequest(declinedId, false)
+
+        assertTrue(acceptedRider.cancelConnectedRequest(acceptedId) is ConnectedJourneyCommandResult.Failure)
+        assertTrue(acceptedRider.requestConnectedSeat(journeyId) is ConnectedJourneyCommandResult.Failure)
+        assertTrue(declinedRider.cancelConnectedRequest(declinedId) is ConnectedJourneyCommandResult.Failure)
+        assertTrue(declinedRider.requestConnectedSeat(journeyId) is ConnectedJourneyCommandResult.Failure)
     }
 
     @Test
@@ -110,6 +228,7 @@ class ConnectedJourneyFlowTest {
             override suspend fun load(uid: String) = ConnectedJourneySnapshot()
             override suspend fun create(uid: String, draft: ConnectedJourneyDraft) { throw CancellationException("cancel") }
             override suspend fun requestSeat(uid: String, journeyId: String) = Unit
+            override suspend fun cancelRequest(uid: String, requestId: String) = Unit
             override suspend fun decide(uid: String, requestId: String, accept: Boolean) = Unit
         }
         val repository = repository("driver", cancellingStore)
@@ -157,10 +276,18 @@ class ConnectedJourneyFlowTest {
 
         override suspend fun requestSeat(uid: String, journeyId: String) {
             val journey = checkNotNull(journeys[journeyId])
-            check(journey.driverUid != uid && journey.seatsRemaining > 0)
+            check(journey.driverUid != uid && journey.seatsRemaining > 0 && journey.departureEpochMillis > System.currentTimeMillis())
             val id = "${journeyId}_${uid}"
-            check(id !in requests)
-            requests[id] = ConnectedSeatRequest(id, journeyId, journey.driverUid, uid, ConnectedRequestStatus.PENDING)
+            val existing = requests[id]
+            check(existing == null || existing.status == ConnectedRequestStatus.CANCELLED)
+            requests[id] = existing?.copy(status = ConnectedRequestStatus.PENDING)
+                ?: ConnectedSeatRequest(id, journeyId, journey.driverUid, uid, ConnectedRequestStatus.PENDING)
+        }
+
+        override suspend fun cancelRequest(uid: String, requestId: String) {
+            val request = checkNotNull(requests[requestId])
+            check(request.riderUid == uid && request.status == ConnectedRequestStatus.PENDING)
+            requests[requestId] = request.copy(status = ConnectedRequestStatus.CANCELLED)
         }
 
         override suspend fun decide(uid: String, requestId: String, accept: Boolean) {

@@ -7,7 +7,7 @@ import {
   initializeTestEnvironment,
 } from "@firebase/rules-unit-testing";
 import {
-  Timestamp, collection, deleteDoc, doc, getDoc, getDocs, query, setDoc, updateDoc, where, writeBatch,
+  Timestamp, collection, deleteDoc, doc, getDoc, getDocs, query, runTransaction, setDoc, updateDoc, where, writeBatch,
 } from "firebase/firestore";
 import { deleteApp, initializeApp } from "firebase/app";
 import {
@@ -18,7 +18,32 @@ import {
   signOut,
 } from "firebase/auth";
 
-const projectId = "ryde-79893";
+const MANUAL_PROJECT_ID = "ryde-79893";
+const RULES_TEST_PROJECT_ID = "demo-ryde-rules-test";
+const RULES_TEST_FIRESTORE_HOST = "127.0.0.1:8180";
+const RULES_TEST_AUTH_HOST = "127.0.0.1:9199";
+const projectId = process.env.GCLOUD_PROJECT;
+const firestoreEmulatorHost = process.env.FIRESTORE_EMULATOR_HOST;
+const authEmulatorHost = process.env.FIREBASE_AUTH_EMULATOR_HOST;
+
+assert.equal(
+  projectId,
+  RULES_TEST_PROJECT_ID,
+  `Refusing to run rules tests outside the dedicated ${RULES_TEST_PROJECT_ID} namespace. Use npm run test:rules:emulator.`,
+);
+assert.notEqual(projectId, MANUAL_PROJECT_ID);
+assert.equal(
+  firestoreEmulatorHost,
+  RULES_TEST_FIRESTORE_HOST,
+  `Refusing to run rules tests outside dedicated Firestore ${RULES_TEST_FIRESTORE_HOST}.`,
+);
+assert.equal(
+  authEmulatorHost,
+  RULES_TEST_AUTH_HOST,
+  `Refusing to run rules tests outside dedicated Auth ${RULES_TEST_AUTH_HOST}.`,
+);
+
+const [firestoreHost, firestorePort] = firestoreEmulatorHost.split(":");
 let environment;
 let authApp;
 let auth;
@@ -27,14 +52,14 @@ before(async () => {
   environment = await initializeTestEnvironment({
     projectId,
     firestore: {
-      host: "127.0.0.1",
-      port: 8080,
+      host: firestoreHost,
+      port: Number(firestorePort),
       rules: fs.readFileSync("firestore.rules", "utf8"),
     },
   });
   authApp = initializeApp({ projectId, apiKey: "local-emulator-only" }, "ryde-auth-integration");
   auth = getAuth(authApp);
-  connectAuthEmulator(auth, "http://127.0.0.1:9099", { disableWarnings: true });
+  connectAuthEmulator(auth, `http://${authEmulatorHost}`, { disableWarnings: true });
 });
 
 beforeEach(async () => environment.clearFirestore());
@@ -85,6 +110,16 @@ const acceptRequest = (db, journeyId, requestId, seatsRemaining, acceptanceCount
   });
   return batch.commit();
 };
+
+const requestSeatLikeGateway = (db, journeyId, riderUid) => runTransaction(db, async (transaction) => {
+  const journeyRef = doc(db, `journeys/${journeyId}`);
+  const journeySnapshot = await transaction.get(journeyRef);
+  if (!journeySnapshot.exists()) throw new Error("Journey unavailable");
+  transaction.set(
+    doc(db, `seatRequests/${journeyId}_${riderUid}`),
+    request(journeyId, journeySnapshot.data().driverUid, riderUid),
+  );
+});
 
 test("Auth emulator supports local email registration, sign-out and sign-in", async () => {
   const email = `phase9b-${Date.now()}@example.test`;
@@ -187,6 +222,119 @@ test("requests enforce real participants deterministic ownership and self-reques
   await assertFails(setDoc(doc(rider, "seatRequests/random"), request("j1", "driver", "rider")));
   await assertFails(setDoc(doc(rider, "seatRequests/j1_rider"), request("j1", "stranger", "rider")));
   await assertFails(setDoc(doc(driver, "seatRequests/j1_driver"), request("j1", "driver", "driver")));
+});
+
+test("gateway transaction can blindly create a deterministic request without reading private absence", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  const rider = environment.authenticatedContext("rider").firestore();
+  const requestRef = doc(rider, "seatRequests/j1_rider");
+  await assertSucceeds(createJourney(driver, "j1", "driver", 1));
+
+  await assertFails(getDoc(requestRef));
+  await assertSucceeds(requestSeatLikeGateway(rider, "j1", "rider"));
+  assert.deepEqual((await getDoc(requestRef)).data(), request("j1", "driver", "rider"));
+});
+
+test("rider can cancel and safely re-request the same available journey", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  const rider = environment.authenticatedContext("rider").firestore();
+  const stranger = environment.authenticatedContext("stranger").firestore();
+  const requestRef = doc(rider, "seatRequests/j1_rider");
+  await assertSucceeds(createJourney(driver, "j1", "driver", 1));
+  await assertSucceeds(requestSeatLikeGateway(rider, "j1", "rider"));
+  await assertFails(requestSeatLikeGateway(rider, "j1", "rider"));
+
+  await assertFails(updateDoc(doc(driver, "seatRequests/j1_rider"), { status: "CANCELLED" }));
+  await assertFails(updateDoc(doc(stranger, "seatRequests/j1_rider"), { status: "CANCELLED" }));
+  await assertSucceeds(updateDoc(requestRef, { status: "CANCELLED" }));
+  await assertFails(updateDoc(doc(driver, "seatRequests/j1_rider"), { status: "ACCEPTED" }));
+  await assertFails(updateDoc(doc(driver, "seatRequests/j1_rider"), { status: "DECLINED" }));
+  await assertSucceeds(requestSeatLikeGateway(rider, "j1", "rider"));
+  assert.equal((await getDoc(requestRef)).data().status, "PENDING");
+});
+
+test("rider cancellation racing driver acceptance leaves one consistent outcome", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  const rider = environment.authenticatedContext("rider").firestore();
+  await assertSucceeds(createJourney(driver, "j1", "driver", 1));
+  await assertSucceeds(setDoc(
+    doc(rider, "seatRequests/j1_rider"),
+    request("j1", "driver", "rider"),
+  ));
+
+  const outcomes = await Promise.allSettled([
+    updateDoc(doc(rider, "seatRequests/j1_rider"), { status: "CANCELLED" }),
+    acceptRequest(driver, "j1", "j1_rider", 0, 1),
+  ]);
+  assert.equal(outcomes.filter(({ status }) => status === "fulfilled").length, 1);
+  assert.equal(outcomes.filter(({ status }) => status === "rejected").length, 1);
+
+  const finalRequest = (await getDoc(doc(rider, "seatRequests/j1_rider"))).data();
+  const finalJourney = (await getDoc(doc(driver, "journeys/j1"))).data();
+  const finalGuard = (await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data();
+  if (finalRequest.status === "ACCEPTED") {
+    assert.equal(finalJourney.seatsRemaining, 0);
+    assert.deepEqual(finalGuard, guard("driver", 1, "j1_rider"));
+  } else {
+    assert.equal(finalRequest.status, "CANCELLED");
+    assert.equal(finalJourney.seatsRemaining, 1);
+    assert.deepEqual(finalGuard, guard("driver"));
+  }
+});
+
+test("re-request is denied after capacity is consumed or departure has passed", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  const riderA = environment.authenticatedContext("rider-a").firestore();
+  const riderB = environment.authenticatedContext("rider-b").firestore();
+  await assertSucceeds(createJourney(driver, "j1", "driver", 1));
+  await assertSucceeds(setDoc(doc(riderA, "seatRequests/j1_rider-a"), request("j1", "driver", "rider-a")));
+  await assertSucceeds(updateDoc(doc(riderA, "seatRequests/j1_rider-a"), { status: "CANCELLED" }));
+  await assertSucceeds(setDoc(doc(riderB, "seatRequests/j1_rider-b"), request("j1", "driver", "rider-b")));
+  await assertSucceeds(acceptRequest(driver, "j1", "j1_rider-b", 0, 1));
+  await assertFails(updateDoc(doc(riderA, "seatRequests/j1_rider-a"), { status: "PENDING" }));
+
+  await environment.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await setDoc(doc(db, "journeys/expired"), {
+      ...journey("driver", 1),
+      departureAt: Timestamp.fromMillis(Date.now() - 60_000),
+    });
+    await setDoc(doc(db, "journeyAcceptanceGuards/expired"), guard("driver"));
+    await setDoc(
+      doc(db, "seatRequests/expired_rider-a"),
+      request("expired", "driver", "rider-a", "CANCELLED"),
+    );
+  });
+  await assertFails(updateDoc(doc(riderA, "seatRequests/expired_rider-a"), { status: "PENDING" }));
+  await assertFails(setDoc(
+    doc(riderB, "seatRequests/expired_rider-b"),
+    request("expired", "driver", "rider-b"),
+  ));
+});
+
+test("accepted and declined requests remain terminal for riders", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  const acceptedRider = environment.authenticatedContext("accepted-rider").firestore();
+  const declinedRider = environment.authenticatedContext("declined-rider").firestore();
+  await assertSucceeds(createJourney(driver, "j1", "driver", 2));
+  await assertSucceeds(setDoc(
+    doc(acceptedRider, "seatRequests/j1_accepted-rider"),
+    request("j1", "driver", "accepted-rider"),
+  ));
+  await assertSucceeds(setDoc(
+    doc(declinedRider, "seatRequests/j1_declined-rider"),
+    request("j1", "driver", "declined-rider"),
+  ));
+  await assertSucceeds(acceptRequest(driver, "j1", "j1_accepted-rider", 1, 1));
+  await assertSucceeds(updateDoc(doc(driver, "seatRequests/j1_declined-rider"), { status: "DECLINED" }));
+
+  for (const [db, requestId] of [
+    [acceptedRider, "j1_accepted-rider"],
+    [declinedRider, "j1_declined-rider"],
+  ]) {
+    await assertFails(updateDoc(doc(db, `seatRequests/${requestId}`), { status: "CANCELLED" }));
+    await assertFails(requestSeatLikeGateway(db, "j1", requestId.substring("j1_".length)));
+  }
 });
 
 test("only the driver may decide and acceptance requires an atomic one-seat decrement", async () => {

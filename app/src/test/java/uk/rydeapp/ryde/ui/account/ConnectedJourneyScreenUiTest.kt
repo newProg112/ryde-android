@@ -5,17 +5,21 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import uk.rydeapp.ryde.data.connected.ConnectedRequestStatus
+import uk.rydeapp.ryde.data.connected.ConnectedJourney
+import uk.rydeapp.ryde.data.connected.ConnectedJourneySnapshot
+import uk.rydeapp.ryde.data.connected.ConnectedSeatRequest
 import java.time.LocalDateTime
 import java.time.ZoneId
 
 class ConnectedJourneyScreenUiTest {
     @Test
-    fun `connected journey navigation exposes the five focused sections in order`() {
+    fun `connected journey navigation exposes persistent rider requests`() {
         assertEquals(
             listOf(
                 "Profile",
                 "Offer a journey",
                 "Discover offers",
+                "Your requests",
                 "Your offers",
                 "Incoming requests",
             ),
@@ -29,6 +33,43 @@ class ConnectedJourneyScreenUiTest {
         assertEquals("Status: PENDING", connectedRequestStatusLabel(ConnectedRequestStatus.PENDING))
         assertEquals("Status: ACCEPTED", connectedRequestStatusLabel(ConnectedRequestStatus.ACCEPTED))
         assertEquals("Status: DECLINED", connectedRequestStatusLabel(ConnectedRequestStatus.DECLINED))
+        assertEquals("Status: CANCELLED", connectedRequestStatusLabel(ConnectedRequestStatus.CANCELLED))
+    }
+
+    @Test
+    fun `rider request presentation joins persisted request to genuine journey data`() {
+        val departure = 4_070_908_800_000L
+        val journey = ConnectedJourney(
+            id = "journey-1",
+            driverUid = "driver",
+            originArea = "Mansfield",
+            destinationArea = "Nottingham",
+            departureEpochMillis = departure,
+            seatCapacity = 2,
+            seatsRemaining = 1,
+        )
+        val request = ConnectedSeatRequest(
+            id = "journey-1_rider",
+            journeyId = journey.id,
+            driverUid = journey.driverUid,
+            riderUid = "rider",
+            status = ConnectedRequestStatus.CANCELLED,
+        )
+        val snapshot = ConnectedJourneySnapshot(
+            journeys = listOf(journey),
+            requests = listOf(request),
+        )
+
+        val item = connectedRiderRequestItems(snapshot, "rider").single()
+
+        assertEquals("Mansfield", item.journey.originArea)
+        assertEquals("Nottingham", item.journey.destinationArea)
+        assertEquals(departure, item.journey.departureEpochMillis)
+        assertEquals(ConnectedRequestStatus.CANCELLED, item.request.status)
+        assertTrue(canRerequestConnectedSeat(item, nowEpochMillis = departure - 1))
+        assertFalse(canRerequestConnectedSeat(item, nowEpochMillis = departure + 1))
+        assertFalse(canRerequestConnectedSeat(item.copy(journey = journey.copy(seatsRemaining = 0)), departure - 1))
+        assertFalse(canRerequestConnectedSeat(item.copy(request = request.copy(status = ConnectedRequestStatus.ACCEPTED)), departure - 1))
     }
 
     @Test

@@ -130,6 +130,9 @@ class ConnectedRydeRepository(
     suspend fun requestConnectedSeat(journeyId: String): ConnectedJourneyCommandResult =
         journeyCommand { store, uid -> store.requestSeat(uid, journeyId) }
 
+    suspend fun cancelConnectedRequest(requestId: String): ConnectedJourneyCommandResult =
+        journeyCommand { store, uid -> store.cancelRequest(uid, requestId) }
+
     suspend fun decideConnectedRequest(requestId: String, accept: Boolean): ConnectedJourneyCommandResult =
         journeyCommand { store, uid -> store.decide(uid, requestId, accept) }
 

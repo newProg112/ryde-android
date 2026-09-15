@@ -23,6 +23,7 @@ interface ConnectedJourneyStore {
     suspend fun load(uid: String): ConnectedJourneySnapshot
     suspend fun create(uid: String, draft: ConnectedJourneyDraft)
     suspend fun requestSeat(uid: String, journeyId: String)
+    suspend fun cancelRequest(uid: String, requestId: String)
     suspend fun decide(uid: String, requestId: String, accept: Boolean)
 }
 
@@ -100,8 +101,22 @@ class FirestoreConnectedJourneyStore(private val firestore: FirebaseFirestore) :
         firestore.runTransaction { transaction ->
             val journey = FirestoreJourneyMapper.journey(journeyId, transaction.get(journeyRef).data.orEmpty())
                 ?: error("Journey unavailable")
-            check(journey.driverUid != uid && journey.seatsRemaining > 0)
+            check(
+                journey.driverUid != uid &&
+                    journey.seatsRemaining > 0 &&
+                    journey.departureEpochMillis > System.currentTimeMillis(),
+            )
             transaction.set(requestRef, FirestoreJourneyMapper.requestData(journey, uid))
+        }.await()
+    }
+
+    override suspend fun cancelRequest(uid: String, requestId: String) {
+        val requestRef = firestore.collection(REQUESTS).document(requestId)
+        firestore.runTransaction { transaction ->
+            val request = FirestoreJourneyMapper.request(requestId, transaction.get(requestRef).data.orEmpty())
+                ?: error("Request unavailable")
+            check(request.riderUid == uid && request.status == ConnectedRequestStatus.PENDING)
+            transaction.update(requestRef, "status", ConnectedRequestStatus.CANCELLED.name)
         }.await()
     }
 

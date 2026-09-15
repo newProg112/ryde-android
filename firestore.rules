@@ -56,7 +56,7 @@ service cloud.firestore {
         && data.driverUid is string
         && data.riderUid is string
         && data.driverUid != data.riderUid
-        && data.status in ['PENDING', 'ACCEPTED', 'DECLINED'];
+        && data.status in ['PENDING', 'ACCEPTED', 'DECLINED', 'CANCELLED'];
     }
 
     function validAcceptanceGuard(data) {
@@ -240,10 +240,32 @@ service cloud.firestore {
         && exists(journeyPath(request.resource.data.journeyId))
         && get(journeyPath(request.resource.data.journeyId)).data.driverUid == request.resource.data.driverUid
         && get(journeyPath(request.resource.data.journeyId)).data.status == 'OPEN'
+        && get(journeyPath(request.resource.data.journeyId)).data.departureAt > request.time
         && get(journeyPath(request.resource.data.journeyId)).data.seatsRemaining > 0
         && currentGuardMatchesJourney(
           request.resource.data.journeyId,
           request.resource.data.driverUid);
+      allow update: if signedIn()
+        && resource.data.riderUid == request.auth.uid
+        && validSeatRequest(resource.data)
+        && validSeatRequest(request.resource.data)
+        && requestId == resource.data.journeyId + '_' + resource.data.riderUid
+        && request.resource.data.journeyId == resource.data.journeyId
+        && request.resource.data.driverUid == resource.data.driverUid
+        && request.resource.data.riderUid == resource.data.riderUid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+        && ((resource.data.status == 'PENDING'
+            && request.resource.data.status == 'CANCELLED')
+          || (resource.data.status == 'CANCELLED'
+            && request.resource.data.status == 'PENDING'
+            && exists(journeyPath(resource.data.journeyId))
+            && get(journeyPath(resource.data.journeyId)).data.driverUid == resource.data.driverUid
+            && get(journeyPath(resource.data.journeyId)).data.status == 'OPEN'
+            && get(journeyPath(resource.data.journeyId)).data.departureAt > request.time
+            && get(journeyPath(resource.data.journeyId)).data.seatsRemaining > 0
+            && currentGuardMatchesJourney(
+              resource.data.journeyId,
+              resource.data.driverUid)));
       allow update: if signedIn()
         && resource.data.driverUid == request.auth.uid
         && get(journeyPath(resource.data.journeyId)).data.driverUid == request.auth.uid

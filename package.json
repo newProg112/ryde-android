@@ -2,7 +2,8 @@
   "name": "ryde-firebase-rules-tests",
   "private": true,
   "scripts": {
-    "test:rules": "node --test tests/firestore.rules.test.mjs"
+    "test:rules": "node --test tests/firestore.rules.test.mjs",
+    "test:rules:emulator": "firebase emulators:exec --config firebase.rules-test.json --only auth,firestore --project demo-ryde-rules-test \"npm run test:rules\""
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "5.0.2",
