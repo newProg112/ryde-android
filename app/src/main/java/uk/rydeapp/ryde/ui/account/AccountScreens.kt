@@ -50,6 +50,7 @@ import uk.rydeapp.ryde.domain.model.ProfileContent
 import uk.rydeapp.ryde.data.connected.ConnectedJourneyCommandResult
 import uk.rydeapp.ryde.data.connected.ConnectedJourney
 import uk.rydeapp.ryde.data.connected.ConnectedJourneySnapshot
+import uk.rydeapp.ryde.data.connected.ConnectedConfirmedTrip
 import uk.rydeapp.ryde.data.connected.ConnectedRequestStatus
 import uk.rydeapp.ryde.data.connected.ConnectedRydeRepository
 import uk.rydeapp.ryde.data.connected.ConnectedSeatRequest
@@ -215,15 +216,38 @@ internal enum class ConnectedJourneySection(val label: String) {
     OFFER("Offer a journey"),
     DISCOVER("Discover offers"),
     YOUR_REQUESTS("Your requests"),
+    TRIPS("Trips"),
     YOUR_OFFERS("Your offers"),
     INCOMING("Incoming requests"),
 }
+
+internal const val CONNECTED_TRIPS_EMPTY_STATE =
+    "No confirmed trips yet. A trip appears when a driver accepts a seat request."
 
 internal fun connectedSeatAvailabilityLabel(seatsRemaining: Int, seatCapacity: Int): String =
     "$seatsRemaining/$seatCapacity seats remaining"
 
 internal fun connectedRequestStatusLabel(status: ConnectedRequestStatus): String =
     "Status: ${status.name}"
+
+internal fun connectedTripRouteLabel(trip: ConnectedConfirmedTrip): String =
+    "${trip.originArea} → ${trip.destinationArea}"
+
+internal fun connectedTripStatusLabel(trip: ConnectedConfirmedTrip): String =
+    "Status: ${trip.status.name}"
+
+internal fun connectedTripRoleLabel(trip: ConnectedConfirmedTrip, viewerUid: String): String? = when (viewerUid) {
+    trip.driverUid -> "You're driving"
+    trip.riderUid -> "You're riding"
+    else -> null
+}
+
+internal fun connectedTripsForParticipant(
+    trips: List<ConnectedConfirmedTrip>,
+    viewerUid: String,
+): List<ConnectedConfirmedTrip> = trips
+    .filter { it.driverUid == viewerUid || it.riderUid == viewerUid }
+    .sortedBy { it.departureEpochMillis }
 
 internal data class ConnectedRiderRequestItem(
     val request: ConnectedSeatRequest,
@@ -319,6 +343,7 @@ fun ConnectedJourneyScreen(
     val mine = snapshot.journeys.filter { it.driverUid == session.accountId }
     val requestByJourney = snapshot.requests.filter { it.riderUid == session.accountId }.associateBy { it.journeyId }
     val riderRequests = connectedRiderRequestItems(snapshot, session.accountId)
+    val confirmedTrips = connectedTripsForParticipant(snapshot.confirmedTrips, session.accountId)
     val discoverable = snapshot.journeys.filter {
         it.driverUid != session.accountId && it.departureEpochMillis > System.currentTimeMillis()
     }
@@ -383,6 +408,7 @@ fun ConnectedJourneyScreen(
                 val itemCount = when (section) {
                     ConnectedJourneySection.DISCOVER -> discoverable.size
                     ConnectedJourneySection.YOUR_REQUESTS -> riderRequests.size
+                    ConnectedJourneySection.TRIPS -> confirmedTrips.size
                     ConnectedJourneySection.YOUR_OFFERS -> mine.size
                     ConnectedJourneySection.INCOMING -> incoming.size
                     else -> null
@@ -501,7 +527,7 @@ fun ConnectedJourneyScreen(
                             verticalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
                             Text(
-                                "${item.journey.originArea} â†’ ${item.journey.destinationArea}",
+                                "${item.journey.originArea} → ${item.journey.destinationArea}",
                                 style = MaterialTheme.typography.titleMedium,
                             )
                             Text(formatDeparture(item.journey.departureEpochMillis))
@@ -538,6 +564,12 @@ fun ConnectedJourneyScreen(
                 }
                 ConnectedUnavailableNote()
             }
+
+            ConnectedJourneySection.TRIPS -> ConnectedTripsSection(
+                trips = confirmedTrips,
+                viewerUid = session.accountId,
+                modifier = Modifier.weight(1f),
+            )
 
             ConnectedJourneySection.YOUR_OFFERS -> ConnectedSection(modifier = Modifier.weight(1f)) {
                 Text("Your offers", style = MaterialTheme.typography.titleLarge)
@@ -688,6 +720,33 @@ fun ConnectedJourneyScreen(
                 TextButton(onClick = { showDepartureTimePicker = false }) { Text("Cancel") }
             },
         )
+    }
+}
+
+@Composable
+internal fun ConnectedTripsSection(
+    trips: List<ConnectedConfirmedTrip>,
+    viewerUid: String,
+    modifier: Modifier = Modifier,
+) {
+    ConnectedSection(modifier = modifier) {
+        Text("Trips", style = MaterialTheme.typography.titleLarge)
+        if (trips.isEmpty()) Text(CONNECTED_TRIPS_EMPTY_STATE)
+        trips.forEach { trip ->
+            val role = connectedTripRoleLabel(trip, viewerUid) ?: return@forEach
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text(connectedTripRouteLabel(trip), style = MaterialTheme.typography.titleMedium)
+                    Text(formatDeparture(trip.departureEpochMillis))
+                    Text(connectedTripStatusLabel(trip), fontWeight = FontWeight.Bold)
+                    Text(role)
+                }
+            }
+        }
+        ConnectedUnavailableNote()
     }
 }
 

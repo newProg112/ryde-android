@@ -5,9 +5,11 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import uk.rydeapp.ryde.data.connected.ConnectedRequestStatus
+import uk.rydeapp.ryde.data.connected.ConnectedConfirmedTrip
 import uk.rydeapp.ryde.data.connected.ConnectedJourney
 import uk.rydeapp.ryde.data.connected.ConnectedJourneySnapshot
 import uk.rydeapp.ryde.data.connected.ConnectedSeatRequest
+import uk.rydeapp.ryde.data.connected.ConnectedTripStatus
 import java.time.LocalDateTime
 import java.time.ZoneId
 
@@ -20,10 +22,32 @@ class ConnectedJourneyScreenUiTest {
                 "Offer a journey",
                 "Discover offers",
                 "Your requests",
+                "Trips",
                 "Your offers",
                 "Incoming requests",
             ),
             ConnectedJourneySection.entries.map { it.label },
+        )
+    }
+
+    @Test
+    fun `confirmed trips expose only safe presentation and participant roles`() {
+        val later = trip(id = "journey-2_rider", departure = 4_070_995_200_000L)
+        val earlier = trip(id = "journey-1_rider", departure = 4_070_908_800_000L)
+
+        assertEquals(
+            listOf(earlier.id, later.id),
+            connectedTripsForParticipant(listOf(later, earlier), "rider").map { it.id },
+        )
+        assertEquals("Mansfield → Nottingham", connectedTripRouteLabel(earlier))
+        assertEquals("Status: CONFIRMED", connectedTripStatusLabel(earlier))
+        assertEquals("You're driving", connectedTripRoleLabel(earlier, "driver"))
+        assertEquals("You're riding", connectedTripRoleLabel(earlier, "rider"))
+        assertEquals(null, connectedTripRoleLabel(earlier, "stranger"))
+        assertTrue(connectedTripsForParticipant(listOf(earlier), "stranger").isEmpty())
+        assertEquals(
+            "No confirmed trips yet. A trip appears when a driver accepts a seat request.",
+            CONNECTED_TRIPS_EMPTY_STATE,
         )
     }
 
@@ -93,4 +117,16 @@ class ConnectedJourneyScreenUiTest {
         assertFalse(isConnectedDepartureFuture(ConnectedDepartureSelection(selectedDate, 11 * 60 + 59), now, zone))
         assertTrue(isConnectedDepartureFuture(ConnectedDepartureSelection(selectedDate, 12 * 60 + 1), now, zone))
     }
+
+    private fun trip(id: String, departure: Long) = ConnectedConfirmedTrip(
+        id = id,
+        journeyId = id.substringBefore("_rider"),
+        acceptedRequestId = id,
+        driverUid = "driver",
+        riderUid = "rider",
+        originArea = "Mansfield",
+        destinationArea = "Nottingham",
+        departureEpochMillis = departure,
+        status = ConnectedTripStatus.CONFIRMED,
+    )
 }

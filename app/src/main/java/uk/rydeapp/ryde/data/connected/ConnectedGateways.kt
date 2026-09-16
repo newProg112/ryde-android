@@ -83,7 +83,15 @@ class FirestoreConnectedJourneyStore(private val firestore: FirebaseFirestore) :
         val requests = (asDriver.documents + asRider.documents)
             .distinctBy { it.id }
             .mapNotNull { FirestoreJourneyMapper.request(it.id, it.data.orEmpty()) }
-        return ConnectedJourneySnapshot(journeys, requests)
+        val tripsAsDriver = firestore.collection(CONFIRMED_TRIPS)
+            .whereEqualTo("driverUid", uid).get(Source.SERVER).await()
+        val tripsAsRider = firestore.collection(CONFIRMED_TRIPS)
+            .whereEqualTo("riderUid", uid).get(Source.SERVER).await()
+        val confirmedTrips = (tripsAsDriver.documents + tripsAsRider.documents)
+            .distinctBy { it.id }
+            .mapNotNull { FirestoreJourneyMapper.confirmedTrip(it.id, it.data.orEmpty()) }
+            .sortedBy { it.departureEpochMillis }
+        return ConnectedJourneySnapshot(journeys, requests, confirmedTrips)
     }
 
     override suspend fun create(uid: String, draft: ConnectedJourneyDraft) {
@@ -130,10 +138,15 @@ class FirestoreConnectedJourneyStore(private val firestore: FirebaseFirestore) :
                 val journeyRef = firestore.collection(JOURNEYS).document(request.journeyId)
                 val journey = FirestoreJourneyMapper.journey(request.journeyId, transaction.get(journeyRef).data.orEmpty())
                     ?: error("Journey unavailable")
-                check(journey.driverUid == uid && journey.seatsRemaining > 0)
+                check(
+                    journey.driverUid == uid &&
+                        journey.seatsRemaining > 0 &&
+                        journey.departureEpochMillis > System.currentTimeMillis(),
+                )
                 val guardRef = firestore.collection(ACCEPTANCE_GUARDS).document(request.journeyId)
                 val guard = FirestoreJourneyMapper.acceptanceGuard(transaction.get(guardRef).data.orEmpty())
                     ?: error("Journey acceptance guard unavailable")
+                val tripRef = firestore.collection(CONFIRMED_TRIPS).document(requestId)
                 check(guard.driverUid == uid)
                 check(guard.acceptanceCount == journey.seatCapacity - journey.seatsRemaining)
                 transaction.update(journeyRef, "seatsRemaining", journey.seatsRemaining - 1)
@@ -144,6 +157,7 @@ class FirestoreConnectedJourneyStore(private val firestore: FirebaseFirestore) :
                         "lastAcceptedRequestId" to requestId,
                     ),
                 )
+                transaction.set(tripRef, FirestoreJourneyMapper.confirmedTripData(journey, request))
             }
             transaction.update(requestRef, "status", if (accept) "ACCEPTED" else "DECLINED")
         }.await()
@@ -153,5 +167,6 @@ class FirestoreConnectedJourneyStore(private val firestore: FirebaseFirestore) :
         const val JOURNEYS = "journeys"
         const val REQUESTS = "seatRequests"
         const val ACCEPTANCE_GUARDS = "journeyAcceptanceGuards"
+        const val CONFIRMED_TRIPS = "confirmedTrips"
     }
 }

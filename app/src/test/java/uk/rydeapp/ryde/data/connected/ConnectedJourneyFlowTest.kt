@@ -1,5 +1,6 @@
 package uk.rydeapp.ryde.data.connected
 
+import com.google.firebase.Timestamp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -46,6 +47,47 @@ class ConnectedJourneyFlowTest {
                     "status" to "CANCELLED",
                 ),
             )?.status,
+        )
+
+        val journey = ConnectedJourney(
+            id = "journey-1",
+            driverUid = "driver",
+            originArea = "Mansfield",
+            destinationArea = "Nottingham",
+            departureEpochMillis = 4_070_908_800_000L,
+            seatCapacity = 1,
+            seatsRemaining = 1,
+        )
+        val request = ConnectedSeatRequest(
+            id = "journey-1_rider",
+            journeyId = journey.id,
+            driverUid = journey.driverUid,
+            riderUid = "rider",
+            status = ConnectedRequestStatus.PENDING,
+        )
+        val tripData = FirestoreJourneyMapper.confirmedTripData(journey, request)
+        assertEquals(
+            ConnectedConfirmedTrip(
+                id = request.id,
+                journeyId = journey.id,
+                acceptedRequestId = request.id,
+                driverUid = "driver",
+                riderUid = "rider",
+                originArea = "Mansfield",
+                destinationArea = "Nottingham",
+                departureEpochMillis = journey.departureEpochMillis,
+                status = ConnectedTripStatus.CONFIRMED,
+            ),
+            FirestoreJourneyMapper.confirmedTrip(request.id, tripData),
+        )
+        assertEquals(null, FirestoreJourneyMapper.confirmedTrip("wrong", tripData))
+        assertEquals(null, FirestoreJourneyMapper.confirmedTrip(request.id, tripData + ("extra" to true)))
+        assertEquals(
+            null,
+            FirestoreJourneyMapper.confirmedTrip(
+                request.id,
+                tripData + ("departureAt" to Timestamp(0, 0)) + ("status" to "PENDING"),
+            ),
         )
     }
 
@@ -183,6 +225,15 @@ class ConnectedJourneyFlowTest {
         rider.refresh()
         assertEquals(ConnectedRequestStatus.ACCEPTED, rider.journeyState.value.requests.single().status)
         assertEquals(0, rider.journeyState.value.journeys.single().seatsRemaining)
+        val driverTrip = driver.journeyState.value.confirmedTrips.single()
+        val riderTrip = rider.journeyState.value.confirmedTrips.single()
+        assertEquals(pending.id, driverTrip.id)
+        assertEquals(driverTrip, riderTrip)
+        assertEquals(ConnectedTripStatus.CONFIRMED, riderTrip.status)
+
+        val stranger = repository("stranger", store)
+        stranger.refresh()
+        assertTrue(stranger.journeyState.value.confirmedTrips.isEmpty())
     }
 
     @Test
@@ -199,7 +250,26 @@ class ConnectedJourneyFlowTest {
 
         assertEquals(ConnectedJourneyCommandResult.Success, driver.decideConnectedRequest(request.id, false))
         assertEquals(1, driver.journeyState.value.journeys.single().seatsRemaining)
+        assertTrue(driver.journeyState.value.confirmedTrips.isEmpty())
         assertTrue(driver.decideConnectedRequest(request.id, true) is ConnectedJourneyCommandResult.Failure)
+        assertTrue(driver.journeyState.value.confirmedTrips.isEmpty())
+    }
+
+    @Test
+    fun `duplicate acceptance leaves one deterministic confirmed trip`() = runBlocking {
+        val store = MemoryJourneyStore()
+        val driver = repository("driver", store)
+        val rider = repository("rider", store)
+        driver.refresh()
+        driver.createConnectedJourney("Mansfield", "Nottingham", "2099-01-01 10:00", "1")
+        rider.refresh()
+        rider.requestConnectedSeat(rider.journeyState.value.journeys.single().id)
+        driver.refresh()
+        val requestId = driver.journeyState.value.requests.single().id
+
+        assertEquals(ConnectedJourneyCommandResult.Success, driver.decideConnectedRequest(requestId, true))
+        assertTrue(driver.decideConnectedRequest(requestId, true) is ConnectedJourneyCommandResult.Failure)
+        assertEquals(listOf(requestId), driver.journeyState.value.confirmedTrips.map { it.id })
     }
 
     @Test
@@ -263,10 +333,12 @@ class ConnectedJourneyFlowTest {
     private class MemoryJourneyStore : ConnectedJourneyStore {
         private val journeys = linkedMapOf<String, ConnectedJourney>()
         private val requests = linkedMapOf<String, ConnectedSeatRequest>()
+        private val confirmedTrips = linkedMapOf<String, ConnectedConfirmedTrip>()
 
         override suspend fun load(uid: String) = ConnectedJourneySnapshot(
             journeys.values.toList(),
             requests.values.filter { it.driverUid == uid || it.riderUid == uid },
+            confirmedTrips.values.filter { it.driverUid == uid || it.riderUid == uid },
         )
 
         override suspend fun create(uid: String, draft: ConnectedJourneyDraft) {
@@ -295,8 +367,20 @@ class ConnectedJourneyFlowTest {
             check(request.driverUid == uid && request.status == ConnectedRequestStatus.PENDING)
             val journey = checkNotNull(journeys[request.journeyId])
             if (accept) {
-                check(journey.seatsRemaining > 0)
+                check(journey.seatsRemaining > 0 && journey.departureEpochMillis > System.currentTimeMillis())
+                check(requestId !in confirmedTrips)
                 journeys[journey.id] = journey.copy(seatsRemaining = journey.seatsRemaining - 1)
+                confirmedTrips[requestId] = ConnectedConfirmedTrip(
+                    id = requestId,
+                    journeyId = journey.id,
+                    acceptedRequestId = requestId,
+                    driverUid = request.driverUid,
+                    riderUid = request.riderUid,
+                    originArea = journey.originArea,
+                    destinationArea = journey.destinationArea,
+                    departureEpochMillis = journey.departureEpochMillis,
+                    status = ConnectedTripStatus.CONFIRMED,
+                )
             }
             requests[requestId] = request.copy(status = if (accept) ConnectedRequestStatus.ACCEPTED else ConnectedRequestStatus.DECLINED)
         }

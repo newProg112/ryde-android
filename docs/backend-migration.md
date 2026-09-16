@@ -3,7 +3,7 @@
 ## Phase 9C-1 architecture and schema
 
 `LOCAL_DEMO` remains Firebase-free and permanently available. In `CONNECTED`, Firebase Auth
-owns the session and Firestore owns the profile plus the narrow 9C-1 journey/request slice.
+owns the session and Firestore owns the profile plus the narrow 9C-1 journey/request/confirmed-trip slice.
 Firebase types stay behind connected gateways/stores; the connected UI does not expose
 unmigrated capabilities. Reads use the Firestore server source and an in-memory cache.
 Failures become safe messages, cancellation is rethrown, and sign-out clears session data.
@@ -42,7 +42,7 @@ firebase emulators:start --only auth,firestore --project ryde-79893
 Auth uses `9099`, Firestore `8080`, and the Emulator UI `4000`. The Android Emulator reaches
 the development host as `10.0.2.2`, which the debug Firebase factory configures before any
 SDK operation. This is the manual CONNECTED environment; its disposable accounts, profiles,
-journeys and requests remain under project namespace `ryde-79893`.
+journeys, requests and confirmed trips remain under project namespace `ryde-79893`.
 
 Run the automated rules suite in its separate demo namespace and on its dedicated ports with:
 
@@ -146,6 +146,16 @@ The first 9C slice adds only these emulator-owned documents:
   driverUid: string          # equals the referenced journey owner; immutable
   acceptanceCount: int       # initially 0; equals capacity minus remaining
   lastAcceptedRequestId: string | null
+
+/confirmedTrips/{acceptedRequestId}
+  journeyId: string          # copied from the accepted request; immutable
+  acceptedRequestId: string  # equals the document ID; immutable
+  driverUid: string          # copied from the accepted request; immutable
+  riderUid: string           # copied from the accepted request; immutable
+  originArea: string         # copied from the journey broad area; immutable
+  destinationArea: string    # copied from the journey broad area; immutable
+  departureAt: timestamp     # copied from the journey; immutable
+  status: "CONFIRMED"        # immutable in this slice
 ```
 
 Any authenticated emulator user may read the intentionally small journey document so that
@@ -169,12 +179,21 @@ a guard fail closed: client rules cannot create a guard later, create requests a
 decrement it, or decide its requests. The guard is readable only by its driver, cannot be listed or
 deleted, and is not exposed through the broadly readable journey document.
 
-Acceptance atomically updates the journey, request and guard. Rules require exactly one positive
-seat decrement, exactly one `PENDING -> ACCEPTED` request named by the guard, an incremented guard
-count, and agreement between that count and `seatCapacity - seatsRemaining` before and after the
-write. Each of the three write rules checks the other two documents with `get()` and `getAfter()`.
-This reverse link prevents a driver from reducing availability without accepting the matching
-request; the request's terminal state prevents replay. Declines change only the guarded request.
+Acceptance atomically updates the journey, request and guard and creates exactly one confirmed
+trip whose deterministic document ID equals the accepted request ID. Rules require exactly one
+positive seat decrement, exactly one `PENDING -> ACCEPTED` request named by the guard, an
+incremented guard count, agreement between that count and
+`seatCapacity - seatsRemaining` before and after the write, and a newly created confirmed trip.
+The confirmed-trip create rule validates all four writes and every trip field against the
+persisted request and journey. Each of the other acceptance writes requires that new trip, so
+neither an acceptance without a trip nor a standalone trip can commit. The request's terminal
+state and deterministic trip ID prevent replay. Declines still change only the guarded request.
+
+Confirmed trips are private. Only their driver and rider can read them; the client loads them with
+separate `driverUid == currentUid` and `riderUid == currentUid` queries and never lists the whole
+collection. Clients cannot update or delete trips. A driver can issue the trip create only inside
+the valid acceptance transaction; rider, stranger and standalone creates are denied. Acceptance
+also requires `departureAt > request.time`, while decline behaviour is unchanged.
 The rules cannot establish real-world seat occupancy, prevent colluding accounts, compel a driver
 to accept fairly, repair legacy or privileged-server writes, or keep a pending request available
 after another acceptance consumes the last seat.
@@ -188,12 +207,14 @@ request:          create PENDING -> ACCEPTED
                                  -> DECLINED
                                  -> CANCELLED -> PENDING while the journey is
                                                  upcoming and has capacity
+confirmed trip:  absent -> CONFIRMED only with the matching request acceptance
 ```
 
 Only rider-owned pending-request cancellation and safe re-requesting are supported. Accepted
-and declined requests remain terminal. There is no offer cancellation, confirmed-trip or later
-journey lifecycle, private pickup/drop-off, exact/live location, pricing/payment, messaging,
-notification, Circle, trust, rating, Function or Storage data in connected mode.
+and declined requests remain terminal. Confirmed trips have no actions or lifecycle transitions.
+There is no offer cancellation, later journey lifecycle, private pickup/drop-off, exact/live
+location, pricing/payment, messaging, notification, Circle, trust, rating, Function or Storage
+data in connected mode.
 
 ## Manual two-emulator test
 
@@ -211,10 +232,13 @@ notification, Circle, trust, rating, Function or Storage data in connected mode.
    refresh or relaunch. Re-request it while the journey is upcoming and still has capacity.
 6. On A tap **Refresh**, then accept or decline the pending request. On B tap **Refresh** and
    confirm the same terminal status; neither terminal status can be cancelled or re-requested.
-7. For the acceptance path, repeat with a one-seat offer and two rider accounts; only one pending
+7. After acceptance, open **Trips** on both A and B. Confirm each sees exactly one private
+   confirmed trip with the genuine broad-area route, departure, `Status: CONFIRMED`, and the
+   appropriate `You're driving` or `You're riding` role. A third account must not see the trip.
+8. For the acceptance path, repeat with a one-seat offer and two rider accounts; only one pending
    request can be accepted and the other acceptance must fail without a negative seat count.
 
-Remaining 9C work includes offer cancellation policy, journey and confirmed-trip lifecycle,
+Remaining 9C work includes offer cancellation policy and later confirmed-trip/journey lifecycle,
 richer discovery/query design, Circles, and any trusted backend operation needed for stronger
 multi-document invariants. None of those capabilities are silently delegated to the fictional
 local-demo repository in connected mode.

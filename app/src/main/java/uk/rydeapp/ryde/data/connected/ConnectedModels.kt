@@ -76,6 +76,8 @@ data class ConnectedProfileDraft(
 
 enum class ConnectedRequestStatus { PENDING, ACCEPTED, DECLINED, CANCELLED }
 
+enum class ConnectedTripStatus { CONFIRMED }
+
 data class ConnectedJourney(
     val id: String,
     val driverUid: String,
@@ -94,6 +96,18 @@ data class ConnectedSeatRequest(
     val status: ConnectedRequestStatus,
 )
 
+data class ConnectedConfirmedTrip(
+    val id: String,
+    val journeyId: String,
+    val acceptedRequestId: String,
+    val driverUid: String,
+    val riderUid: String,
+    val originArea: String,
+    val destinationArea: String,
+    val departureEpochMillis: Long,
+    val status: ConnectedTripStatus,
+)
+
 data class ConnectedJourneyAcceptanceGuard(
     val driverUid: String,
     val acceptanceCount: Int,
@@ -103,6 +117,7 @@ data class ConnectedJourneyAcceptanceGuard(
 data class ConnectedJourneySnapshot(
     val journeys: List<ConnectedJourney> = emptyList(),
     val requests: List<ConnectedSeatRequest> = emptyList(),
+    val confirmedTrips: List<ConnectedConfirmedTrip> = emptyList(),
 )
 
 data class ConnectedJourneyDraft(
@@ -158,6 +173,16 @@ object FirestoreJourneyMapper {
     private val journeyFields = setOf("driverUid", "originArea", "destinationArea", "departureAt", "seatCapacity", "seatsRemaining", "status")
     private val requestFields = setOf("journeyId", "driverUid", "riderUid", "status")
     private val acceptanceGuardFields = setOf("driverUid", "acceptanceCount", "lastAcceptedRequestId")
+    private val confirmedTripFields = setOf(
+        "journeyId",
+        "acceptedRequestId",
+        "driverUid",
+        "riderUid",
+        "originArea",
+        "destinationArea",
+        "departureAt",
+        "status",
+    )
 
     fun journeyData(driverUid: String, draft: ConnectedJourneyDraft): Map<String, Any> = mapOf(
         "driverUid" to driverUid,
@@ -180,6 +205,20 @@ object FirestoreJourneyMapper {
         "driverUid" to driverUid,
         "acceptanceCount" to 0,
         "lastAcceptedRequestId" to null,
+    )
+
+    fun confirmedTripData(
+        journey: ConnectedJourney,
+        request: ConnectedSeatRequest,
+    ): Map<String, Any> = mapOf(
+        "journeyId" to journey.id,
+        "acceptedRequestId" to request.id,
+        "driverUid" to request.driverUid,
+        "riderUid" to request.riderUid,
+        "originArea" to journey.originArea,
+        "destinationArea" to journey.destinationArea,
+        "departureAt" to journey.departureEpochMillis.toTimestamp(),
+        "status" to ConnectedTripStatus.CONFIRMED.name,
     )
 
     fun journey(id: String, data: Map<String, Any?>): ConnectedJourney? {
@@ -220,11 +259,39 @@ object FirestoreJourneyMapper {
         }
     }
 
+    fun confirmedTrip(id: String, data: Map<String, Any?>): ConnectedConfirmedTrip? {
+        if (data.keys != confirmedTripFields) return null
+        val status = runCatching {
+            ConnectedTripStatus.valueOf(data["status"] as? String ?: return null)
+        }.getOrNull() ?: return null
+        return ConnectedConfirmedTrip(
+            id = id,
+            journeyId = data["journeyId"] as? String ?: return null,
+            acceptedRequestId = data["acceptedRequestId"] as? String ?: return null,
+            driverUid = data["driverUid"] as? String ?: return null,
+            riderUid = data["riderUid"] as? String ?: return null,
+            originArea = data["originArea"] as? String ?: return null,
+            destinationArea = data["destinationArea"] as? String ?: return null,
+            departureEpochMillis = (data["departureAt"] as? Timestamp)?.toDate()?.time ?: return null,
+            status = status,
+        ).takeIf {
+            it.id == it.acceptedRequestId &&
+                it.acceptedRequestId == "${it.journeyId}_${it.riderUid}" &&
+                it.driverUid.isNotBlank() && it.driverUid != it.riderUid &&
+                ConnectedJourneyValidator.isBroadArea(it.originArea) &&
+                ConnectedJourneyValidator.isBroadArea(it.destinationArea) &&
+                !it.originArea.equals(it.destinationArea, true)
+        }
+    }
+
     private fun isValidJourney(journey: ConnectedJourney): Boolean =
         journey.driverUid.isNotBlank() && ConnectedJourneyValidator.isBroadArea(journey.originArea) &&
             ConnectedJourneyValidator.isBroadArea(journey.destinationArea) &&
             !journey.originArea.equals(journey.destinationArea, true) &&
             journey.seatCapacity in 1..8 && journey.seatsRemaining in 0..journey.seatCapacity
+
+    private fun Long.toTimestamp(): Timestamp =
+        Timestamp(this / 1000, ((this % 1000) * 1_000_000).toInt())
 }
 
 object FirestoreProfileMapper {

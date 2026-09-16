@@ -85,6 +85,17 @@ const request = (journeyId, driverUid, riderUid, status = "PENDING") => ({
 const guard = (driverUid, acceptanceCount = 0, lastAcceptedRequestId = null) => ({
   driverUid, acceptanceCount, lastAcceptedRequestId,
 });
+const confirmedTrip = (requestId, requestData, journeyData, overrides = {}) => ({
+  journeyId: requestData.journeyId,
+  acceptedRequestId: requestId,
+  driverUid: requestData.driverUid,
+  riderUid: requestData.riderUid,
+  originArea: journeyData.originArea,
+  destinationArea: journeyData.destinationArea,
+  departureAt: journeyData.departureAt,
+  status: "CONFIRMED",
+  ...overrides,
+});
 
 const createJourney = (
   db,
@@ -100,7 +111,15 @@ const createJourney = (
   return batch.commit();
 };
 
-const acceptRequest = (db, journeyId, requestId, seatsRemaining, acceptanceCount) => {
+const acceptanceBatch = (
+  db,
+  journeyId,
+  requestId,
+  seatsRemaining,
+  acceptanceCount,
+  tripData,
+  tripId = requestId,
+) => {
   const batch = writeBatch(db);
   batch.update(doc(db, `journeys/${journeyId}`), { seatsRemaining });
   batch.update(doc(db, `seatRequests/${requestId}`), { status: "ACCEPTED" });
@@ -108,8 +127,27 @@ const acceptRequest = (db, journeyId, requestId, seatsRemaining, acceptanceCount
     acceptanceCount,
     lastAcceptedRequestId: requestId,
   });
+  if (tripData) batch.set(doc(db, `confirmedTrips/${tripId}`), tripData);
   return batch.commit();
 };
+
+const acceptRequest = (db, journeyId, requestId, seatsRemaining, acceptanceCount) =>
+  runTransaction(db, async (transaction) => {
+    const journeyRef = doc(db, `journeys/${journeyId}`);
+    const requestRef = doc(db, `seatRequests/${requestId}`);
+    const guardRef = doc(db, `journeyAcceptanceGuards/${journeyId}`);
+    const [journeySnapshot, requestSnapshot] = await Promise.all([
+      transaction.get(journeyRef),
+      transaction.get(requestRef),
+    ]);
+    transaction.update(journeyRef, { seatsRemaining });
+    transaction.update(requestRef, { status: "ACCEPTED" });
+    transaction.update(guardRef, { acceptanceCount, lastAcceptedRequestId: requestId });
+    transaction.set(
+      doc(db, `confirmedTrips/${requestId}`),
+      confirmedTrip(requestId, requestSnapshot.data(), journeySnapshot.data()),
+    );
+  });
 
 const requestSeatLikeGateway = (db, journeyId, riderUid) => runTransaction(db, async (transaction) => {
   const journeyRef = doc(db, `journeys/${journeyId}`);
@@ -312,6 +350,44 @@ test("re-request is denied after capacity is consumed or departure has passed", 
   ));
 });
 
+test("departed pending request cannot be accepted and leaves every document unchanged", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  await environment.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await setDoc(doc(db, "journeys/expired-acceptance"), {
+      ...journey("driver", 1),
+      departureAt: Timestamp.fromMillis(Date.now() - 60_000),
+    });
+    await setDoc(doc(db, "journeyAcceptanceGuards/expired-acceptance"), guard("driver"));
+    await setDoc(
+      doc(db, "seatRequests/expired-acceptance_rider"),
+      request("expired-acceptance", "driver", "rider"),
+    );
+  });
+
+  await assertFails(acceptRequest(
+    driver,
+    "expired-acceptance",
+    "expired-acceptance_rider",
+    0,
+    1,
+  ));
+
+  assert.equal(
+    (await getDoc(doc(driver, "seatRequests/expired-acceptance_rider"))).data().status,
+    "PENDING",
+  );
+  assert.equal((await getDoc(doc(driver, "journeys/expired-acceptance"))).data().seatsRemaining, 1);
+  assert.deepEqual(
+    (await getDoc(doc(driver, "journeyAcceptanceGuards/expired-acceptance"))).data(),
+    guard("driver"),
+  );
+  assert.equal((await getDocs(query(
+    collection(driver, "confirmedTrips"),
+    where("driverUid", "==", "driver"),
+  ))).size, 0);
+});
+
 test("accepted and declined requests remain terminal for riders", async () => {
   const driver = environment.authenticatedContext("driver").firestore();
   const acceptedRider = environment.authenticatedContext("accepted-rider").firestore();
@@ -345,19 +421,142 @@ test("only the driver may decide and acceptance requires an atomic one-seat decr
   await assertFails(updateDoc(doc(rider, "seatRequests/j1_rider"), { status: "ACCEPTED" }));
   await assertFails(updateDoc(doc(driver, "seatRequests/j1_rider"), { status: "ACCEPTED" }));
 
-  const batch = writeBatch(driver);
-  batch.update(doc(driver, "journeys/j1"), { seatsRemaining: 1 });
-  batch.update(doc(driver, "seatRequests/j1_rider"), { status: "ACCEPTED" });
-  batch.update(doc(driver, "journeyAcceptanceGuards/j1"), {
-    acceptanceCount: 1,
-    lastAcceptedRequestId: "j1_rider",
-  });
-  await assertSucceeds(batch.commit());
+  await assertSucceeds(acceptRequest(driver, "j1", "j1_rider", 1, 1));
   assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().seatsRemaining, 1);
   assert.deepEqual((await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data(), guard("driver", 1, "j1_rider"));
+  assert.equal((await getDoc(doc(driver, "confirmedTrips/j1_rider"))).data().status, "CONFIRMED");
   await assertFails(updateDoc(doc(driver, "seatRequests/j1_rider"), { status: "DECLINED" }));
   await assertFails(acceptRequest(driver, "j1", "j1_rider", 0, 2));
   assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().seatsRemaining, 1);
+});
+
+test("confirmed trip is created once and remains private and immutable", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  const rider = environment.authenticatedContext("rider").firestore();
+  const stranger = environment.authenticatedContext("stranger").firestore();
+  const anonymous = environment.unauthenticatedContext().firestore();
+  await assertSucceeds(createJourney(driver, "j1", "driver", 1));
+  await assertSucceeds(setDoc(doc(rider, "seatRequests/j1_rider"), request("j1", "driver", "rider")));
+
+  await assertSucceeds(acceptRequest(driver, "j1", "j1_rider", 0, 1));
+
+  const driverTrip = await assertSucceeds(getDoc(doc(driver, "confirmedTrips/j1_rider")));
+  const riderTrip = await assertSucceeds(getDoc(doc(rider, "confirmedTrips/j1_rider")));
+  assert.deepEqual(driverTrip.data(), riderTrip.data());
+  assert.equal(driverTrip.data().acceptedRequestId, "j1_rider");
+  assert.equal(driverTrip.data().status, "CONFIRMED");
+  assert.equal(
+    (await assertSucceeds(getDocs(query(
+      collection(driver, "confirmedTrips"),
+      where("driverUid", "==", "driver"),
+    )))).size,
+    1,
+  );
+  assert.equal(
+    (await assertSucceeds(getDocs(query(
+      collection(rider, "confirmedTrips"),
+      where("riderUid", "==", "rider"),
+    )))).size,
+    1,
+  );
+  await assertFails(getDoc(doc(stranger, "confirmedTrips/j1_rider")));
+  await assertFails(getDocs(query(
+    collection(stranger, "confirmedTrips"),
+    where("driverUid", "==", "driver"),
+  )));
+  await assertFails(getDoc(doc(anonymous, "confirmedTrips/j1_rider")));
+  await assertFails(getDocs(query(
+    collection(anonymous, "confirmedTrips"),
+    where("riderUid", "==", "rider"),
+  )));
+  await assertFails(getDocs(collection(driver, "confirmedTrips")));
+  await assertFails(updateDoc(doc(driver, "confirmedTrips/j1_rider"), { status: "CONFIRMED" }));
+  await assertFails(updateDoc(doc(rider, "confirmedTrips/j1_rider"), { originArea: "Derby" }));
+  await assertFails(deleteDoc(doc(driver, "confirmedTrips/j1_rider")));
+  await assertFails(deleteDoc(doc(rider, "confirmedTrips/j1_rider")));
+
+  await assertFails(acceptRequest(driver, "j1", "j1_rider", 0, 1));
+  assert.equal((await getDocs(query(
+    collection(driver, "confirmedTrips"),
+    where("driverUid", "==", "driver"),
+  ))).size, 1);
+});
+
+test("acceptance and confirmed trip creation require all four valid coupled writes", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  const rider = environment.authenticatedContext("rider").firestore();
+  const stranger = environment.authenticatedContext("stranger").firestore();
+  const sourceJourney = journey("driver", 1);
+  const sourceRequest = request("j1", "driver", "rider");
+  const validTrip = confirmedTrip("j1_rider", sourceRequest, sourceJourney);
+  await assertSucceeds(createJourney(driver, "j1", "driver", 1, guard("driver"), sourceJourney));
+  await assertSucceeds(setDoc(doc(rider, "seatRequests/j1_rider"), sourceRequest));
+
+  await assertFails(acceptanceBatch(driver, "j1", "j1_rider", 0, 1, null));
+  await assertFails(setDoc(doc(driver, "confirmedTrips/j1_rider"), validTrip));
+  await assertFails(setDoc(doc(rider, "confirmedTrips/j1_rider"), validTrip));
+  await assertFails(setDoc(doc(stranger, "confirmedTrips/j1_rider"), validTrip));
+  assert.equal((await getDoc(doc(driver, "seatRequests/j1_rider"))).data().status, "PENDING");
+  assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().seatsRemaining, 1);
+  assert.deepEqual((await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data(), guard("driver"));
+});
+
+test("confirmed trip exact identifiers participants route departure status and fields are enforced", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  const rider = environment.authenticatedContext("rider").firestore();
+  const invalidCases = [
+    { tripId: (requestId) => `${requestId}-other`, overrides: {} },
+    { overrides: { acceptedRequestId: "other" } },
+    { overrides: { journeyId: "other" } },
+    { overrides: { driverUid: "stranger" } },
+    { overrides: { riderUid: "stranger" } },
+    { overrides: { originArea: "Derby" } },
+    { overrides: { status: "PENDING" } },
+    { overrides: { forged: true } },
+  ];
+
+  for (const [index, invalid] of invalidCases.entries()) {
+    const journeyId = `invalid-${index}`;
+    const requestId = `${journeyId}_rider`;
+    const sourceJourney = journey("driver", 1);
+    const sourceRequest = request(journeyId, "driver", "rider");
+    await assertSucceeds(createJourney(
+      driver,
+      journeyId,
+      "driver",
+      1,
+      guard("driver"),
+      sourceJourney,
+    ));
+    await assertSucceeds(setDoc(doc(rider, `seatRequests/${requestId}`), sourceRequest));
+    const invalidTrip = confirmedTrip(requestId, sourceRequest, sourceJourney, invalid.overrides);
+    await assertFails(acceptanceBatch(
+      driver,
+      journeyId,
+      requestId,
+      0,
+      1,
+      invalidTrip,
+      invalid.tripId?.(requestId) ?? requestId,
+    ));
+  }
+
+  const journeyId = "invalid-departure";
+  const requestId = `${journeyId}_rider`;
+  const sourceJourney = journey("driver", 1);
+  const sourceRequest = request(journeyId, "driver", "rider");
+  await assertSucceeds(createJourney(driver, journeyId, "driver", 1, guard("driver"), sourceJourney));
+  await assertSucceeds(setDoc(doc(rider, `seatRequests/${requestId}`), sourceRequest));
+  await assertFails(acceptanceBatch(
+    driver,
+    journeyId,
+    requestId,
+    0,
+    1,
+    confirmedTrip(requestId, sourceRequest, sourceJourney, {
+      departureAt: Timestamp.fromMillis(sourceJourney.departureAt.toMillis() + 1_000),
+    }),
+  ));
 });
 
 test("two distinct pending requests can be accepted sequentially", async () => {
@@ -505,6 +704,15 @@ test("simultaneous candidates cannot overbook one seat", async () => {
   assert.equal(requests.filter((snapshot) => snapshot.data().status === "ACCEPTED").length, 1);
   assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().seatsRemaining, 0);
   assert.equal((await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data().acceptanceCount, 1);
+  const trips = await getDocs(query(
+    collection(driver, "confirmedTrips"),
+    where("driverUid", "==", "driver"),
+  ));
+  assert.equal(trips.size, 1);
+  assert.equal(
+    trips.docs[0].id,
+    requests.find((snapshot) => snapshot.data().status === "ACCEPTED").id,
+  );
 });
 
 test("the expected successful reads return documents", async () => {
