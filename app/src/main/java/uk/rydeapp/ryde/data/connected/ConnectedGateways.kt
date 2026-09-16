@@ -2,6 +2,7 @@ package uk.rydeapp.ryde.data.connected
 
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.Source
 import kotlinx.coroutines.tasks.await
 import uk.rydeapp.ryde.domain.model.SavedPlace
@@ -24,6 +25,7 @@ interface ConnectedJourneyStore {
     suspend fun create(uid: String, draft: ConnectedJourneyDraft)
     suspend fun requestSeat(uid: String, journeyId: String)
     suspend fun cancelRequest(uid: String, requestId: String)
+    suspend fun cancelConfirmedSeat(uid: String, tripId: String)
     suspend fun decide(uid: String, requestId: String, accept: Boolean)
 }
 
@@ -125,6 +127,35 @@ class FirestoreConnectedJourneyStore(private val firestore: FirebaseFirestore) :
                 ?: error("Request unavailable")
             check(request.riderUid == uid && request.status == ConnectedRequestStatus.PENDING)
             transaction.update(requestRef, "status", ConnectedRequestStatus.CANCELLED.name)
+        }.await()
+    }
+
+    override suspend fun cancelConfirmedSeat(uid: String, tripId: String) {
+        val tripRef = firestore.collection(CONFIRMED_TRIPS).document(tripId)
+        firestore.runTransaction { transaction ->
+            val trip = FirestoreJourneyMapper.confirmedTrip(tripId, transaction.get(tripRef).data.orEmpty())
+                ?: error("Trip unavailable")
+            check(trip.riderUid == uid && trip.status == ConnectedTripStatus.CONFIRMED)
+            val requestRef = firestore.collection(REQUESTS).document(trip.acceptedRequestId)
+            val journeyRef = firestore.collection(JOURNEYS).document(trip.journeyId)
+            val request = FirestoreJourneyMapper.request(trip.acceptedRequestId, transaction.get(requestRef).data.orEmpty())
+                ?: error("Request unavailable")
+            val journey = FirestoreJourneyMapper.journey(trip.journeyId, transaction.get(journeyRef).data.orEmpty())
+                ?: error("Journey unavailable")
+            check(request.status == ConnectedRequestStatus.ACCEPTED && request.riderUid == uid)
+            check(request.journeyId == journey.id && request.driverUid == journey.driverUid && trip.driverUid == journey.driverUid)
+            check(journey.departureEpochMillis > System.currentTimeMillis() && journey.seatsRemaining < journey.seatCapacity)
+            transaction.update(requestRef, "status", ConnectedRequestStatus.CANCELLED_AFTER_ACCEPTANCE.name)
+            transaction.update(tripRef, mapOf(
+                "status" to ConnectedTripStatus.CANCELLED_BY_RIDER.name,
+                "cancelledAt" to FieldValue.serverTimestamp(),
+            ))
+            transaction.update(journeyRef, "seatsRemaining", journey.seatsRemaining + 1)
+            // Riders cannot read the private guard. Rules validate this blind decrement.
+            transaction.update(firestore.collection(ACCEPTANCE_GUARDS).document(journey.id), mapOf(
+                "acceptanceCount" to FieldValue.increment(-1L),
+                "lastCancelledRequestId" to trip.acceptedRequestId,
+            ))
         }.await()
     }
 

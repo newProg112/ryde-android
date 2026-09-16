@@ -15,6 +15,21 @@ import java.time.ZoneId
 
 class ConnectedJourneyScreenUiTest {
     @Test
+    fun `only rider can cancel upcoming confirmed trip and cancelled history is terminal`() {
+        val confirmed = trip("journey-1_rider", 4_070_908_800_000L)
+        assertTrue(canCancelConnectedConfirmedSeat(confirmed, "rider", confirmed.departureEpochMillis - 1))
+        assertFalse(canCancelConnectedConfirmedSeat(confirmed, "driver", 0))
+        assertFalse(canCancelConnectedConfirmedSeat(confirmed, "stranger", 0))
+        assertFalse(canCancelConnectedConfirmedSeat(confirmed, "rider", confirmed.departureEpochMillis))
+        val cancelled = confirmed.copy(status = ConnectedTripStatus.CANCELLED_BY_RIDER, cancelledAtEpochMillis = 1)
+        assertFalse(canCancelConnectedConfirmedSeat(cancelled, "rider", 0))
+        assertEquals("Status: CANCELLED_BY_RIDER · Cancelled by rider", connectedTripStatusLabel(cancelled))
+        assertEquals("Driver", connectedTripRoleLabel(cancelled, "driver"))
+        assertEquals("Rider", connectedTripRoleLabel(cancelled, "rider"))
+        assertEquals(listOf(cancelled), connectedTripsForParticipant(listOf(cancelled), "rider"))
+        assertEquals(listOf(cancelled), connectedTripsForParticipant(listOf(cancelled), "driver"))
+    }
+    @Test
     fun `connected journey navigation exposes persistent rider requests`() {
         assertEquals(
             listOf(

@@ -7,7 +7,7 @@ import {
   initializeTestEnvironment,
 } from "@firebase/rules-unit-testing";
 import {
-  Timestamp, collection, deleteDoc, doc, getDoc, getDocs, query, runTransaction, setDoc, updateDoc, where, writeBatch,
+  Timestamp, collection, deleteDoc, doc, getDoc, getDocs, increment, query, runTransaction, serverTimestamp, setDoc, updateDoc, where, writeBatch,
 } from "firebase/firestore";
 import { deleteApp, initializeApp } from "firebase/app";
 import {
@@ -157,6 +157,234 @@ const requestSeatLikeGateway = (db, journeyId, riderUid) => runTransaction(db, a
     doc(db, `seatRequests/${journeyId}_${riderUid}`),
     request(journeyId, journeySnapshot.data().driverUid, riderUid),
   );
+});
+
+const cancelConfirmedBatch = (db, journeyId, requestId, seatsRemaining, options = {}) => {
+  const batch = writeBatch(db);
+  if (options.omit !== "journey") batch.update(doc(db, `journeys/${journeyId}`), {
+    seatsRemaining, ...options.journey,
+  });
+  if (options.omit !== "request") batch.update(doc(db, `seatRequests/${requestId}`), {
+    status: "CANCELLED_AFTER_ACCEPTANCE", ...options.request,
+  });
+  if (options.omit !== "trip") batch.update(doc(db, `confirmedTrips/${requestId}`), {
+    status: "CANCELLED_BY_RIDER", cancelledAt: serverTimestamp(), ...options.trip,
+  });
+  if (options.omit !== "guard") batch.update(doc(db, `journeyAcceptanceGuards/${journeyId}`), {
+    acceptanceCount: increment(-1), lastCancelledRequestId: requestId, ...options.guard,
+  });
+  return batch.commit();
+};
+
+const cancelConfirmedLikeGateway = (db, journeyId, requestId) => runTransaction(db, async (transaction) => {
+  const tripRef = doc(db, `confirmedTrips/${requestId}`);
+  const requestRef = doc(db, `seatRequests/${requestId}`);
+  const journeyRef = doc(db, `journeys/${journeyId}`);
+  const tripSnapshot = await transaction.get(tripRef);
+  const requestSnapshot = await transaction.get(requestRef);
+  const journeySnapshot = await transaction.get(journeyRef);
+  if (tripSnapshot.data().status !== "CONFIRMED" || requestSnapshot.data().status !== "ACCEPTED") {
+    throw new Error("Booking is terminal");
+  }
+  transaction.update(tripRef, { status: "CANCELLED_BY_RIDER", cancelledAt: serverTimestamp() });
+  transaction.update(requestRef, { status: "CANCELLED_AFTER_ACCEPTANCE" });
+  transaction.update(journeyRef, { seatsRemaining: journeySnapshot.data().seatsRemaining + 1 });
+  transaction.update(doc(db, `journeyAcceptanceGuards/${journeyId}`), {
+    acceptanceCount: increment(-1), lastCancelledRequestId: requestId,
+  });
+});
+
+async function acceptedCancellationFixture(seats = 2) {
+  const driver = environment.authenticatedContext("driver").firestore();
+  const rider = environment.authenticatedContext("rider").firestore();
+  await assertSucceeds(createJourney(driver, "j1", "driver", seats));
+  await assertSucceeds(requestSeatLikeGateway(rider, "j1", "rider"));
+  await assertSucceeds(acceptRequest(driver, "j1", "j1_rider", seats - 1, 1));
+  return { driver, rider };
+}
+
+test("rider releases exactly one allocation and both participants retain private cancelled history", async () => {
+  const { driver, rider } = await acceptedCancellationFixture(1);
+  const before = (await getDoc(doc(rider, "confirmedTrips/j1_rider"))).data();
+  await assertFails(getDoc(doc(rider, "journeyAcceptanceGuards/j1")));
+  await assertSucceeds(cancelConfirmedLikeGateway(rider, "j1", "j1_rider"));
+  const cancelled = (await getDoc(doc(rider, "confirmedTrips/j1_rider"))).data();
+  assert.equal(cancelled.status, "CANCELLED_BY_RIDER");
+  assert.ok(cancelled.cancelledAt instanceof Timestamp);
+  assert.deepEqual(cancelled, { ...before, status: "CANCELLED_BY_RIDER", cancelledAt: cancelled.cancelledAt });
+  assert.deepEqual((await getDoc(doc(driver, "confirmedTrips/j1_rider"))).data(), cancelled);
+  for (const db of [driver, rider]) {
+    assert.equal((await getDoc(doc(db, "seatRequests/j1_rider"))).data().status, "CANCELLED_AFTER_ACCEPTANCE");
+  }
+  assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().status, "OPEN");
+  assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().seatsRemaining, 1);
+  assert.deepEqual((await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data(), {
+    ...guard("driver", 0, "j1_rider"), lastCancelledRequestId: "j1_rider",
+  });
+  await assertFails(cancelConfirmedBatch(rider, "j1", "j1_rider", 1));
+  await assert.rejects(cancelConfirmedLikeGateway(rider, "j1", "j1_rider"), /Booking is terminal/);
+  await assertFails(requestSeatLikeGateway(rider, "j1", "rider"));
+  await assertFails(updateDoc(doc(rider, "seatRequests/j1_rider"), { status: "CANCELLED" }));
+  await assertFails(getDoc(doc(rider, "journeyAcceptanceGuards/j1")));
+  const other = environment.authenticatedContext("other").firestore();
+  const stranger = environment.authenticatedContext("stranger").firestore();
+  const anonymous = environment.unauthenticatedContext().firestore();
+  for (const db of [other, stranger, anonymous]) {
+    await assertFails(getDoc(doc(db, "confirmedTrips/j1_rider")));
+    await assertFails(getDoc(doc(db, "seatRequests/j1_rider")));
+    await assertFails(cancelConfirmedBatch(db, "j1", "j1_rider", 2));
+  }
+  await assertFails(deleteDoc(doc(rider, "confirmedTrips/j1_rider")));
+  await assertFails(deleteDoc(doc(driver, "seatRequests/j1_rider")));
+  await assertFails(getDocs(collection(driver, "confirmedTrips")));
+  await assertSucceeds(requestSeatLikeGateway(other, "j1", "other"));
+  await assertSucceeds(acceptRequest(driver, "j1", "j1_other", 0, 1));
+  assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().seatsRemaining, 0);
+  assert.equal((await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data().acceptanceCount, 1);
+  assert.equal((await getDoc(doc(rider, "confirmedTrips/j1_rider"))).data().status, "CANCELLED_BY_RIDER");
+});
+
+test("only the accepted rider may cancel and every coupled write is required", async () => {
+  const { driver, rider } = await acceptedCancellationFixture();
+  for (const db of [driver, environment.authenticatedContext("other").firestore(), environment.unauthenticatedContext().firestore()]) {
+    await assertFails(cancelConfirmedBatch(db, "j1", "j1_rider", 2));
+  }
+  for (const omit of ["journey", "request", "trip", "guard"]) {
+    await assertFails(cancelConfirmedBatch(rider, "j1", "j1_rider", 2, { omit }));
+  }
+  assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().seatsRemaining, 1);
+  assert.equal((await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data().acceptanceCount, 1);
+  assert.equal((await getDoc(doc(rider, "confirmedTrips/j1_rider"))).data().status, "CONFIRMED");
+});
+
+test("malformed cancellation cannot change protected data restore extra seats or forge time", async () => {
+  const { driver, rider } = await acceptedCancellationFixture();
+  const invalidOptions = [
+    { journey: { seatCapacity: 3 } }, { journey: { driverUid: "rider" } }, { journey: { status: "CANCELLED" } },
+    { request: { status: "CANCELLED" } }, { request: { journeyId: "other" } },
+    { request: { riderUid: "other" } }, { request: { driverUid: "other" } },
+    { trip: { cancelledAt: Timestamp.fromMillis(0) } }, { trip: { cancelledAt: "bad" } },
+    { trip: { status: "CONFIRMED" } }, { trip: { originArea: "Derby" } },
+    { trip: { destinationArea: "Derby" } }, { trip: { departureAt: Timestamp.fromMillis(0) } },
+    { trip: { acceptedRequestId: "other" } }, { trip: { journeyId: "other" } },
+    { trip: { riderUid: "other" } }, { trip: { driverUid: "other" } }, { trip: { extra: true } },
+    { guard: { acceptanceCount: 1 } }, { guard: { acceptanceCount: -1 } },
+    { guard: { lastCancelledRequestId: "other" } }, { guard: { lastAcceptedRequestId: null } },
+    { guard: { driverUid: "rider" } },
+  ];
+  for (const options of invalidOptions) await assertFails(cancelConfirmedBatch(rider, "j1", "j1_rider", 2, options));
+  for (const remaining of [0, 1, 3]) await assertFails(cancelConfirmedBatch(rider, "j1", "j1_rider", remaining));
+  assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().seatsRemaining, 1);
+  await assertSucceeds(cancelConfirmedBatch(rider, "j1", "j1_rider", 2));
+  await assertFails(updateDoc(doc(rider, "confirmedTrips/j1_rider"), { cancelledAt: serverTimestamp() }));
+});
+
+test("cancellation after departure is rejected without changing any document", async () => {
+  const { driver, rider } = await acceptedCancellationFixture();
+  await environment.withSecurityRulesDisabled(async (context) => {
+    const batch = writeBatch(context.firestore());
+    for (const path of ["journeys/j1", "confirmedTrips/j1_rider"]) batch.update(doc(context.firestore(), path), { departureAt: Timestamp.fromMillis(0) });
+    await batch.commit();
+  });
+  await assertFails(cancelConfirmedBatch(rider, "j1", "j1_rider", 2));
+  assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().seatsRemaining, 1);
+  assert.equal((await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data().acceptanceCount, 1);
+  assert.equal((await getDoc(doc(rider, "confirmedTrips/j1_rider"))).data().status, "CONFIRMED");
+});
+
+test("a rider can cancel an earlier acceptance without changing other trips or offers", async () => {
+  const { driver, rider } = await acceptedCancellationFixture(3);
+  const other = environment.authenticatedContext("other").firestore();
+  await assertSucceeds(requestSeatLikeGateway(other, "j1", "other"));
+  await assertSucceeds(acceptRequest(driver, "j1", "j1_other", 1, 2));
+  await assertSucceeds(createJourney(driver, "independent", "driver", 1));
+  await assertSucceeds(cancelConfirmedLikeGateway(rider, "j1", "j1_rider"));
+  assert.deepEqual((await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data(), {
+    ...guard("driver", 1, "j1_other"), lastCancelledRequestId: "j1_rider",
+  });
+  assert.equal((await getDoc(doc(other, "confirmedTrips/j1_other"))).data().status, "CONFIRMED");
+  assert.equal((await getDoc(doc(driver, "journeys/independent"))).data().seatsRemaining, 1);
+  await assertSucceeds(cancelConfirmedLikeGateway(other, "j1", "j1_other"));
+  assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().seatsRemaining, 3);
+  assert.equal((await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data().acceptanceCount, 0);
+});
+
+test("simultaneous duplicate cancellation releases exactly once", async () => {
+  const { driver, rider } = await acceptedCancellationFixture();
+  const outcomes = await Promise.allSettled([
+    cancelConfirmedLikeGateway(rider, "j1", "j1_rider"), cancelConfirmedLikeGateway(rider, "j1", "j1_rider"),
+  ]);
+  assert.equal(outcomes.filter(result => result.status === "fulfilled").length, 1);
+  assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().seatsRemaining, 2);
+  assert.equal((await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data().acceptanceCount, 0);
+});
+
+test("excessive release within capacity cannot cancel another rider allocation", async () => {
+  const { driver, rider } = await acceptedCancellationFixture(3);
+  const other = environment.authenticatedContext("other").firestore();
+  await assertSucceeds(requestSeatLikeGateway(other, "j1", "other"));
+  await assertSucceeds(acceptRequest(driver, "j1", "j1_other", 1, 2));
+  await assertFails(cancelConfirmedBatch(rider, "j1", "j1_rider", 3, { guard: { acceptanceCount: 0 } }));
+  assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().seatsRemaining, 1);
+  assert.equal((await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data().acceptanceCount, 2);
+});
+
+test("cancellation racing another acceptance fails safely and completes on retry", async () => {
+  const { driver, rider } = await acceptedCancellationFixture(2);
+  const other = environment.authenticatedContext("other").firestore();
+  await assertSucceeds(requestSeatLikeGateway(other, "j1", "other"));
+  const acceptLikeGateway = () => runTransaction(driver, async (transaction) => {
+    const requestRef = doc(driver, "seatRequests/j1_other");
+    const journeyRef = doc(driver, "journeys/j1");
+    const guardRef = doc(driver, "journeyAcceptanceGuards/j1");
+    const requestData = (await transaction.get(requestRef)).data();
+    const journeyData = (await transaction.get(journeyRef)).data();
+    const guardData = (await transaction.get(guardRef)).data();
+    assert.equal(requestData.status, "PENDING");
+    assert.ok(journeyData.seatsRemaining > 0);
+    assert.equal(guardData.acceptanceCount, journeyData.seatCapacity - journeyData.seatsRemaining);
+    transaction.update(requestRef, { status: "ACCEPTED" });
+    transaction.update(journeyRef, { seatsRemaining: journeyData.seatsRemaining - 1 });
+    transaction.update(guardRef, { acceptanceCount: guardData.acceptanceCount + 1, lastAcceptedRequestId: "j1_other" });
+    transaction.set(doc(driver, "confirmedTrips/j1_other"), confirmedTrip("j1_other", requestData, journeyData));
+  });
+  const outcomes = await Promise.allSettled([
+    cancelConfirmedLikeGateway(rider, "j1", "j1_rider"), acceptLikeGateway(),
+  ]);
+  assert.ok(outcomes.some(result => result.status === "fulfilled"));
+  const currentJourney = (await getDoc(doc(driver, "journeys/j1"))).data();
+  const currentGuard = (await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data();
+  assert.equal(currentGuard.acceptanceCount, currentJourney.seatCapacity - currentJourney.seatsRemaining);
+  assert.ok(currentJourney.seatsRemaining >= 0 && currentJourney.seatsRemaining <= currentJourney.seatCapacity);
+  // Rules can reject a stale optimistic write before the SDK retries it. A fresh
+  // command must succeed without any partial mutation from the rejected command.
+  if (outcomes[0].status === "rejected") await assertSucceeds(cancelConfirmedLikeGateway(rider, "j1", "j1_rider"));
+  if (outcomes[1].status === "rejected") await assertSucceeds(acceptLikeGateway());
+  assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().seatsRemaining, 1);
+  assert.deepEqual((await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data(), {
+    ...guard("driver", 1, "j1_other"), lastCancelledRequestId: "j1_rider",
+  });
+  assert.equal((await getDoc(doc(rider, "confirmedTrips/j1_rider"))).data().status, "CANCELLED_BY_RIDER");
+  assert.equal((await getDoc(doc(other, "confirmedTrips/j1_other"))).data().status, "CONFIRMED");
+});
+
+test("acceptance cannot piggyback capacity or guard changes on an unrelated journey", async () => {
+  const { driver } = await acceptedCancellationFixture(2);
+  const other = environment.authenticatedContext("other").firestore();
+  await assertSucceeds(createJourney(driver, "independent", "driver", 2));
+  await assertSucceeds(requestSeatLikeGateway(other, "j1", "other"));
+  const sourceJourney = (await getDoc(doc(driver, "journeys/j1"))).data();
+  const sourceRequest = (await getDoc(doc(driver, "seatRequests/j1_other"))).data();
+  const batch = writeBatch(driver);
+  batch.update(doc(driver, "journeys/j1"), { seatsRemaining: 0 });
+  batch.update(doc(driver, "journeyAcceptanceGuards/j1"), { acceptanceCount: 2, lastAcceptedRequestId: "j1_other" });
+  batch.update(doc(driver, "seatRequests/j1_other"), { status: "ACCEPTED" });
+  batch.set(doc(driver, "confirmedTrips/j1_other"), confirmedTrip("j1_other", sourceRequest, sourceJourney));
+  batch.update(doc(driver, "journeys/independent"), { seatsRemaining: 1 });
+  batch.update(doc(driver, "journeyAcceptanceGuards/independent"), { acceptanceCount: 1, lastAcceptedRequestId: "j1_other" });
+  await assertFails(batch.commit());
+  assert.equal((await getDoc(doc(driver, "journeys/independent"))).data().seatsRemaining, 2);
+  assert.equal((await getDoc(doc(driver, "journeyAcceptanceGuards/independent"))).data().acceptanceCount, 0);
 });
 
 test("Auth emulator supports local email registration, sign-out and sign-in", async () => {

@@ -1,0 +1,80 @@
+package uk.rydeapp.ryde.data.connected
+
+import androidx.test.platform.app.InstrumentationRegistry
+import com.google.firebase.FirebaseApp
+import com.google.firebase.FirebaseOptions
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreException
+import com.google.firebase.firestore.Source
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.tasks.await
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
+import org.junit.Test
+import java.util.UUID
+
+/** Opt-in only: demo namespace and ports never overlap the manual Firebase emulators. */
+class FirestoreConnectedCancellationEmulatorTest {
+    @Test
+    fun actualGatewayReleasesOneSeatWithoutGuardReadsAndRetainsHistory() = runBlocking {
+        assumeTrue(InstrumentationRegistry.getArguments().getString("rydeRulesEmulator") == "true")
+        val apps = mutableListOf<FirebaseApp>()
+        try {
+            suspend fun account(): Triple<String, FirebaseFirestore, FirestoreConnectedJourneyStore> {
+                val unique = UUID.randomUUID().toString()
+                val app = FirebaseApp.initializeApp(
+                    InstrumentationRegistry.getInstrumentation().targetContext,
+                    FirebaseOptions.Builder()
+                        .setProjectId("demo-ryde-rules-test")
+                        .setApplicationId("1:1234567890:android:abcdef0123456789")
+                        .setApiKey("local-emulator-only")
+                        .build(),
+                    "cancellation-$unique",
+                )
+                apps += app
+                val auth = FirebaseAuth.getInstance(app).apply { useEmulator("10.0.2.2", 9199) }
+                val firestore = FirebaseFirestore.getInstance(app).apply { useEmulator("10.0.2.2", 8180) }
+                val uid = checkNotNull(auth.createUserWithEmailAndPassword("$unique@example.test", "password-123").await().user?.uid)
+                return Triple(uid, firestore, FirestoreConnectedJourneyStore(firestore))
+            }
+            val (driverUid, driverDb, driver) = account()
+            val (riderUid, riderDb, rider) = account()
+            val (otherUid, _, other) = account()
+            driver.create(driverUid, ConnectedJourneyDraft("Mansfield", "Nottingham", System.currentTimeMillis() + 86_400_000, 1))
+            val journey = driver.load(driverUid).journeys.single { it.driverUid == driverUid }
+            rider.requestSeat(riderUid, journey.id)
+            val requestId = "${journey.id}_$riderUid"
+            driver.decide(driverUid, requestId, true)
+            val guardRef = riderDb.collection("journeyAcceptanceGuards").document(journey.id)
+            val denied = runCatching { guardRef.get(Source.SERVER).await() }.exceptionOrNull()
+            assertTrue(denied is FirebaseFirestoreException)
+            assertEquals(FirebaseFirestoreException.Code.PERMISSION_DENIED, (denied as FirebaseFirestoreException).code)
+            assertFalse(runCatching { driver.cancelConfirmedSeat(driverUid, requestId) }.isSuccess)
+            rider.cancelConfirmedSeat(riderUid, requestId)
+            val cancelled = rider.load(riderUid)
+            val trip = cancelled.confirmedTrips.single()
+            assertEquals(ConnectedTripStatus.CANCELLED_BY_RIDER, trip.status)
+            assertTrue(trip.cancelledAtEpochMillis != null)
+            assertEquals(ConnectedRequestStatus.CANCELLED_AFTER_ACCEPTANCE, cancelled.requests.single().status)
+            assertEquals(1, cancelled.journeys.single { it.id == journey.id }.seatsRemaining)
+            assertEquals(trip, driver.load(driverUid).confirmedTrips.single())
+            val driverGuard = driverDb.collection("journeyAcceptanceGuards").document(journey.id)
+            assertEquals(0L, driverGuard.get(Source.SERVER).await().getLong("acceptanceCount"))
+            assertFalse(runCatching { rider.cancelConfirmedSeat(riderUid, requestId) }.isSuccess)
+            assertFalse(runCatching { rider.requestSeat(riderUid, journey.id) }.isSuccess)
+            assertEquals(0L, driverGuard.get(Source.SERVER).await().getLong("acceptanceCount"))
+            assertTrue(other.load(otherUid).confirmedTrips.isEmpty())
+            other.requestSeat(otherUid, journey.id)
+            driver.decide(driverUid, "${journey.id}_$otherUid", true)
+            assertEquals(1L, driverGuard.get(Source.SERVER).await().getLong("acceptanceCount"))
+            assertEquals(0, driver.load(driverUid).journeys.single { it.id == journey.id }.seatsRemaining)
+            assertEquals(trip, rider.load(riderUid).confirmedTrips.single())
+            assertFalse(runCatching { guardRef.get(Source.SERVER).await() }.isSuccess)
+        } finally {
+            apps.forEach { it.delete() }
+        }
+    }
+}

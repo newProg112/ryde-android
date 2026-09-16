@@ -2,6 +2,7 @@ package uk.rydeapp.ryde.data.connected
 
 import com.google.firebase.Timestamp
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -9,6 +10,114 @@ import org.junit.Assert.fail
 import org.junit.Test
 
 class ConnectedJourneyFlowTest {
+    @Test
+    fun `confirmed cancellation is bounded and safe when store hangs`() = runBlocking {
+        val backing = MemoryJourneyStore()
+        val hanging = object : ConnectedJourneyStore by backing {
+            override suspend fun cancelConfirmedSeat(uid: String, tripId: String) = awaitCancellation()
+        }
+        val rider = ConnectedRydeRepository(StaticAuth("rider"), StaticProfiles("rider"),
+            journeys = hanging, firebaseOperationTimeoutMillis = 50)
+        val result = rider.cancelConnectedConfirmedSeat("j_rider")
+        assertEquals(ConnectedJourneyCommandResult.Failure(ConnectedRydeRepository.SAFE_JOURNEY_ERROR), result)
+    }
+
+    @Test
+    fun `committed confirmed cancellation survives failed refresh and becomes visible on retry`() = runBlocking {
+        val backing = MemoryJourneyStore()
+        var failLoad = false
+        val store = object : ConnectedJourneyStore by backing {
+            override suspend fun load(uid: String): ConnectedJourneySnapshot {
+                check(!failLoad) { "secret backend details" }
+                return backing.load(uid)
+            }
+        }
+        val driver = repository("driver", store)
+        val rider = repository("rider", store)
+        driver.createConnectedJourney("Mansfield", "Nottingham", "2099-01-01 10:00", "1")
+        rider.requestConnectedSeat("journey-1")
+        driver.decideConnectedRequest("journey-1_rider", true)
+        rider.refresh()
+        failLoad = true
+        assertEquals(ConnectedJourneyCommandResult.Failure(ConnectedRydeRepository.SAFE_JOURNEY_ERROR),
+            rider.cancelConnectedConfirmedSeat("journey-1_rider"))
+        assertEquals(ConnectedTripStatus.CONFIRMED, rider.journeyState.value.confirmedTrips.single().status)
+        failLoad = false
+        rider.refresh()
+        assertEquals(ConnectedTripStatus.CANCELLED_BY_RIDER, rider.journeyState.value.confirmedTrips.single().status)
+        assertEquals(1, rider.journeyState.value.journeys.single().seatsRemaining)
+        assertEquals(0, backing.guards.getValue("journey-1").acceptanceCount)
+    }
+
+    @Test
+    fun `confirmed cancellation restores exactly one seat retains private history and allows another rider`() = runBlocking {
+        val store = MemoryJourneyStore()
+        val driver = repository("driver", store)
+        val rider = repository("rider", store)
+        val other = repository("other", store)
+        driver.createConnectedJourney("Mansfield", "Nottingham", "2099-01-01 10:00", "1")
+        rider.requestConnectedSeat("journey-1")
+        driver.decideConnectedRequest("journey-1_rider", true)
+        rider.refresh()
+        val before = rider.journeyState.value.confirmedTrips.single()
+
+        assertTrue(driver.cancelConnectedConfirmedSeat(before.id) is ConnectedJourneyCommandResult.Failure)
+        assertTrue(repository("stranger", store).cancelConnectedConfirmedSeat(before.id) is ConnectedJourneyCommandResult.Failure)
+        assertEquals(ConnectedJourneyCommandResult.Success, rider.cancelConnectedConfirmedSeat(before.id))
+        val after = rider.journeyState.value.confirmedTrips.single()
+        assertEquals(before.copy(status = ConnectedTripStatus.CANCELLED_BY_RIDER, cancelledAtEpochMillis = after.cancelledAtEpochMillis), after)
+        assertTrue(after.cancelledAtEpochMillis != null)
+        assertEquals(ConnectedRequestStatus.CANCELLED_AFTER_ACCEPTANCE, rider.journeyState.value.requests.single().status)
+        assertEquals(1, rider.journeyState.value.journeys.single().seatsRemaining)
+        assertEquals(ConnectedJourneyAcceptanceGuard("driver", 0, before.id, before.id), store.guards.getValue("journey-1"))
+        driver.refresh()
+        assertEquals(after, driver.journeyState.value.confirmedTrips.single())
+        assertTrue(rider.cancelConnectedConfirmedSeat(before.id) is ConnectedJourneyCommandResult.Failure)
+        assertTrue(rider.requestConnectedSeat("journey-1") is ConnectedJourneyCommandResult.Failure)
+        assertEquals(1, store.load("driver").journeys.single().seatsRemaining)
+        assertEquals(0, store.guards.getValue("journey-1").acceptanceCount)
+        assertEquals(ConnectedJourneyCommandResult.Success, other.requestConnectedSeat("journey-1"))
+        assertEquals(ConnectedJourneyCommandResult.Success, driver.decideConnectedRequest("journey-1_other", true))
+        assertEquals(0, driver.journeyState.value.journeys.single().seatsRemaining)
+        assertEquals(1, store.guards.getValue("journey-1").acceptanceCount)
+        assertEquals(2, driver.journeyState.value.confirmedTrips.size)
+        val stranger = repository("stranger", store)
+        stranger.refresh()
+        assertTrue(stranger.journeyState.value.confirmedTrips.isEmpty())
+        assertTrue(stranger.journeyState.value.requests.isEmpty())
+    }
+
+    @Test
+    fun `confirmed cancellation after departure fails without releasing allocation`() = runBlocking {
+        var now = 0L
+        val store = MemoryJourneyStore { now }
+        val driver = repository("driver", store)
+        val rider = repository("rider", store)
+        driver.createConnectedJourney("Mansfield", "Nottingham", "2099-01-01 10:00", "1")
+        rider.requestConnectedSeat("journey-1")
+        driver.decideConnectedRequest("journey-1_rider", true)
+        now = store.load("driver").journeys.single().departureEpochMillis
+        assertTrue(rider.cancelConnectedConfirmedSeat("journey-1_rider") is ConnectedJourneyCommandResult.Failure)
+        assertEquals(0, store.load("driver").journeys.single().seatsRemaining)
+        assertEquals(1, store.guards.getValue("journey-1").acceptanceCount)
+        assertEquals(ConnectedTripStatus.CONFIRMED, store.load("driver").confirmedTrips.single().status)
+    }
+
+    @Test
+    fun `cancelled trip and zero allocation guard mapping preserve history and reject malformed fields`() {
+        val journey = ConnectedJourney("j", "driver", "Mansfield", "Nottingham", 4_070_908_800_000L, 1, 0)
+        val request = ConnectedSeatRequest("j_rider", "j", "driver", "rider", ConnectedRequestStatus.ACCEPTED)
+        val confirmed = FirestoreJourneyMapper.confirmedTripData(journey, request)
+        val cancelled = confirmed + mapOf("status" to "CANCELLED_BY_RIDER", "cancelledAt" to Timestamp(100, 0))
+        assertEquals(100_000L, FirestoreJourneyMapper.confirmedTrip(request.id, cancelled)?.cancelledAtEpochMillis)
+        assertEquals(null, FirestoreJourneyMapper.confirmedTrip(request.id, cancelled - "cancelledAt"))
+        assertEquals(null, FirestoreJourneyMapper.confirmedTrip(request.id, cancelled + ("cancelledAt" to "bad")))
+        assertEquals(null, FirestoreJourneyMapper.confirmedTrip(request.id, confirmed + ("cancelledAt" to Timestamp(100, 0))))
+        val guard = mapOf("driverUid" to "driver", "acceptanceCount" to 0, "lastAcceptedRequestId" to request.id, "lastCancelledRequestId" to request.id)
+        assertEquals(ConnectedJourneyAcceptanceGuard("driver", 0, request.id, request.id), FirestoreJourneyMapper.acceptanceGuard(guard))
+        assertEquals(null, FirestoreJourneyMapper.acceptanceGuard(guard + ("lastCancelledRequestId" to null)))
+    }
+
     @Test
     fun `acceptance guard mapping starts zeroed and rejects inconsistent states`() {
         val initial = FirestoreJourneyMapper.initialAcceptanceGuardData("driver")
@@ -299,11 +408,18 @@ class ConnectedJourneyFlowTest {
             override suspend fun create(uid: String, draft: ConnectedJourneyDraft) { throw CancellationException("cancel") }
             override suspend fun requestSeat(uid: String, journeyId: String) = Unit
             override suspend fun cancelRequest(uid: String, requestId: String) = Unit
+            override suspend fun cancelConfirmedSeat(uid: String, tripId: String) { throw CancellationException("cancel") }
             override suspend fun decide(uid: String, requestId: String, accept: Boolean) = Unit
         }
         val repository = repository("driver", cancellingStore)
         try {
             repository.createConnectedJourney("Mansfield", "Nottingham", "2099-01-01 10:00", "1")
+            fail("Cancellation should propagate")
+        } catch (_: CancellationException) {
+            assertTrue(true)
+        }
+        try {
+            repository.cancelConnectedConfirmedSeat("trip")
             fail("Cancellation should propagate")
         } catch (_: CancellationException) {
             assertTrue(true)
@@ -330,7 +446,8 @@ class ConnectedJourneyFlowTest {
         override suspend fun save(uid: String, draft: ConnectedProfileDraft) = Unit
     }
 
-    private class MemoryJourneyStore : ConnectedJourneyStore {
+    private class MemoryJourneyStore(private val nowMillis: () -> Long = System::currentTimeMillis) : ConnectedJourneyStore {
+        val guards = linkedMapOf<String, ConnectedJourneyAcceptanceGuard>()
         private val journeys = linkedMapOf<String, ConnectedJourney>()
         private val requests = linkedMapOf<String, ConnectedSeatRequest>()
         private val confirmedTrips = linkedMapOf<String, ConnectedConfirmedTrip>()
@@ -344,6 +461,7 @@ class ConnectedJourneyFlowTest {
         override suspend fun create(uid: String, draft: ConnectedJourneyDraft) {
             val id = "journey-${journeys.size + 1}"
             journeys[id] = ConnectedJourney(id, uid, draft.originArea, draft.destinationArea, draft.departureEpochMillis, draft.seats, draft.seats)
+            guards[id] = ConnectedJourneyAcceptanceGuard(uid, 0, null)
         }
 
         override suspend fun requestSeat(uid: String, journeyId: String) {
@@ -362,6 +480,20 @@ class ConnectedJourneyFlowTest {
             requests[requestId] = request.copy(status = ConnectedRequestStatus.CANCELLED)
         }
 
+        override suspend fun cancelConfirmedSeat(uid: String, tripId: String) {
+            val trip = checkNotNull(confirmedTrips[tripId])
+            val request = checkNotNull(requests[tripId])
+            val journey = checkNotNull(journeys[trip.journeyId])
+            val guard = checkNotNull(guards[journey.id])
+            check(trip.riderUid == uid && trip.status == ConnectedTripStatus.CONFIRMED)
+            check(request.status == ConnectedRequestStatus.ACCEPTED && journey.departureEpochMillis > nowMillis())
+            check(guard.acceptanceCount == journey.seatCapacity - journey.seatsRemaining && guard.acceptanceCount > 0)
+            requests[tripId] = request.copy(status = ConnectedRequestStatus.CANCELLED_AFTER_ACCEPTANCE)
+            confirmedTrips[tripId] = trip.copy(status = ConnectedTripStatus.CANCELLED_BY_RIDER, cancelledAtEpochMillis = nowMillis())
+            journeys[journey.id] = journey.copy(seatsRemaining = journey.seatsRemaining + 1)
+            guards[journey.id] = guard.copy(acceptanceCount = guard.acceptanceCount - 1, lastCancelledRequestId = tripId)
+        }
+
         override suspend fun decide(uid: String, requestId: String, accept: Boolean) {
             val request = checkNotNull(requests[requestId])
             check(request.driverUid == uid && request.status == ConnectedRequestStatus.PENDING)
@@ -370,6 +502,7 @@ class ConnectedJourneyFlowTest {
                 check(journey.seatsRemaining > 0 && journey.departureEpochMillis > System.currentTimeMillis())
                 check(requestId !in confirmedTrips)
                 journeys[journey.id] = journey.copy(seatsRemaining = journey.seatsRemaining - 1)
+                guards[journey.id] = guards.getValue(journey.id).let { it.copy(acceptanceCount = it.acceptanceCount + 1, lastAcceptedRequestId = requestId) }
                 confirmedTrips[requestId] = ConnectedConfirmedTrip(
                     id = requestId,
                     journeyId = journey.id,

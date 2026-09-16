@@ -60,25 +60,26 @@ service cloud.firestore {
         && data.driverUid is string
         && data.riderUid is string
         && data.driverUid != data.riderUid
-        && data.status in ['PENDING', 'ACCEPTED', 'DECLINED', 'CANCELLED'];
+        && data.status in ['PENDING', 'ACCEPTED', 'DECLINED', 'CANCELLED', 'CANCELLED_AFTER_ACCEPTANCE'];
     }
 
     function validAcceptanceGuard(data) {
-      return data.keys().hasOnly(['driverUid', 'acceptanceCount', 'lastAcceptedRequestId'])
+      return data.keys().hasOnly(['driverUid', 'acceptanceCount', 'lastAcceptedRequestId', 'lastCancelledRequestId'])
         && data.driverUid is string
         && data.acceptanceCount is int
         && data.acceptanceCount >= 0
         && data.acceptanceCount <= 8
         && ((data.acceptanceCount == 0 && data.lastAcceptedRequestId == null)
-          || (data.acceptanceCount > 0
-            && data.lastAcceptedRequestId is string
-            && data.lastAcceptedRequestId.size() > 0));
+          || (data.lastAcceptedRequestId is string
+            && data.lastAcceptedRequestId.size() > 0))
+        && (!('lastCancelledRequestId' in data)
+          || (data.lastCancelledRequestId is string && data.lastCancelledRequestId.size() > 0));
     }
 
     function validConfirmedTrip(data) {
       return data.keys().hasOnly([
           'journeyId', 'acceptedRequestId', 'driverUid', 'riderUid',
-          'originArea', 'destinationArea', 'departureAt', 'status'
+          'originArea', 'destinationArea', 'departureAt', 'status', 'cancelledAt'
         ])
         && data.journeyId is string
         && data.acceptedRequestId is string
@@ -89,7 +90,8 @@ service cloud.firestore {
         && validBroadArea(data.destinationArea)
         && data.originArea != data.destinationArea
         && data.departureAt is timestamp
-        && data.status == 'CONFIRMED';
+        && ((data.status == 'CONFIRMED' && !('cancelledAt' in data))
+          || (data.status == 'CANCELLED_BY_RIDER' && data.cancelledAt is timestamp));
     }
 
     function currentGuardMatchesJourney(journeyId, driverUid) {
@@ -105,10 +107,12 @@ service cloud.firestore {
     function journeyDecrementsOnce(journeyId, driverUid) {
       let before = get(journeyPath(journeyId)).data;
       let after = getAfter(journeyPath(journeyId)).data;
+      // Unchanged fields retain their validated types; the exact integer delta
+      // from positive remaining capacity also proves all after-state bounds.
       return validJourney(before)
-        && validJourney(after)
         && before.driverUid == driverUid
         && after.driverUid == driverUid
+        && after.seatCapacity is int && after.seatsRemaining is int
         && after.diff(before).affectedKeys().hasOnly(['seatsRemaining'])
         && before.seatsRemaining > 0
         && before.departureAt > request.time
@@ -118,10 +122,11 @@ service cloud.firestore {
     function guardAdvancesForRequest(journeyId, driverUid, requestId) {
       let before = get(acceptanceGuardPath(journeyId)).data;
       let after = getAfter(acceptanceGuardPath(journeyId)).data;
+      // The linked journey/count invariant bounds the incremented count.
       return validAcceptanceGuard(before)
-        && validAcceptanceGuard(after)
         && before.driverUid == driverUid
         && after.driverUid == driverUid
+        && after.acceptanceCount is int
         && after.diff(before).affectedKeys()
           .hasOnly(['acceptanceCount', 'lastAcceptedRequestId'])
         && after.acceptanceCount == before.acceptanceCount + 1
@@ -143,7 +148,6 @@ service cloud.firestore {
       let before = get(seatRequestPath(requestId)).data;
       let after = getAfter(seatRequestPath(requestId)).data;
       return validSeatRequest(before)
-        && validSeatRequest(after)
         && requestId == before.journeyId + '_' + before.riderUid
         && before.journeyId == journeyId
         && before.driverUid == driverUid
@@ -157,6 +161,11 @@ service cloud.firestore {
         && existsAfter(confirmedTripPath(requestId));
     }
 
+    function confirmedTripIsCreatedForJourney(requestId, journeyId) {
+      return confirmedTripIsCreated(requestId)
+        && getAfter(confirmedTripPath(requestId)).data.journeyId == journeyId;
+    }
+
     function confirmedTripMatchesSource(tripId, trip) {
       let seatRequest = get(seatRequestPath(tripId)).data;
       let journey = get(journeyPath(seatRequest.journeyId)).data;
@@ -168,6 +177,54 @@ service cloud.firestore {
         && trip.originArea == journey.originArea
         && trip.destinationArea == journey.destinationArea
         && trip.departureAt == journey.departureAt;
+    }
+
+    // The trip update proves all four writes. The other three writes require that
+    // trip transition, so none can commit without the full proof being evaluated.
+    function tripTransitionsToRiderCancelled(requestId, journeyId) {
+      let before = get(confirmedTripPath(requestId)).data;
+      let after = getAfter(confirmedTripPath(requestId)).data;
+      return before.riderUid == request.auth.uid
+        && before.journeyId == journeyId
+        && before.status == 'CONFIRMED'
+        && after.status == 'CANCELLED_BY_RIDER';
+    }
+
+    // The guard pointer binds one released allocation to one terminal booking.
+    function riderCancelsConfirmedSeat(requestId) {
+      let tripBefore = get(confirmedTripPath(requestId)).data;
+      let tripAfter = getAfter(confirmedTripPath(requestId)).data;
+      let requestBefore = get(seatRequestPath(requestId)).data;
+      let requestAfter = getAfter(seatRequestPath(requestId)).data;
+      let journeyBefore = get(journeyPath(tripBefore.journeyId)).data;
+      let journeyAfter = getAfter(journeyPath(tripBefore.journeyId)).data;
+      let guardBefore = get(acceptanceGuardPath(tripBefore.journeyId)).data;
+      let guardAfter = getAfter(acceptanceGuardPath(tripBefore.journeyId)).data;
+      // Before-state validation, immutable-field diffs and exact deltas prove
+      // the after shapes without duplicating expensive schema checks.
+      return tripBefore.riderUid == request.auth.uid
+        && validConfirmedTrip(tripBefore)
+        && tripBefore.status == 'CONFIRMED' && tripAfter.status == 'CANCELLED_BY_RIDER'
+        && tripAfter.cancelledAt == request.time
+        && tripAfter.diff(tripBefore).affectedKeys().hasOnly(['status', 'cancelledAt'])
+        && confirmedTripMatchesSource(requestId, tripBefore)
+        && validSeatRequest(requestBefore)
+        && requestBefore.status == 'ACCEPTED' && requestAfter.status == 'CANCELLED_AFTER_ACCEPTANCE'
+        && requestAfter.diff(requestBefore).affectedKeys().hasOnly(['status'])
+        && validJourney(journeyBefore)
+        && journeyAfter.seatCapacity is int && journeyAfter.seatsRemaining is int
+        && journeyBefore.departureAt > request.time
+        && journeyAfter.diff(journeyBefore).affectedKeys().hasOnly(['seatsRemaining'])
+        && journeyAfter.seatsRemaining == journeyBefore.seatsRemaining + 1
+        && validAcceptanceGuard(guardBefore)
+        && guardAfter.acceptanceCount is int
+        && guardBefore.driverUid == journeyBefore.driverUid
+        && guardAfter.diff(guardBefore).affectedKeys().hasOnly(['acceptanceCount', 'lastCancelledRequestId'])
+        && guardBefore.acceptanceCount > 0
+        && guardAfter.acceptanceCount == guardBefore.acceptanceCount - 1
+        && guardAfter.lastCancelledRequestId == requestId
+        && guardBefore.acceptanceCount == journeyBefore.seatCapacity - journeyBefore.seatsRemaining
+        && guardAfter.acceptanceCount == journeyAfter.seatCapacity - journeyAfter.seatsRemaining;
     }
 
     match /users/{uid} {
@@ -215,14 +272,13 @@ service cloud.firestore {
         && getAfter(acceptanceGuardPath(journeyId)).data.lastAcceptedRequestId == null;
       allow update: if signedIn()
         && resource.data.driverUid == request.auth.uid
-        && validJourney(resource.data)
-        && validJourney(request.resource.data)
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['seatsRemaining'])
-        && resource.data.seatsRemaining > 0
-        && resource.data.departureAt > request.time
         && request.resource.data.seatsRemaining == resource.data.seatsRemaining - 1
-        && confirmedTripIsCreated(
-          getAfter(acceptanceGuardPath(journeyId)).data.lastAcceptedRequestId);
+        && confirmedTripIsCreatedForJourney(
+          getAfter(acceptanceGuardPath(journeyId)).data.lastAcceptedRequestId, journeyId);
+      allow update: if signedIn()
+        && request.resource.data.seatsRemaining == resource.data.seatsRemaining + 1
+        && tripTransitionsToRiderCancelled(
+          getAfter(acceptanceGuardPath(journeyId)).data.lastCancelledRequestId, journeyId);
       allow delete: if false;
     }
 
@@ -230,6 +286,7 @@ service cloud.firestore {
       allow get: if signedIn() && resource.data.driverUid == request.auth.uid;
       allow list: if false;
       allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['driverUid', 'acceptanceCount', 'lastAcceptedRequestId'])
         && request.resource.data.driverUid == request.auth.uid
         && validAcceptanceGuard(request.resource.data)
         && request.resource.data.acceptanceCount == 0
@@ -242,13 +299,11 @@ service cloud.firestore {
           == getAfter(journeyPath(journeyId)).data.seatCapacity;
       allow update: if signedIn()
         && resource.data.driverUid == request.auth.uid
-        && validAcceptanceGuard(resource.data)
-        && validAcceptanceGuard(request.resource.data)
-        && request.resource.data.driverUid == resource.data.driverUid
-        && request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly(['acceptanceCount', 'lastAcceptedRequestId'])
         && request.resource.data.acceptanceCount == resource.data.acceptanceCount + 1
-        && confirmedTripIsCreated(request.resource.data.lastAcceptedRequestId);
+        && confirmedTripIsCreatedForJourney(request.resource.data.lastAcceptedRequestId, journeyId);
+      allow update: if signedIn()
+        && request.resource.data.acceptanceCount == resource.data.acceptanceCount - 1
+        && tripTransitionsToRiderCancelled(request.resource.data.lastCancelledRequestId, journeyId);
       allow delete: if false;
     }
 
@@ -302,6 +357,10 @@ service cloud.firestore {
             && currentGuardMatchesJourney(resource.data.journeyId, request.auth.uid))
           || (request.resource.data.status == 'ACCEPTED'
             && confirmedTripIsCreated(requestId)));
+      allow update: if signedIn()
+        && resource.data.status == 'ACCEPTED'
+        && request.resource.data.status == 'CANCELLED_AFTER_ACCEPTANCE'
+        && tripTransitionsToRiderCancelled(requestId, resource.data.journeyId);
       allow delete: if false;
     }
 
@@ -311,6 +370,7 @@ service cloud.firestore {
           || resource.data.riderUid == request.auth.uid);
       allow create: if signedIn()
         && validConfirmedTrip(request.resource.data)
+        && request.resource.data.status == 'CONFIRMED'
         && tripId == request.resource.data.acceptedRequestId
         && request.resource.data.driverUid == request.auth.uid
         && confirmedTripMatchesSource(tripId, request.resource.data)
@@ -324,7 +384,12 @@ service cloud.firestore {
           request.auth.uid,
           tripId)
         && guardAndJourneyCountsAdvanceTogether(request.resource.data.journeyId);
-      allow update, delete: if false;
+      allow update: if signedIn()
+        && resource.data.riderUid == request.auth.uid
+        && resource.data.status == 'CONFIRMED'
+        && request.resource.data.status == 'CANCELLED_BY_RIDER'
+        && riderCancelsConfirmedSeat(tripId);
+      allow delete: if false;
     }
 
     // Explicit default deny: all unmigrated capabilities remain inaccessible.

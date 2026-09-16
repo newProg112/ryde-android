@@ -74,9 +74,9 @@ data class ConnectedProfileDraft(
     val workArea: String,
 )
 
-enum class ConnectedRequestStatus { PENDING, ACCEPTED, DECLINED, CANCELLED }
+enum class ConnectedRequestStatus { PENDING, ACCEPTED, DECLINED, CANCELLED, CANCELLED_AFTER_ACCEPTANCE }
 
-enum class ConnectedTripStatus { CONFIRMED }
+enum class ConnectedTripStatus { CONFIRMED, CANCELLED_BY_RIDER }
 
 data class ConnectedJourney(
     val id: String,
@@ -106,12 +106,14 @@ data class ConnectedConfirmedTrip(
     val destinationArea: String,
     val departureEpochMillis: Long,
     val status: ConnectedTripStatus,
+    val cancelledAtEpochMillis: Long? = null,
 )
 
 data class ConnectedJourneyAcceptanceGuard(
     val driverUid: String,
     val acceptanceCount: Int,
     val lastAcceptedRequestId: String?,
+    val lastCancelledRequestId: String? = null,
 )
 
 data class ConnectedJourneySnapshot(
@@ -245,25 +247,32 @@ object FirestoreJourneyMapper {
     }
 
     fun acceptanceGuard(data: Map<String, Any?>): ConnectedJourneyAcceptanceGuard? {
-        if (data.keys != acceptanceGuardFields) return null
+        if (data.keys != acceptanceGuardFields && data.keys != acceptanceGuardFields + "lastCancelledRequestId") return null
         val count = (data["acceptanceCount"] as? Number)?.toInt() ?: return null
+        if (data["lastAcceptedRequestId"] != null && data["lastAcceptedRequestId"] !is String) return null
+        if ("lastCancelledRequestId" in data && (data["lastCancelledRequestId"] !is String || (data["lastCancelledRequestId"] as String).isBlank())) return null
         val lastRequestId = data["lastAcceptedRequestId"] as? String
         return ConnectedJourneyAcceptanceGuard(
             driverUid = data["driverUid"] as? String ?: return null,
             acceptanceCount = count,
             lastAcceptedRequestId = lastRequestId,
+            lastCancelledRequestId = data["lastCancelledRequestId"] as? String,
         ).takeIf {
             it.driverUid.isNotBlank() && it.acceptanceCount in 0..8 &&
                 ((it.acceptanceCount == 0 && it.lastAcceptedRequestId == null) ||
-                    (it.acceptanceCount > 0 && !it.lastAcceptedRequestId.isNullOrBlank()))
+                    !it.lastAcceptedRequestId.isNullOrBlank())
         }
     }
 
     fun confirmedTrip(id: String, data: Map<String, Any?>): ConnectedConfirmedTrip? {
-        if (data.keys != confirmedTripFields) return null
         val status = runCatching {
             ConnectedTripStatus.valueOf(data["status"] as? String ?: return null)
         }.getOrNull() ?: return null
+        val expectedFields = if (status == ConnectedTripStatus.CANCELLED_BY_RIDER) confirmedTripFields + "cancelledAt" else confirmedTripFields
+        if (data.keys != expectedFields) return null
+        val cancelledAt = if (status == ConnectedTripStatus.CANCELLED_BY_RIDER) {
+            (data["cancelledAt"] as? Timestamp)?.toDate()?.time ?: return null
+        } else null
         return ConnectedConfirmedTrip(
             id = id,
             journeyId = data["journeyId"] as? String ?: return null,
@@ -274,6 +283,7 @@ object FirestoreJourneyMapper {
             destinationArea = data["destinationArea"] as? String ?: return null,
             departureEpochMillis = (data["departureAt"] as? Timestamp)?.toDate()?.time ?: return null,
             status = status,
+            cancelledAtEpochMillis = cancelledAt,
         ).takeIf {
             it.id == it.acceptedRequestId &&
                 it.acceptedRequestId == "${it.journeyId}_${it.riderUid}" &&

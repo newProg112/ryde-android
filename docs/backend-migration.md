@@ -140,12 +140,13 @@ The first 9C slice adds only these emulator-owned documents:
   journeyId: string          # immutable
   driverUid: string          # must equal the referenced journey owner; immutable
   riderUid: string           # authenticated creator; immutable
-  status: "PENDING" | "ACCEPTED" | "DECLINED" | "CANCELLED"
+  status: "PENDING" | "ACCEPTED" | "DECLINED" | "CANCELLED" | "CANCELLED_AFTER_ACCEPTANCE"
 
 /journeyAcceptanceGuards/{journeyId}
   driverUid: string          # equals the referenced journey owner; immutable
   acceptanceCount: int       # initially 0; equals capacity minus remaining
   lastAcceptedRequestId: string | null
+  lastCancelledRequestId: string # optional; set by accepted-seat cancellation
 
 /confirmedTrips/{acceptedRequestId}
   journeyId: string          # copied from the accepted request; immutable
@@ -155,7 +156,8 @@ The first 9C slice adds only these emulator-owned documents:
   originArea: string         # copied from the journey broad area; immutable
   destinationArea: string    # copied from the journey broad area; immutable
   departureAt: timestamp     # copied from the journey; immutable
-  status: "CONFIRMED"        # immutable in this slice
+  status: "CONFIRMED" | "CANCELLED_BY_RIDER"
+  cancelledAt: timestamp     # required only for CANCELLED_BY_RIDER; server time
 ```
 
 Any authenticated emulator user may read the intentionally small journey document so that
@@ -166,7 +168,8 @@ journey, reject self-requests, and permit only `PENDING -> ACCEPTED|DECLINED` by
 The rider alone may cancel a pending request. The rider may reopen that same deterministic
 document from `CANCELLED -> PENDING` only while the referenced journey is still upcoming, open,
 has capacity, and remains consistent with its acceptance guard. Drivers cannot decide a cancelled
-request, while accepted and declined requests are terminal.
+request. Accepted requests can only move to terminal `CANCELLED_AFTER_ACCEPTANCE`
+through the matching confirmed-seat cancellation; declined requests remain terminal.
 
 Acceptance is a Firestore transaction. Its request update is allowed only when the same atomic
 write changes `seatsRemaining` from N to N-1 and N was positive. Firestore transaction retries
@@ -191,8 +194,10 @@ state and deterministic trip ID prevent replay. Declines still change only the g
 
 Confirmed trips are private. Only their driver and rider can read them; the client loads them with
 separate `driverUid == currentUid` and `riderUid == currentUid` queries and never lists the whole
-collection. Clients cannot update or delete trips. A driver can issue the trip create only inside
-the valid acceptance transaction; rider, stranger and standalone creates are denied. Acceptance
+collection. Trip identifiers, participants, route and departure cannot change, and trips cannot
+be deleted. Only the rider can update a confirmed trip through the coupled cancellation below.
+A driver can issue the trip create only inside the valid acceptance transaction;
+rider, stranger and standalone creates are denied. Acceptance
 also requires `departureAt > request.time`, while decline behaviour is unchanged.
 The rules cannot establish real-world seat occupancy, prevent colluding accounts, compel a driver
 to accept fairly, repair legacy or privileged-server writes, or keep a pending request available
@@ -203,16 +208,18 @@ State transitions in 9C-1 are deliberately limited:
 ```text
 journey + guard:  create OPEN(capacity) + count 0
                   -> OPEN(remaining - 1) + count + 1 per linked acceptance
-request:          create PENDING -> ACCEPTED
+                  -> OPEN(remaining + 1) + count - 1 per linked rider cancellation
+request:          create PENDING -> ACCEPTED -> CANCELLED_AFTER_ACCEPTANCE
                                  -> DECLINED
                                  -> CANCELLED -> PENDING while the journey is
                                                  upcoming and has capacity
 confirmed trip:  absent -> CONFIRMED only with the matching request acceptance
+                       -> CANCELLED_BY_RIDER only with the matching seat release
 ```
 
-Only rider-owned pending-request cancellation and safe re-requesting are supported. Accepted
-and declined requests remain terminal. Confirmed trips have no actions or lifecycle transitions.
-There is no offer cancellation, later journey lifecycle, private pickup/drop-off, exact/live
+Rider-owned pending-request cancellation and safe re-requesting remain supported. An upcoming
+confirmed booking also supports the rider cancellation described below. There is no driver
+offer cancellation, later journey lifecycle, private pickup/drop-off, exact/live
 location, pricing/payment, messaging, notification, Circle, trust, rating, Function or Storage
 data in connected mode.
 
@@ -231,7 +238,8 @@ data in connected mode.
 5. On B open **Your requests**, cancel the pending request, and confirm it remains Cancelled after
    refresh or relaunch. Re-request it while the journey is upcoming and still has capacity.
 6. On A tap **Refresh**, then accept or decline the pending request. On B tap **Refresh** and
-   confirm the same terminal status; neither terminal status can be cancelled or re-requested.
+   confirm the same status. Accepted bookings can be cancelled from Trips, but neither accepted
+   nor declined requests can be withdrawn using the pending-request action or re-requested.
 7. After acceptance, open **Trips** on both A and B. Confirm each sees exactly one private
    confirmed trip with the genuine broad-area route, departure, `Status: CONFIRMED`, and the
    appropriate `You're driving` or `You're riding` role. A third account must not see the trip.
@@ -242,3 +250,45 @@ Remaining 9C work includes offer cancellation policy and later confirmed-trip/jo
 richer discovery/query design, Circles, and any trusted backend operation needed for stronger
 multi-document invariants. None of those capabilities are silently delegated to the fictional
 local-demo repository in connected mode.
+
+### Accepted-seat rider cancellation (emulator only)
+
+Before departure, the rider can select **Cancel my seat** in Trips and confirm that the seat
+will be returned and this booking cannot be reopened. A single Firestore transaction performs:
+
+```text
+journey: OPEN(remaining N) -> OPEN(remaining N + 1)
+request: ACCEPTED -> CANCELLED_AFTER_ACCEPTANCE (terminal)
+trip: CONFIRMED -> CANCELLED_BY_RIDER, cancelledAt = server timestamp
+guard: count C -> C - 1, lastCancelledRequestId = acceptedRequestId
+```
+
+Both participants retain the private trip/request history. The rider cannot re-request this
+same journey; another rider can use the restored capacity. Pending withdrawal/re-request is
+unchanged. Driver cancellation is not implemented. Trips retain their original immutable source
+fields, and cancellation is rejected after departure, for other participants, or on replay.
+
+The guard count remains equal to capacity minus remaining seats before and after cancellation.
+Its lastAcceptedRequestId remains historical, including when all allocations have been released
+and count returns to zero. Legacy guards without lastCancelledRequestId remain valid. Riders
+still cannot read guards: the transaction blindly applies increment(-1) and the cancellation
+pointer; the trip update rule validates all four before/after documents, while each other write
+requires that trip transition. This binds the release to exactly one confirmed booking. Partial,
+malformed and excessive releases fail atomically. A stale concurrent write may receive a safe
+failure; refresh and retry the command. A committed cancellation is terminal and cannot release
+another seat.
+
+Run the actual Android gateway test only with the dedicated test emulators and the explicit
+instrumentation argument (alongside the Compose tests):
+
+```powershell
+firebase emulators:exec --config firebase.rules-test.json --only auth,firestore --project demo-ryde-rules-test ".\gradlew.bat connectedDebugAndroidTest -PrydeAppMode=CONNECTED -Pandroid.testInstrumentationRunnerArguments.rydeRulesEmulator=true"
+```
+
+The gateway test uses only demo-ryde-rules-test and ports 8180/9199, with unique disposable
+accounts/offers. It skips without that explicit argument and never clears manual data.
+
+Manual verification: accept a one-seat booking, cancel it from the rider's Trips tab, refresh
+both accounts and verify retained cancelled history and one restored seat. Repeating cancellation
+or re-requesting from the original rider must fail. A third disposable rider can request that
+journey and be accepted into its restored seat. Other offers and bookings remain independent.
