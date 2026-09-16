@@ -54,7 +54,9 @@ import uk.rydeapp.ryde.data.connected.ConnectedConfirmedTrip
 import uk.rydeapp.ryde.data.connected.ConnectedRequestStatus
 import uk.rydeapp.ryde.data.connected.ConnectedRydeRepository
 import uk.rydeapp.ryde.data.connected.ConnectedSeatRequest
-import uk.rydeapp.ryde.data.connected.ConnectedTripStatus
+import uk.rydeapp.ryde.data.connected.ConnectedJourneyStatus
+import uk.rydeapp.ryde.data.connected.ConnectedJourneyLifecycle
+import uk.rydeapp.ryde.data.connected.ConnectedTripLifecycle
 import java.text.SimpleDateFormat
 import java.time.Instant
 import java.time.LocalDate
@@ -231,24 +233,34 @@ internal fun connectedSeatAvailabilityLabel(seatsRemaining: Int, seatCapacity: I
 internal fun connectedRequestStatusLabel(status: ConnectedRequestStatus): String =
     "Status: ${status.name}"
 
+internal fun connectedRequestStatusLabel(request: ConnectedSeatRequest, journey: ConnectedJourney?): String =
+    if (ConnectedJourneyLifecycle.requestCancelledByDriver(request, journey)) {
+        "Status: CANCELLED_BY_DRIVER · Journey cancelled by driver"
+    } else if (!ConnectedJourneyLifecycle.requestJourneyOpen(request, journey) && request.status in listOf(ConnectedRequestStatus.PENDING, ConnectedRequestStatus.ACCEPTED)) {
+        "Status: UNAVAILABLE"
+    } else connectedRequestStatusLabel(request.status)
+
 internal fun connectedTripRouteLabel(trip: ConnectedConfirmedTrip): String =
     "${trip.originArea} → ${trip.destinationArea}"
 
-internal fun connectedTripStatusLabel(trip: ConnectedConfirmedTrip): String = when (trip.status) {
-    ConnectedTripStatus.CONFIRMED -> "Status: CONFIRMED"
-    ConnectedTripStatus.CANCELLED_BY_RIDER -> "Status: CANCELLED_BY_RIDER · Cancelled by rider"
+internal fun connectedTripStatusLabel(trip: ConnectedConfirmedTrip, journey: ConnectedJourney? = null): String = when (ConnectedJourneyLifecycle.trip(trip, journey)) {
+    ConnectedTripLifecycle.CONFIRMED -> "Status: CONFIRMED"
+    ConnectedTripLifecycle.CANCELLED_BY_RIDER -> "Status: CANCELLED_BY_RIDER · Cancelled by rider"
+    ConnectedTripLifecycle.CANCELLED_BY_DRIVER -> "Status: CANCELLED_BY_DRIVER · Journey cancelled by driver"
+    ConnectedTripLifecycle.UNAVAILABLE -> "Status: UNAVAILABLE"
 }
 
 internal fun canCancelConnectedConfirmedSeat(
     trip: ConnectedConfirmedTrip,
     viewerUid: String,
     nowEpochMillis: Long = System.currentTimeMillis(),
-): Boolean = trip.riderUid == viewerUid && trip.status == ConnectedTripStatus.CONFIRMED &&
+    journey: ConnectedJourney? = null,
+): Boolean = trip.riderUid == viewerUid && ConnectedJourneyLifecycle.trip(trip, journey) == ConnectedTripLifecycle.CONFIRMED &&
     trip.departureEpochMillis > nowEpochMillis
 
-internal fun connectedTripRoleLabel(trip: ConnectedConfirmedTrip, viewerUid: String): String? = when (viewerUid) {
-    trip.driverUid -> if (trip.status == ConnectedTripStatus.CONFIRMED) "You're driving" else "Driver"
-    trip.riderUid -> if (trip.status == ConnectedTripStatus.CONFIRMED) "You're riding" else "Rider"
+internal fun connectedTripRoleLabel(trip: ConnectedConfirmedTrip, viewerUid: String, journey: ConnectedJourney? = null): String? = when (viewerUid) {
+    trip.driverUid -> if (ConnectedJourneyLifecycle.trip(trip, journey) == ConnectedTripLifecycle.CONFIRMED) "You're driving" else "Driver"
+    trip.riderUid -> if (ConnectedJourneyLifecycle.trip(trip, journey) == ConnectedTripLifecycle.CONFIRMED) "You're riding" else "Rider"
     else -> null
 }
 
@@ -281,6 +293,7 @@ internal fun canRerequestConnectedSeat(
     item: ConnectedRiderRequestItem,
     nowEpochMillis: Long = System.currentTimeMillis(),
 ): Boolean = item.request.status == ConnectedRequestStatus.CANCELLED &&
+    ConnectedJourneyLifecycle.requestJourneyOpen(item.request, item.journey) &&
     item.journey.departureEpochMillis > nowEpochMillis &&
     item.journey.seatsRemaining > 0
 
@@ -355,7 +368,7 @@ fun ConnectedJourneyScreen(
     val riderRequests = connectedRiderRequestItems(snapshot, session.accountId)
     val confirmedTrips = connectedTripsForParticipant(snapshot.confirmedTrips, session.accountId)
     val discoverable = snapshot.journeys.filter {
-        it.driverUid != session.accountId && it.departureEpochMillis > System.currentTimeMillis()
+        ConnectedJourneyLifecycle.discoverable(it, session.accountId, System.currentTimeMillis())
     }
     val incoming = snapshot.requests.filter { it.driverUid == session.accountId }
     val departureSelection = ConnectedDepartureSelection(departureDateEpochDay, departureMinuteOfDay)
@@ -542,10 +555,13 @@ fun ConnectedJourneyScreen(
                             )
                             Text(formatDeparture(item.journey.departureEpochMillis))
                             Text(
-                                connectedRequestStatusLabel(item.request.status),
+                                connectedRequestStatusLabel(item.request, item.journey),
                                 fontWeight = FontWeight.Bold,
                             )
                             when {
+                                item.journey.status == ConnectedJourneyStatus.CANCELLED -> {
+                                    Text("This journey was cancelled and cannot be booked again.")
+                                }
                                 item.request.status == ConnectedRequestStatus.PENDING -> {
                                     OutlinedButton(
                                         enabled = !busy,
@@ -581,29 +597,16 @@ fun ConnectedJourneyScreen(
                 modifier = Modifier.weight(1f),
                 busy = busy,
                 onCancelSeat = { tripId -> runCommand { repository.cancelConnectedConfirmedSeat(tripId) } },
+                journeys = snapshot.journeys,
             )
 
-            ConnectedJourneySection.YOUR_OFFERS -> ConnectedSection(modifier = Modifier.weight(1f)) {
-                Text("Your offers", style = MaterialTheme.typography.titleLarge)
-                if (mine.isEmpty()) Text("No connected offers yet.")
-                mine.forEach { journey ->
-                    Card(modifier = Modifier.fillMaxWidth()) {
-                        Column(
-                            modifier = Modifier.fillMaxWidth().padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            Text("${journey.originArea} → ${journey.destinationArea}", style = MaterialTheme.typography.titleMedium)
-                            Text(formatDeparture(journey.departureEpochMillis))
-                            Text(
-                                connectedSeatAvailabilityLabel(journey.seatsRemaining, journey.seatCapacity),
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.primary,
-                            )
-                        }
-                    }
-                }
-                ConnectedUnavailableNote()
-            }
+            ConnectedJourneySection.YOUR_OFFERS -> ConnectedOffersSection(
+                journeys = mine,
+                viewerUid = session.accountId,
+                modifier = Modifier.weight(1f),
+                busy = busy,
+                onCancelJourney = { journeyId -> runCommand { repository.cancelConnectedJourney(journeyId) } },
+            )
 
             ConnectedJourneySection.INCOMING -> ConnectedSection(modifier = Modifier.weight(1f)) {
                 Text("Incoming requests", style = MaterialTheme.typography.titleLarge)
@@ -621,13 +624,13 @@ fun ConnectedJourneyScreen(
                             )
                             journey?.let {
                                 Text(
-                                    connectedSeatAvailabilityLabel(it.seatsRemaining, it.seatCapacity),
+                                    connectedJourneyAvailabilityLabel(it),
                                     fontWeight = FontWeight.SemiBold,
                                     color = MaterialTheme.colorScheme.primary,
                                 )
                             }
-                            Text(connectedRequestStatusLabel(request.status), fontWeight = FontWeight.Bold)
-                            if (request.status == ConnectedRequestStatus.PENDING) {
+                            Text(connectedRequestStatusLabel(request, journey), fontWeight = FontWeight.Bold)
+                            if (request.status == ConnectedRequestStatus.PENDING && ConnectedJourneyLifecycle.requestJourneyOpen(request, journey)) {
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Button(
                                         enabled = !busy,
@@ -683,7 +686,10 @@ fun ConnectedJourneyScreen(
         }
     }
 
-    val requestToCancel = riderRequests.firstOrNull { it.request.id == requestToCancelId }
+    val requestToCancel = riderRequests.firstOrNull {
+        it.request.id == requestToCancelId && it.request.status == ConnectedRequestStatus.PENDING &&
+            ConnectedJourneyLifecycle.requestJourneyOpen(it.request, it.journey)
+    }
     if (requestToCancel != null) {
         AlertDialog(
             onDismissRequest = { requestToCancelId = null },
@@ -742,13 +748,15 @@ internal fun ConnectedTripsSection(
     modifier: Modifier = Modifier,
     busy: Boolean = false,
     onCancelSeat: ((String) -> Unit)? = null,
+    journeys: List<ConnectedJourney> = emptyList(),
 ) {
     var tripToCancelId by rememberSaveable(viewerUid) { mutableStateOf<String?>(null) }
     ConnectedSection(modifier = modifier) {
         Text("Trips", style = MaterialTheme.typography.titleLarge)
         if (trips.isEmpty()) Text(CONNECTED_TRIPS_EMPTY_STATE)
         trips.forEach { trip ->
-            val role = connectedTripRoleLabel(trip, viewerUid) ?: return@forEach
+            val journey = journeys.firstOrNull { it.id == trip.journeyId }
+            val role = connectedTripRoleLabel(trip, viewerUid, journey) ?: return@forEach
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -756,9 +764,9 @@ internal fun ConnectedTripsSection(
                 ) {
                     Text(connectedTripRouteLabel(trip), style = MaterialTheme.typography.titleMedium)
                     Text(formatDeparture(trip.departureEpochMillis))
-                    Text(connectedTripStatusLabel(trip), fontWeight = FontWeight.Bold)
+                    Text(connectedTripStatusLabel(trip, journey), fontWeight = FontWeight.Bold)
                     Text(role)
-                    if (onCancelSeat != null && canCancelConnectedConfirmedSeat(trip, viewerUid)) {
+                    if (onCancelSeat != null && canCancelConnectedConfirmedSeat(trip, viewerUid, journey = journey)) {
                         OutlinedButton(enabled = !busy, onClick = { tripToCancelId = trip.id }) {
                             Text("Cancel my seat")
                         }
@@ -768,7 +776,10 @@ internal fun ConnectedTripsSection(
         }
         ConnectedUnavailableNote()
     }
-    val tripToCancel = trips.firstOrNull { it.id == tripToCancelId && canCancelConnectedConfirmedSeat(it, viewerUid) }
+    val tripToCancel = trips.firstOrNull {
+        it.id == tripToCancelId && canCancelConnectedConfirmedSeat(it, viewerUid,
+            journey = journeys.firstOrNull { journey -> journey.id == it.journeyId })
+    }
     if (tripToCancel != null && onCancelSeat != null) {
         AlertDialog(
             onDismissRequest = { tripToCancelId = null },
@@ -782,6 +793,60 @@ internal fun ConnectedTripsSection(
             },
             dismissButton = {
                 TextButton(enabled = !busy, onClick = { tripToCancelId = null }) { Text("Keep my seat") }
+            },
+        )
+    }
+}
+
+internal fun connectedJourneyAvailabilityLabel(journey: ConnectedJourney): String =
+    if (journey.status == ConnectedJourneyStatus.CANCELLED) {
+        "Historical capacity: ${journey.seatsRemaining}/${journey.seatCapacity} · Unavailable for booking"
+    } else connectedSeatAvailabilityLabel(journey.seatsRemaining, journey.seatCapacity)
+
+@Composable
+internal fun ConnectedOffersSection(
+    journeys: List<ConnectedJourney>,
+    viewerUid: String,
+    modifier: Modifier = Modifier,
+    busy: Boolean = false,
+    onCancelJourney: ((String) -> Unit)? = null,
+) {
+    var journeyToCancelId by rememberSaveable(viewerUid) { mutableStateOf<String?>(null) }
+    val mine = journeys.filter { it.driverUid == viewerUid }
+    ConnectedSection(modifier = modifier) {
+        Text("Your offers", style = MaterialTheme.typography.titleLarge)
+        if (mine.isEmpty()) Text("No connected offers yet.")
+        mine.forEach { journey ->
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("${journey.originArea} → ${journey.destinationArea}", style = MaterialTheme.typography.titleMedium)
+                    Text(formatDeparture(journey.departureEpochMillis))
+                    Text("Status: ${journey.status.name}", fontWeight = FontWeight.Bold)
+                    Text(connectedJourneyAvailabilityLabel(journey))
+                    if (onCancelJourney != null && ConnectedJourneyLifecycle.canCancelJourney(journey, viewerUid, System.currentTimeMillis())) {
+                        OutlinedButton(enabled = !busy, onClick = { journeyToCancelId = journey.id }) { Text("Cancel journey") }
+                    }
+                }
+            }
+        }
+        ConnectedUnavailableNote()
+    }
+    val toCancel = mine.firstOrNull {
+        it.id == journeyToCancelId && ConnectedJourneyLifecycle.canCancelJourney(it, viewerUid, System.currentTimeMillis())
+    }
+    if (toCancel != null && onCancelJourney != null) {
+        AlertDialog(
+            onDismissRequest = { journeyToCancelId = null },
+            title = { Text("Cancel this journey?") },
+            text = { Text("This cancels the whole journey for all confirmed riders and pending requests. It cannot be undone.") },
+            confirmButton = {
+                Button(enabled = !busy, onClick = {
+                    journeyToCancelId = null
+                    onCancelJourney(toCancel.id)
+                }) { Text("Confirm journey cancellation") }
+            },
+            dismissButton = {
+                TextButton(enabled = !busy, onClick = { journeyToCancelId = null }) { Text("Keep journey") }
             },
         )
     }
@@ -802,7 +867,7 @@ private fun ConnectedSection(
 @Composable
 private fun ConnectedUnavailableNote() {
     Text(
-        "Unavailable here: payments, GPS/maps, messaging, notifications, Circles, trust/ratings and driver journey cancellation.",
+        "Unavailable here: payments, GPS/maps, messaging, notifications, Circles, trust/ratings and journey completion.",
         style = MaterialTheme.typography.bodySmall,
     )
 }

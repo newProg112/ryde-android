@@ -26,6 +26,7 @@ interface ConnectedJourneyStore {
     suspend fun requestSeat(uid: String, journeyId: String)
     suspend fun cancelRequest(uid: String, requestId: String)
     suspend fun cancelConfirmedSeat(uid: String, tripId: String)
+    suspend fun cancelJourney(uid: String, journeyId: String)
     suspend fun decide(uid: String, requestId: String, accept: Boolean)
 }
 
@@ -77,9 +78,6 @@ class FirestoreConnectedProfileStore(private val firestore: FirebaseFirestore) :
 
 class FirestoreConnectedJourneyStore(private val firestore: FirebaseFirestore) : ConnectedJourneyStore {
     override suspend fun load(uid: String): ConnectedJourneySnapshot {
-        val journeys = firestore.collection(JOURNEYS).get(Source.SERVER).await().documents
-            .mapNotNull { FirestoreJourneyMapper.journey(it.id, it.data.orEmpty()) }
-            .sortedBy { it.departureEpochMillis }
         val asDriver = firestore.collection(REQUESTS).whereEqualTo("driverUid", uid).get(Source.SERVER).await()
         val asRider = firestore.collection(REQUESTS).whereEqualTo("riderUid", uid).get(Source.SERVER).await()
         val requests = (asDriver.documents + asRider.documents)
@@ -92,6 +90,11 @@ class FirestoreConnectedJourneyStore(private val firestore: FirebaseFirestore) :
         val confirmedTrips = (tripsAsDriver.documents + tripsAsRider.documents)
             .distinctBy { it.id }
             .mapNotNull { FirestoreJourneyMapper.confirmedTrip(it.id, it.data.orEmpty()) }
+            .sortedBy { it.departureEpochMillis }
+        // Read lifecycle authority last, so a journey closed during the private
+        // queries is reflected in this refresh. Queries are still not one snapshot.
+        val journeys = firestore.collection(JOURNEYS).get(Source.SERVER).await().documents
+            .mapNotNull { FirestoreJourneyMapper.journey(it.id, it.data.orEmpty()) }
             .sortedBy { it.departureEpochMillis }
         return ConnectedJourneySnapshot(journeys, requests, confirmedTrips)
     }
@@ -113,6 +116,7 @@ class FirestoreConnectedJourneyStore(private val firestore: FirebaseFirestore) :
                 ?: error("Journey unavailable")
             check(
                 journey.driverUid != uid &&
+                    journey.status == ConnectedJourneyStatus.OPEN &&
                     journey.seatsRemaining > 0 &&
                     journey.departureEpochMillis > System.currentTimeMillis(),
             )
@@ -126,6 +130,10 @@ class FirestoreConnectedJourneyStore(private val firestore: FirebaseFirestore) :
             val request = FirestoreJourneyMapper.request(requestId, transaction.get(requestRef).data.orEmpty())
                 ?: error("Request unavailable")
             check(request.riderUid == uid && request.status == ConnectedRequestStatus.PENDING)
+            val journey = FirestoreJourneyMapper.journey(request.journeyId,
+                transaction.get(firestore.collection(JOURNEYS).document(request.journeyId)).data.orEmpty())
+                ?: error("Journey unavailable")
+            check(ConnectedJourneyLifecycle.requestJourneyOpen(request, journey))
             transaction.update(requestRef, "status", ConnectedRequestStatus.CANCELLED.name)
         }.await()
     }
@@ -144,7 +152,7 @@ class FirestoreConnectedJourneyStore(private val firestore: FirebaseFirestore) :
                 ?: error("Journey unavailable")
             check(request.status == ConnectedRequestStatus.ACCEPTED && request.riderUid == uid)
             check(request.journeyId == journey.id && request.driverUid == journey.driverUid && trip.driverUid == journey.driverUid)
-            check(journey.departureEpochMillis > System.currentTimeMillis() && journey.seatsRemaining < journey.seatCapacity)
+            check(journey.status == ConnectedJourneyStatus.OPEN && journey.departureEpochMillis > System.currentTimeMillis() && journey.seatsRemaining < journey.seatCapacity)
             transaction.update(requestRef, "status", ConnectedRequestStatus.CANCELLED_AFTER_ACCEPTANCE.name)
             transaction.update(tripRef, mapOf(
                 "status" to ConnectedTripStatus.CANCELLED_BY_RIDER.name,
@@ -159,16 +167,36 @@ class FirestoreConnectedJourneyStore(private val firestore: FirebaseFirestore) :
         }.await()
     }
 
+    override suspend fun cancelJourney(uid: String, journeyId: String) {
+        val journeyRef = firestore.collection(JOURNEYS).document(journeyId)
+        firestore.runTransaction { transaction ->
+            val journey = FirestoreJourneyMapper.journey(journeyId, transaction.get(journeyRef).data.orEmpty())
+                ?: error("Journey unavailable")
+            check(ConnectedJourneyLifecycle.canCancelJourney(journey, uid, System.currentTimeMillis()))
+            val guard = FirestoreJourneyMapper.acceptanceGuard(
+                transaction.get(firestore.collection(ACCEPTANCE_GUARDS).document(journeyId)).data.orEmpty())
+                ?: error("Journey acceptance guard unavailable")
+            check(guard.driverUid == uid && guard.acceptanceCount == journey.seatCapacity - journey.seatsRemaining)
+            // This one authoritative transition closes every linked booking.
+            // Capacity, the guard, requests and trip source records stay historical.
+            transaction.update(journeyRef, mapOf(
+                "status" to ConnectedJourneyStatus.CANCELLED.name,
+                "cancelledAt" to FieldValue.serverTimestamp(),
+            ))
+        }.await()
+    }
+
     override suspend fun decide(uid: String, requestId: String, accept: Boolean) {
         val requestRef = firestore.collection(REQUESTS).document(requestId)
         firestore.runTransaction { transaction ->
             val request = FirestoreJourneyMapper.request(requestId, transaction.get(requestRef).data.orEmpty())
                 ?: error("Request unavailable")
             check(request.driverUid == uid && request.status == ConnectedRequestStatus.PENDING)
+            val journeyRef = firestore.collection(JOURNEYS).document(request.journeyId)
+            val journey = FirestoreJourneyMapper.journey(request.journeyId, transaction.get(journeyRef).data.orEmpty())
+                ?: error("Journey unavailable")
+            check(ConnectedJourneyLifecycle.requestJourneyOpen(request, journey))
             if (accept) {
-                val journeyRef = firestore.collection(JOURNEYS).document(request.journeyId)
-                val journey = FirestoreJourneyMapper.journey(request.journeyId, transaction.get(journeyRef).data.orEmpty())
-                    ?: error("Journey unavailable")
                 check(
                     journey.driverUid == uid &&
                         journey.seatsRemaining > 0 &&

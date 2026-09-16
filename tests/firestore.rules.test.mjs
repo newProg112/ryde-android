@@ -387,6 +387,203 @@ test("acceptance cannot piggyback capacity or guard changes on an unrelated jour
   assert.equal((await getDoc(doc(driver, "journeyAcceptanceGuards/independent"))).data().acceptanceCount, 0);
 });
 
+const cancelJourneyLikeGateway = (db, journeyId) => runTransaction(db, async (transaction) => {
+  const journeyRef = doc(db, `journeys/${journeyId}`);
+  const source = (await transaction.get(journeyRef)).data();
+  const sourceGuard = (await transaction.get(doc(db, `journeyAcceptanceGuards/${journeyId}`))).data();
+  if (source.status !== "OPEN") throw new Error("Journey is terminal");
+  assert.equal(sourceGuard.acceptanceCount, source.seatCapacity - source.seatsRemaining);
+  transaction.update(journeyRef, { status: "CANCELLED", cancelledAt: serverTimestamp() });
+});
+
+test("driver cancels an empty offer once with server time and frozen capacity and guard", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  await assertSucceeds(createJourney(driver, "j1", "driver", 2));
+  const before = (await getDoc(doc(driver, "journeys/j1"))).data();
+  await assertSucceeds(cancelJourneyLikeGateway(driver, "j1"));
+  const closed = (await getDoc(doc(driver, "journeys/j1"))).data();
+  assert.ok(closed.cancelledAt instanceof Timestamp);
+  assert.deepEqual(closed, { ...before, status: "CANCELLED", cancelledAt: closed.cancelledAt });
+  assert.deepEqual((await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data(), guard("driver"));
+  await assertFails(updateDoc(doc(driver, "journeys/j1"), { status: "CANCELLED", cancelledAt: serverTimestamp() }));
+  await assertFails(updateDoc(doc(driver, "journeys/j1"), { status: "OPEN" }));
+  await assertFails(deleteDoc(doc(driver, "journeys/j1")));
+  assert.deepEqual((await getDoc(doc(driver, "journeys/j1"))).data(), closed);
+});
+
+test("driver cancellation preserves pending history freezes all actions and removes discovery", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  const rider = environment.authenticatedContext("rider").firestore();
+  const other = environment.authenticatedContext("other").firestore();
+  await assertSucceeds(createJourney(driver, "j1", "driver", 2));
+  await assertSucceeds(requestSeatLikeGateway(rider, "j1", "rider"));
+  const pending = (await getDoc(doc(rider, "seatRequests/j1_rider"))).data();
+  await assertSucceeds(cancelJourneyLikeGateway(driver, "j1"));
+  assert.deepEqual((await getDoc(doc(rider, "seatRequests/j1_rider"))).data(), pending);
+  assert.deepEqual((await getDoc(doc(driver, "seatRequests/j1_rider"))).data(), pending);
+  assert.equal((await getDocs(query(collection(rider, "journeys"), where("status", "==", "OPEN")))).size, 0);
+  await assertFails(requestSeatLikeGateway(other, "j1", "other"));
+  await assertFails(acceptRequest(driver, "j1", "j1_rider", 1, 1));
+  await assertFails(updateDoc(doc(driver, "seatRequests/j1_rider"), { status: "DECLINED" }));
+  await assertFails(updateDoc(doc(rider, "seatRequests/j1_rider"), { status: "CANCELLED" }));
+  assert.deepEqual((await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data(), guard("driver"));
+});
+
+test("driver cancellation keeps multiple confirmed trips private and never restores seats", async () => {
+  const { driver, rider } = await acceptedCancellationFixture(3);
+  const other = environment.authenticatedContext("other").firestore();
+  const stranger = environment.authenticatedContext("stranger").firestore();
+  await assertSucceeds(requestSeatLikeGateway(other, "j1", "other"));
+  await assertSucceeds(acceptRequest(driver, "j1", "j1_other", 1, 2));
+  const guardBefore = (await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data();
+  const tripBefore = (await getDoc(doc(rider, "confirmedTrips/j1_rider"))).data();
+  await assertSucceeds(cancelJourneyLikeGateway(driver, "j1"));
+  assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().seatsRemaining, 1);
+  assert.deepEqual((await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data(), guardBefore);
+  assert.deepEqual((await getDoc(doc(rider, "confirmedTrips/j1_rider"))).data(), tripBefore);
+  assert.deepEqual((await getDoc(doc(driver, "confirmedTrips/j1_rider"))).data(), tripBefore);
+  assert.equal((await getDoc(doc(other, "confirmedTrips/j1_other"))).data().status, "CONFIRMED");
+  await assertFails(cancelConfirmedBatch(rider, "j1", "j1_rider", 2));
+  await assertFails(requestSeatLikeGateway(rider, "j1", "rider"));
+  for (const db of [stranger, environment.unauthenticatedContext().firestore()]) {
+    await assertFails(getDoc(doc(db, "confirmedTrips/j1_rider")));
+    await assertFails(getDoc(doc(db, "seatRequests/j1_rider")));
+    await assertFails(getDoc(doc(db, "journeyAcceptanceGuards/j1")));
+  }
+  await assertFails(getDoc(doc(rider, "journeyAcceptanceGuards/j1")));
+  await assertFails(getDoc(doc(other, "confirmedTrips/j1_rider")));
+  await assertFails(getDocs(collection(driver, "confirmedTrips")));
+  await assertFails(updateDoc(doc(driver, "confirmedTrips/j1_rider"), { status: "CANCELLED_BY_DRIVER" }));
+  await assertFails(updateDoc(doc(driver, "seatRequests/j1_rider"), { riderUid: "other" }));
+});
+
+test("previous rider cancellation retains attribution and restored capacity stays unavailable", async () => {
+  const { driver, rider } = await acceptedCancellationFixture(1);
+  await assertSucceeds(cancelConfirmedLikeGateway(rider, "j1", "j1_rider"));
+  const tripBefore = (await getDoc(doc(rider, "confirmedTrips/j1_rider"))).data();
+  const guardBefore = (await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data();
+  await assertSucceeds(cancelJourneyLikeGateway(driver, "j1"));
+  assert.deepEqual((await getDoc(doc(rider, "confirmedTrips/j1_rider"))).data(), tripBefore);
+  assert.equal(tripBefore.status, "CANCELLED_BY_RIDER");
+  assert.equal((await getDoc(doc(rider, "seatRequests/j1_rider"))).data().status, "CANCELLED_AFTER_ACCEPTANCE");
+  assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().seatsRemaining, 1);
+  assert.deepEqual((await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data(), guardBefore);
+  await assertFails(requestSeatLikeGateway(environment.authenticatedContext("new").firestore(), "j1", "new"));
+  await assertFails(cancelConfirmedBatch(rider, "j1", "j1_rider", 1));
+});
+
+test("only the owning driver may close an offer and malformed or partial transitions fail", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  await assertSucceeds(createJourney(driver, "j1", "driver", 2));
+  for (const db of [environment.authenticatedContext("rider").firestore(), environment.authenticatedContext("stranger").firestore(), environment.unauthenticatedContext().firestore()]) {
+    await assertFails(updateDoc(doc(db, "journeys/j1"), { status: "CANCELLED", cancelledAt: serverTimestamp() }));
+  }
+  for (const invalid of [
+    { status: "CANCELLED" }, { cancelledAt: serverTimestamp() },
+    { status: "CANCELLED", cancelledAt: "bad" }, { status: "CANCELLED", cancelledAt: Timestamp.fromMillis(0) },
+    { status: "CONFIRMED", cancelledAt: serverTimestamp() },
+    ...[{ driverUid: "rider" }, { originArea: "Derby" }, { destinationArea: "Derby" },
+      { departureAt: Timestamp.fromMillis(0) }, { seatCapacity: 3 }, { seatsRemaining: 1 }, { extra: true }]
+      .map(fields => ({ status: "CANCELLED", cancelledAt: serverTimestamp(), ...fields })),
+  ]) await assertFails(updateDoc(doc(driver, "journeys/j1"), invalid));
+  assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().status, "OPEN");
+  await assertSucceeds(cancelJourneyLikeGateway(driver, "j1"));
+});
+
+test("driver cancellation cannot piggyback request trip or cross-journey guard changes", async () => {
+  const { driver, rider } = await acceptedCancellationFixture(2);
+  const pending = environment.authenticatedContext("pending").firestore();
+  await assertSucceeds(requestSeatLikeGateway(pending, "j1", "pending"));
+  await assertSucceeds(createJourney(driver, "independent", "driver", 1));
+  for (const [path, fields] of [
+    ["seatRequests/j1_pending", { status: "DECLINED" }],
+    ["seatRequests/j1_rider", { status: "CANCELLED_AFTER_ACCEPTANCE" }],
+    ["seatRequests/j1_pending", { journeyId: "independent" }],
+    ["confirmedTrips/j1_rider", { status: "CANCELLED_BY_DRIVER" }],
+    ["confirmedTrips/j1_rider", { originArea: "Derby" }],
+    ["journeyAcceptanceGuards/j1", { acceptanceCount: 0 }],
+    ["journeyAcceptanceGuards/independent", { acceptanceCount: 1, lastAcceptedRequestId: "j1_rider" }],
+  ]) {
+    const batch = writeBatch(driver);
+    batch.update(doc(driver, "journeys/j1"), { status: "CANCELLED", cancelledAt: serverTimestamp() });
+    batch.update(doc(driver, path), fields);
+    await assertFails(batch.commit());
+  }
+  assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().status, "OPEN");
+  assert.equal((await getDoc(doc(rider, "confirmedTrips/j1_rider"))).data().status, "CONFIRMED");
+  assert.equal((await getDoc(doc(driver, "journeys/independent"))).data().seatsRemaining, 1);
+});
+
+test("driver cancellation fails closed for departed unguarded and inconsistent journeys", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  await environment.withSecurityRulesDisabled(async context => {
+    const db = context.firestore();
+    for (const [id, source] of [["departed", { ...journey("driver"), departureAt: Timestamp.fromMillis(0) }], ["legacy", journey("driver")], ["inconsistent", journey("driver")]]) {
+      await setDoc(doc(db, `journeys/${id}`), source);
+    }
+    await setDoc(doc(db, "journeyAcceptanceGuards/departed"), guard("driver"));
+    await setDoc(doc(db, "journeyAcceptanceGuards/inconsistent"), guard("driver", 1, "other"));
+  });
+  for (const id of ["departed", "legacy", "inconsistent"]) {
+    await assertFails(updateDoc(doc(driver, `journeys/${id}`), { status: "CANCELLED", cancelledAt: serverTimestamp() }));
+  }
+});
+
+test("simultaneous driver cancellations close once without changing allocation counts", async () => {
+  const { driver } = await acceptedCancellationFixture(1);
+  const results = await Promise.allSettled([cancelJourneyLikeGateway(driver, "j1"), cancelJourneyLikeGateway(driver, "j1")]);
+  assert.equal(results.filter(result => result.status === "fulfilled").length, 1);
+  assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().status, "CANCELLED");
+  assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().seatsRemaining, 0);
+  assert.equal((await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data().acceptanceCount, 1);
+});
+
+test("driver cancellation racing request creation leaves terminal preserved history or no request", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  const rider = environment.authenticatedContext("rider").firestore();
+  await assertSucceeds(createJourney(driver, "j1", "driver", 1));
+  const results = await Promise.allSettled([cancelJourneyLikeGateway(driver, "j1"), requestSeatLikeGateway(rider, "j1", "rider")]);
+  if (results[0].status === "rejected") await assertSucceeds(cancelJourneyLikeGateway(driver, "j1"));
+  assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().status, "CANCELLED");
+  const requests = await getDocs(query(collection(driver, "seatRequests"), where("driverUid", "==", "driver")));
+  assert.ok(requests.size <= 1);
+  if (requests.size) {
+    assert.equal(requests.docs[0].data().status, "PENDING");
+    await assertFails(acceptRequest(driver, "j1", "j1_rider", 0, 1));
+  }
+  assert.equal((await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data().acceptanceCount, 0);
+});
+
+test("driver cancellation racing acceptance preserves the winning allocation or rejects acceptance", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  const rider = environment.authenticatedContext("rider").firestore();
+  await assertSucceeds(createJourney(driver, "j1", "driver", 1));
+  await assertSucceeds(requestSeatLikeGateway(rider, "j1", "rider"));
+  const results = await Promise.allSettled([cancelJourneyLikeGateway(driver, "j1"), acceptRequest(driver, "j1", "j1_rider", 0, 1)]);
+  if (results[0].status === "rejected") await assertSucceeds(cancelJourneyLikeGateway(driver, "j1"));
+  const closed = (await getDoc(doc(driver, "journeys/j1"))).data();
+  const allocated = (await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data().acceptanceCount;
+  const requestStatus = (await getDoc(doc(rider, "seatRequests/j1_rider"))).data().status;
+  assert.equal(closed.status, "CANCELLED");
+  assert.equal(allocated, closed.seatCapacity - closed.seatsRemaining);
+  const trips = await getDocs(query(collection(driver, "confirmedTrips"), where("driverUid", "==", "driver")));
+  assert.equal(trips.size, allocated);
+  assert.equal(requestStatus, allocated === 1 ? "ACCEPTED" : "PENDING");
+});
+
+test("driver cancellation racing rider release never restores seats after closure", async () => {
+  const { driver, rider } = await acceptedCancellationFixture(1);
+  const results = await Promise.allSettled([cancelJourneyLikeGateway(driver, "j1"), cancelConfirmedLikeGateway(rider, "j1", "j1_rider")]);
+  if (results[0].status === "rejected") await assertSucceeds(cancelJourneyLikeGateway(driver, "j1"));
+  const closed = (await getDoc(doc(driver, "journeys/j1"))).data();
+  const sourceTrip = (await getDoc(doc(rider, "confirmedTrips/j1_rider"))).data();
+  const allocated = (await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data().acceptanceCount;
+  assert.equal(closed.status, "CANCELLED");
+  assert.equal(allocated, closed.seatCapacity - closed.seatsRemaining);
+  assert.equal(closed.seatsRemaining, sourceTrip.status === "CANCELLED_BY_RIDER" ? 1 : 0);
+  await assertFails(cancelConfirmedBatch(rider, "j1", "j1_rider", 1));
+});
+
 test("Auth emulator supports local email registration, sign-out and sign-in", async () => {
   const email = `phase9b-${Date.now()}@example.test`;
   const created = await createUserWithEmailAndPassword(auth, email, "password-123");

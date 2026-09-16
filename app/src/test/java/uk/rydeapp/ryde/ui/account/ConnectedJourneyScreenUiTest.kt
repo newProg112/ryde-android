@@ -10,6 +10,7 @@ import uk.rydeapp.ryde.data.connected.ConnectedJourney
 import uk.rydeapp.ryde.data.connected.ConnectedJourneySnapshot
 import uk.rydeapp.ryde.data.connected.ConnectedSeatRequest
 import uk.rydeapp.ryde.data.connected.ConnectedTripStatus
+import uk.rydeapp.ryde.data.connected.ConnectedJourneyStatus
 import java.time.LocalDateTime
 import java.time.ZoneId
 
@@ -17,10 +18,10 @@ class ConnectedJourneyScreenUiTest {
     @Test
     fun `only rider can cancel upcoming confirmed trip and cancelled history is terminal`() {
         val confirmed = trip("journey-1_rider", 4_070_908_800_000L)
-        assertTrue(canCancelConnectedConfirmedSeat(confirmed, "rider", confirmed.departureEpochMillis - 1))
-        assertFalse(canCancelConnectedConfirmedSeat(confirmed, "driver", 0))
-        assertFalse(canCancelConnectedConfirmedSeat(confirmed, "stranger", 0))
-        assertFalse(canCancelConnectedConfirmedSeat(confirmed, "rider", confirmed.departureEpochMillis))
+        assertTrue(canCancelConnectedConfirmedSeat(confirmed, "rider", confirmed.departureEpochMillis - 1, journey(confirmed)))
+        assertFalse(canCancelConnectedConfirmedSeat(confirmed, "driver", 0, journey(confirmed)))
+        assertFalse(canCancelConnectedConfirmedSeat(confirmed, "stranger", 0, journey(confirmed)))
+        assertFalse(canCancelConnectedConfirmedSeat(confirmed, "rider", confirmed.departureEpochMillis, journey(confirmed)))
         val cancelled = confirmed.copy(status = ConnectedTripStatus.CANCELLED_BY_RIDER, cancelledAtEpochMillis = 1)
         assertFalse(canCancelConnectedConfirmedSeat(cancelled, "rider", 0))
         assertEquals("Status: CANCELLED_BY_RIDER · Cancelled by rider", connectedTripStatusLabel(cancelled))
@@ -55,9 +56,9 @@ class ConnectedJourneyScreenUiTest {
             connectedTripsForParticipant(listOf(later, earlier), "rider").map { it.id },
         )
         assertEquals("Mansfield → Nottingham", connectedTripRouteLabel(earlier))
-        assertEquals("Status: CONFIRMED", connectedTripStatusLabel(earlier))
-        assertEquals("You're driving", connectedTripRoleLabel(earlier, "driver"))
-        assertEquals("You're riding", connectedTripRoleLabel(earlier, "rider"))
+        assertEquals("Status: CONFIRMED", connectedTripStatusLabel(earlier, journey(earlier)))
+        assertEquals("You're driving", connectedTripRoleLabel(earlier, "driver", journey(earlier)))
+        assertEquals("You're riding", connectedTripRoleLabel(earlier, "rider", journey(earlier)))
         assertEquals(null, connectedTripRoleLabel(earlier, "stranger"))
         assertTrue(connectedTripsForParticipant(listOf(earlier), "stranger").isEmpty())
         assertEquals(
@@ -132,6 +133,26 @@ class ConnectedJourneyScreenUiTest {
         assertFalse(isConnectedDepartureFuture(ConnectedDepartureSelection(selectedDate, 11 * 60 + 59), now, zone))
         assertTrue(isConnectedDepartureFuture(ConnectedDepartureSelection(selectedDate, 12 * 60 + 1), now, zone))
     }
+
+    @Test
+    fun `driver cancelled journey closes trip and request actions and preserves earlier rider status`() {
+        val confirmed = trip("journey-1_rider", 4_070_908_800_000L)
+        val closed = journey(confirmed).copy(status = ConnectedJourneyStatus.CANCELLED, cancelledAtEpochMillis = 1)
+        assertEquals("Status: CANCELLED_BY_DRIVER · Journey cancelled by driver", connectedTripStatusLabel(confirmed, closed))
+        assertFalse(canCancelConnectedConfirmedSeat(confirmed, "rider", 0, closed))
+        assertEquals("Rider", connectedTripRoleLabel(confirmed, "rider", closed))
+        assertEquals("Status: UNAVAILABLE", connectedTripStatusLabel(confirmed))
+        assertFalse(canCancelConnectedConfirmedSeat(confirmed, "rider", 0))
+        val pending = ConnectedSeatRequest(confirmed.id, closed.id, closed.driverUid, "rider", ConnectedRequestStatus.PENDING)
+        assertEquals("Status: CANCELLED_BY_DRIVER · Journey cancelled by driver", connectedRequestStatusLabel(pending, closed))
+        assertFalse(canRerequestConnectedSeat(ConnectedRiderRequestItem(pending.copy(status = ConnectedRequestStatus.CANCELLED), closed), 0))
+        val earlier = confirmed.copy(status = ConnectedTripStatus.CANCELLED_BY_RIDER, cancelledAtEpochMillis = 0)
+        assertEquals("Status: CANCELLED_BY_RIDER · Cancelled by rider", connectedTripStatusLabel(earlier, closed))
+        assertTrue(connectedJourneyAvailabilityLabel(closed).contains("Unavailable for booking"))
+    }
+
+    private fun journey(trip: ConnectedConfirmedTrip) = ConnectedJourney(trip.journeyId, trip.driverUid,
+        trip.originArea, trip.destinationArea, trip.departureEpochMillis, 2, 1)
 
     private fun trip(id: String, departure: Long) = ConnectedConfirmedTrip(
         id = id,

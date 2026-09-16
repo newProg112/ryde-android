@@ -40,7 +40,7 @@ service cloud.firestore {
     function validJourney(data) {
       return data.keys().hasOnly([
           'driverUid', 'originArea', 'destinationArea', 'departureAt',
-          'seatCapacity', 'seatsRemaining', 'status'
+          'seatCapacity', 'seatsRemaining', 'status', 'cancelledAt'
         ])
         && data.driverUid is string
         && validBroadArea(data.originArea)
@@ -51,7 +51,8 @@ service cloud.firestore {
         && data.seatCapacity >= 1 && data.seatCapacity <= 8
         && data.seatsRemaining is int
         && data.seatsRemaining >= 0 && data.seatsRemaining <= data.seatCapacity
-        && data.status == 'OPEN';
+        && ((data.status == 'OPEN' && !('cancelledAt' in data))
+          || (data.status == 'CANCELLED' && data.cancelledAt is timestamp));
     }
 
     function validSeatRequest(data) {
@@ -98,6 +99,7 @@ service cloud.firestore {
       let journey = get(journeyPath(journeyId)).data;
       let guard = get(acceptanceGuardPath(journeyId)).data;
       return validJourney(journey)
+        && journey.status == 'OPEN'
         && validAcceptanceGuard(guard)
         && journey.driverUid == driverUid
         && guard.driverUid == driverUid
@@ -110,6 +112,7 @@ service cloud.firestore {
       // Unchanged fields retain their validated types; the exact integer delta
       // from positive remaining capacity also proves all after-state bounds.
       return validJourney(before)
+        && before.status == 'OPEN' && after.status == 'OPEN'
         && before.driverUid == driverUid
         && after.driverUid == driverUid
         && after.seatCapacity is int && after.seatsRemaining is int
@@ -212,6 +215,7 @@ service cloud.firestore {
         && requestBefore.status == 'ACCEPTED' && requestAfter.status == 'CANCELLED_AFTER_ACCEPTANCE'
         && requestAfter.diff(requestBefore).affectedKeys().hasOnly(['status'])
         && validJourney(journeyBefore)
+        && journeyBefore.status == 'OPEN' && journeyAfter.status == 'OPEN'
         && journeyAfter.seatCapacity is int && journeyAfter.seatsRemaining is int
         && journeyBefore.departureAt > request.time
         && journeyAfter.diff(journeyBefore).affectedKeys().hasOnly(['seatsRemaining'])
@@ -262,6 +266,7 @@ service cloud.firestore {
       allow create: if signedIn()
         && request.resource.data.driverUid == request.auth.uid
         && validJourney(request.resource.data)
+        && request.resource.data.status == 'OPEN'
         && request.resource.data.seatsRemaining == request.resource.data.seatCapacity
         && request.resource.data.departureAt > request.time
         && !exists(acceptanceGuardPath(journeyId))
@@ -279,6 +284,19 @@ service cloud.firestore {
         && request.resource.data.seatsRemaining == resource.data.seatsRemaining + 1
         && tripTransitionsToRiderCancelled(
           getAfter(acceptanceGuardPath(journeyId)).data.lastCancelledRequestId, journeyId);
+      // Only the journey changes. Its linked records retain their source history;
+      // all booking writes require OPEN, and the private guard stays frozen.
+      allow update: if signedIn()
+        && resource.data.driverUid == request.auth.uid
+        && resource.data.status == 'OPEN'
+        && resource.data.departureAt > request.time
+        && validJourney(resource.data)
+        && request.resource.data.status == 'CANCELLED'
+        && request.resource.data.cancelledAt == request.time
+        && request.resource.data.seatCapacity is int && request.resource.data.seatsRemaining is int
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'cancelledAt'])
+        && currentGuardMatchesJourney(journeyId, request.auth.uid)
+        && getAfter(acceptanceGuardPath(journeyId)).data == get(acceptanceGuardPath(journeyId)).data;
       allow delete: if false;
     }
 
@@ -294,6 +312,7 @@ service cloud.firestore {
         && !exists(journeyPath(journeyId))
         && existsAfter(journeyPath(journeyId))
         && validJourney(getAfter(journeyPath(journeyId)).data)
+        && getAfter(journeyPath(journeyId)).data.status == 'OPEN'
         && getAfter(journeyPath(journeyId)).data.driverUid == request.auth.uid
         && getAfter(journeyPath(journeyId)).data.seatsRemaining
           == getAfter(journeyPath(journeyId)).data.seatCapacity;
@@ -321,6 +340,7 @@ service cloud.firestore {
         && exists(journeyPath(request.resource.data.journeyId))
         && get(journeyPath(request.resource.data.journeyId)).data.driverUid == request.resource.data.driverUid
         && get(journeyPath(request.resource.data.journeyId)).data.status == 'OPEN'
+        && getAfter(journeyPath(request.resource.data.journeyId)).data.status == 'OPEN'
         && get(journeyPath(request.resource.data.journeyId)).data.departureAt > request.time
         && get(journeyPath(request.resource.data.journeyId)).data.seatsRemaining > 0
         && currentGuardMatchesJourney(
@@ -328,6 +348,8 @@ service cloud.firestore {
           request.resource.data.driverUid);
       allow update: if signedIn()
         && resource.data.riderUid == request.auth.uid
+        && get(journeyPath(resource.data.journeyId)).data.status == 'OPEN'
+        && getAfter(journeyPath(resource.data.journeyId)).data.status == 'OPEN'
         && validSeatRequest(resource.data)
         && validSeatRequest(request.resource.data)
         && requestId == resource.data.journeyId + '_' + resource.data.riderUid
@@ -349,6 +371,8 @@ service cloud.firestore {
               resource.data.driverUid)));
       allow update: if signedIn()
         && resource.data.driverUid == request.auth.uid
+        && get(journeyPath(resource.data.journeyId)).data.status == 'OPEN'
+        && getAfter(journeyPath(resource.data.journeyId)).data.status == 'OPEN'
         && get(journeyPath(resource.data.journeyId)).data.driverUid == request.auth.uid
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
         && resource.data.status == 'PENDING'

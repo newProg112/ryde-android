@@ -78,6 +78,8 @@ enum class ConnectedRequestStatus { PENDING, ACCEPTED, DECLINED, CANCELLED, CANC
 
 enum class ConnectedTripStatus { CONFIRMED, CANCELLED_BY_RIDER }
 
+enum class ConnectedJourneyStatus { OPEN, CANCELLED }
+
 data class ConnectedJourney(
     val id: String,
     val driverUid: String,
@@ -86,6 +88,8 @@ data class ConnectedJourney(
     val departureEpochMillis: Long,
     val seatCapacity: Int,
     val seatsRemaining: Int,
+    val status: ConnectedJourneyStatus = ConnectedJourneyStatus.OPEN,
+    val cancelledAtEpochMillis: Long? = null,
 )
 
 data class ConnectedSeatRequest(
@@ -224,7 +228,12 @@ object FirestoreJourneyMapper {
     )
 
     fun journey(id: String, data: Map<String, Any?>): ConnectedJourney? {
-        if (data.keys != journeyFields || data["status"] != "OPEN") return null
+        val status = runCatching { ConnectedJourneyStatus.valueOf(data["status"] as? String ?: return null) }.getOrNull() ?: return null
+        val expectedFields = if (status == ConnectedJourneyStatus.CANCELLED) journeyFields + "cancelledAt" else journeyFields
+        if (data.keys != expectedFields) return null
+        val cancelledAt = if (status == ConnectedJourneyStatus.CANCELLED) {
+            (data["cancelledAt"] as? Timestamp)?.toDate()?.time ?: return null
+        } else null
         val capacity = (data["seatCapacity"] as? Number)?.toInt() ?: return null
         val remaining = (data["seatsRemaining"] as? Number)?.toInt() ?: return null
         return ConnectedJourney(
@@ -232,7 +241,7 @@ object FirestoreJourneyMapper {
             data["originArea"] as? String ?: return null,
             data["destinationArea"] as? String ?: return null,
             (data["departureAt"] as? Timestamp)?.toDate()?.time ?: return null,
-            capacity, remaining,
+            capacity, remaining, status, cancelledAt,
         ).takeIf { isValidJourney(it) }
     }
 

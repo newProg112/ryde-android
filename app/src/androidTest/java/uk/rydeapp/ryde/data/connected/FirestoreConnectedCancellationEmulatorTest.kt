@@ -73,6 +73,39 @@ class FirestoreConnectedCancellationEmulatorTest {
             assertEquals(0, driver.load(driverUid).journeys.single { it.id == journey.id }.seatsRemaining)
             assertEquals(trip, rider.load(riderUid).confirmedTrips.single())
             assertFalse(runCatching { guardRef.get(Source.SERVER).await() }.isSuccess)
+            // Closing the offer preserves both the earlier rider withdrawal and
+            // the other rider's confirmation as source history.
+            val guardBeforeClosure = driverGuard.get(Source.SERVER).await().data
+            assertFalse(runCatching { other.cancelJourney(otherUid, journey.id) }.isSuccess)
+            driver.cancelJourney(driverUid, journey.id)
+            val closed = driver.load(driverUid).journeys.single { it.id == journey.id }
+            assertEquals(ConnectedJourneyStatus.CANCELLED, closed.status)
+            assertTrue(closed.cancelledAtEpochMillis != null)
+            assertEquals(0, closed.seatsRemaining)
+            assertEquals(guardBeforeClosure, driverGuard.get(Source.SERVER).await().data)
+            assertEquals(trip, rider.load(riderUid).confirmedTrips.single())
+            assertEquals(ConnectedTripLifecycle.CANCELLED_BY_RIDER, ConnectedJourneyLifecycle.trip(trip, closed))
+            val otherConfirmed = other.load(otherUid).confirmedTrips.single()
+            assertEquals(ConnectedTripStatus.CONFIRMED, otherConfirmed.status)
+            assertEquals(ConnectedTripLifecycle.CANCELLED_BY_DRIVER, ConnectedJourneyLifecycle.trip(otherConfirmed, closed))
+            assertFalse(runCatching { other.cancelConfirmedSeat(otherUid, otherConfirmed.id) }.isSuccess)
+            assertFalse(runCatching { driver.cancelJourney(driverUid, journey.id) }.isSuccess)
+            assertEquals(guardBeforeClosure, driverGuard.get(Source.SERVER).await().data)
+
+            driver.create(driverUid, ConnectedJourneyDraft("Mansfield", "Nottingham", System.currentTimeMillis() + 86_400_000, 2))
+            val pendingJourney = driver.load(driverUid).journeys.single { it.driverUid == driverUid && it.status == ConnectedJourneyStatus.OPEN }
+            rider.requestSeat(riderUid, pendingJourney.id)
+            driver.cancelJourney(driverUid, pendingJourney.id)
+            val pendingId = "${pendingJourney.id}_$riderUid"
+            val pendingHistory = rider.load(riderUid).requests.single { it.id == pendingId }
+            val pendingClosed = driver.load(driverUid).journeys.single { it.id == pendingJourney.id }
+            assertEquals(ConnectedRequestStatus.PENDING, pendingHistory.status)
+            assertTrue(ConnectedJourneyLifecycle.requestCancelledByDriver(pendingHistory, pendingClosed))
+            assertFalse(runCatching { driver.decide(driverUid, pendingId, true) }.isSuccess)
+            assertFalse(runCatching { driver.decide(driverUid, pendingId, false) }.isSuccess)
+            assertFalse(runCatching { rider.cancelRequest(riderUid, pendingId) }.isSuccess)
+            assertFalse(runCatching { other.requestSeat(otherUid, pendingJourney.id) }.isSuccess)
+            assertEquals(2, pendingClosed.seatsRemaining)
         } finally {
             apps.forEach { it.delete() }
         }

@@ -11,6 +11,62 @@ import org.junit.Test
 
 class ConnectedJourneyFlowTest {
     @Test
+    fun `driver cancellation freezes capacity closes pending and confirmed bookings and preserves rider cancellations`() = runBlocking {
+        val store = MemoryJourneyStore()
+        val driver = repository("driver", store)
+        val rider = repository("rider", store)
+        val pending = repository("pending", store)
+        val withdrew = repository("withdrew", store)
+        driver.createConnectedJourney("Mansfield", "Nottingham", "2099-01-01 10:00", "3")
+        rider.requestConnectedSeat("journey-1")
+        withdrew.requestConnectedSeat("journey-1")
+        pending.requestConnectedSeat("journey-1")
+        driver.decideConnectedRequest("journey-1_rider", true)
+        driver.decideConnectedRequest("journey-1_withdrew", true)
+        withdrew.cancelConnectedConfirmedSeat("journey-1_withdrew")
+        val before = store.load("driver")
+        val beforeGuard = store.guards.getValue("journey-1")
+        assertTrue(rider.cancelConnectedJourney("journey-1") is ConnectedJourneyCommandResult.Failure)
+        assertTrue(repository("stranger", store).cancelConnectedJourney("journey-1") is ConnectedJourneyCommandResult.Failure)
+        assertEquals(ConnectedJourneyCommandResult.Success, driver.cancelConnectedJourney("journey-1"))
+        val after = driver.journeyState.value
+        val closed = after.journeys.single()
+        assertEquals(ConnectedJourneyStatus.CANCELLED, closed.status)
+        assertTrue(closed.cancelledAtEpochMillis != null)
+        assertEquals(before.journeys.single().seatsRemaining, closed.seatsRemaining)
+        assertEquals(beforeGuard, store.guards.getValue(closed.id))
+        assertEquals(before.requests, after.requests)
+        assertEquals(before.confirmedTrips, after.confirmedTrips)
+        rider.refresh()
+        pending.refresh()
+        withdrew.refresh()
+        assertEquals(ConnectedTripLifecycle.CANCELLED_BY_DRIVER, ConnectedJourneyLifecycle.trip(rider.journeyState.value.confirmedTrips.single(), closed))
+        assertEquals(ConnectedTripLifecycle.CANCELLED_BY_RIDER, ConnectedJourneyLifecycle.trip(withdrew.journeyState.value.confirmedTrips.single(), closed))
+        assertTrue(ConnectedJourneyLifecycle.requestCancelledByDriver(pending.journeyState.value.requests.single(), closed))
+        assertTrue(pending.cancelConnectedRequest("journey-1_pending") is ConnectedJourneyCommandResult.Failure)
+        assertTrue(driver.decideConnectedRequest("journey-1_pending", true) is ConnectedJourneyCommandResult.Failure)
+        assertTrue(driver.decideConnectedRequest("journey-1_pending", false) is ConnectedJourneyCommandResult.Failure)
+        assertTrue(rider.cancelConnectedConfirmedSeat("journey-1_rider") is ConnectedJourneyCommandResult.Failure)
+        assertTrue(withdrew.requestConnectedSeat("journey-1") is ConnectedJourneyCommandResult.Failure)
+        assertTrue(repository("new", store).requestConnectedSeat("journey-1") is ConnectedJourneyCommandResult.Failure)
+        assertTrue(driver.cancelConnectedJourney("journey-1") is ConnectedJourneyCommandResult.Failure)
+        assertEquals(after, store.load("driver"))
+    }
+
+    @Test
+    fun `empty driver offer cancellation leaves other offers open and rejects departed offers`() = runBlocking {
+        var now = 0L
+        val store = MemoryJourneyStore { now }
+        val driver = repository("driver", store)
+        repeat(2) { driver.createConnectedJourney("Mansfield", "Nottingham", "2099-01-01 10:00", "1") }
+        assertEquals(ConnectedJourneyCommandResult.Success, driver.cancelConnectedJourney("journey-1"))
+        assertEquals(ConnectedJourneyStatus.OPEN, store.load("driver").journeys.single { it.id == "journey-2" }.status)
+        now = store.load("driver").journeys.single { it.id == "journey-2" }.departureEpochMillis
+        assertTrue(driver.cancelConnectedJourney("journey-2") is ConnectedJourneyCommandResult.Failure)
+        assertEquals(ConnectedJourneyStatus.OPEN, store.load("driver").journeys.single { it.id == "journey-2" }.status)
+    }
+
+    @Test
     fun `confirmed cancellation is bounded and safe when store hangs`() = runBlocking {
         val backing = MemoryJourneyStore()
         val hanging = object : ConnectedJourneyStore by backing {
@@ -409,6 +465,7 @@ class ConnectedJourneyFlowTest {
             override suspend fun requestSeat(uid: String, journeyId: String) = Unit
             override suspend fun cancelRequest(uid: String, requestId: String) = Unit
             override suspend fun cancelConfirmedSeat(uid: String, tripId: String) { throw CancellationException("cancel") }
+            override suspend fun cancelJourney(uid: String, journeyId: String) { throw CancellationException("cancel") }
             override suspend fun decide(uid: String, requestId: String, accept: Boolean) = Unit
         }
         val repository = repository("driver", cancellingStore)
@@ -420,6 +477,12 @@ class ConnectedJourneyFlowTest {
         }
         try {
             repository.cancelConnectedConfirmedSeat("trip")
+            fail("Cancellation should propagate")
+        } catch (_: CancellationException) {
+            assertTrue(true)
+        }
+        try {
+            repository.cancelConnectedJourney("journey")
             fail("Cancellation should propagate")
         } catch (_: CancellationException) {
             assertTrue(true)
@@ -466,6 +529,7 @@ class ConnectedJourneyFlowTest {
 
         override suspend fun requestSeat(uid: String, journeyId: String) {
             val journey = checkNotNull(journeys[journeyId])
+            check(journey.status == ConnectedJourneyStatus.OPEN)
             check(journey.driverUid != uid && journey.seatsRemaining > 0 && journey.departureEpochMillis > System.currentTimeMillis())
             val id = "${journeyId}_${uid}"
             val existing = requests[id]
@@ -476,6 +540,7 @@ class ConnectedJourneyFlowTest {
 
         override suspend fun cancelRequest(uid: String, requestId: String) {
             val request = checkNotNull(requests[requestId])
+            check(journeys.getValue(request.journeyId).status == ConnectedJourneyStatus.OPEN)
             check(request.riderUid == uid && request.status == ConnectedRequestStatus.PENDING)
             requests[requestId] = request.copy(status = ConnectedRequestStatus.CANCELLED)
         }
@@ -484,6 +549,7 @@ class ConnectedJourneyFlowTest {
             val trip = checkNotNull(confirmedTrips[tripId])
             val request = checkNotNull(requests[tripId])
             val journey = checkNotNull(journeys[trip.journeyId])
+            check(journey.status == ConnectedJourneyStatus.OPEN)
             val guard = checkNotNull(guards[journey.id])
             check(trip.riderUid == uid && trip.status == ConnectedTripStatus.CONFIRMED)
             check(request.status == ConnectedRequestStatus.ACCEPTED && journey.departureEpochMillis > nowMillis())
@@ -494,10 +560,19 @@ class ConnectedJourneyFlowTest {
             guards[journey.id] = guard.copy(acceptanceCount = guard.acceptanceCount - 1, lastCancelledRequestId = tripId)
         }
 
+        override suspend fun cancelJourney(uid: String, journeyId: String) {
+            val journey = checkNotNull(journeys[journeyId])
+            check(ConnectedJourneyLifecycle.canCancelJourney(journey, uid, nowMillis()))
+            val guard = guards.getValue(journeyId)
+            check(guard.driverUid == uid && guard.acceptanceCount == journey.seatCapacity - journey.seatsRemaining)
+            journeys[journeyId] = journey.copy(status = ConnectedJourneyStatus.CANCELLED, cancelledAtEpochMillis = nowMillis())
+        }
+
         override suspend fun decide(uid: String, requestId: String, accept: Boolean) {
             val request = checkNotNull(requests[requestId])
             check(request.driverUid == uid && request.status == ConnectedRequestStatus.PENDING)
             val journey = checkNotNull(journeys[request.journeyId])
+            check(journey.status == ConnectedJourneyStatus.OPEN)
             if (accept) {
                 check(journey.seatsRemaining > 0 && journey.departureEpochMillis > System.currentTimeMillis())
                 check(requestId !in confirmedTrips)

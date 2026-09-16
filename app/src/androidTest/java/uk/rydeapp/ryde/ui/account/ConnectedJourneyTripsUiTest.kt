@@ -13,6 +13,8 @@ import org.junit.Test
 import org.junit.Assert.assertEquals
 import uk.rydeapp.ryde.data.connected.ConnectedConfirmedTrip
 import uk.rydeapp.ryde.data.connected.ConnectedTripStatus
+import uk.rydeapp.ryde.data.connected.ConnectedJourney
+import uk.rydeapp.ryde.data.connected.ConnectedJourneyStatus
 import uk.rydeapp.ryde.ui.theme.RydeTheme
 
 class ConnectedJourneyTripsUiTest {
@@ -22,7 +24,7 @@ class ConnectedJourneyTripsUiTest {
         var calls = 0
         composeRule.setContent {
             RydeTheme {
-                ConnectedTripsSection(listOf(current.value), viewerUid = "rider-private-uid", onCancelSeat = { id ->
+                ConnectedTripsSection(listOf(current.value), viewerUid = "rider-private-uid", journeys = listOf(journey()), onCancelSeat = { id ->
                     assertEquals(trip().id, id)
                     calls++
                     current.value = current.value.copy(status = ConnectedTripStatus.CANCELLED_BY_RIDER, cancelledAtEpochMillis = 1)
@@ -59,7 +61,7 @@ class ConnectedJourneyTripsUiTest {
     fun cancellationActionIsDisabledWhileBusy() {
         composeRule.setContent {
             RydeTheme {
-                ConnectedTripsSection(listOf(trip()), viewerUid = "rider-private-uid", busy = true, onCancelSeat = {})
+                ConnectedTripsSection(listOf(trip()), viewerUid = "rider-private-uid", busy = true, journeys = listOf(journey()), onCancelSeat = {})
             }
         }
         composeRule.onNodeWithText("Cancel my seat").assertIsNotEnabled()
@@ -83,7 +85,7 @@ class ConnectedJourneyTripsUiTest {
     fun driverSeesOnlySafeConfirmedTripFieldsAndDrivingRole() {
         composeRule.setContent {
             RydeTheme {
-                ConnectedTripsSection(listOf(trip()), viewerUid = "driver-private-uid", onCancelSeat = {})
+                ConnectedTripsSection(listOf(trip()), viewerUid = "driver-private-uid", journeys = listOf(journey()), onCancelSeat = {})
             }
         }
 
@@ -99,7 +101,7 @@ class ConnectedJourneyTripsUiTest {
     fun riderSeesConfirmedTripWithRidingRole() {
         composeRule.setContent {
             RydeTheme {
-                ConnectedTripsSection(listOf(trip()), viewerUid = "rider-private-uid")
+                ConnectedTripsSection(listOf(trip()), viewerUid = "rider-private-uid", journeys = listOf(journey()))
             }
         }
 
@@ -107,6 +109,40 @@ class ConnectedJourneyTripsUiTest {
         composeRule.onNodeWithText("Status: CONFIRMED").assertIsDisplayed()
         composeRule.onNodeWithText("You're riding").assertIsDisplayed()
     }
+
+    @Test
+    fun driverCancellationClosesAnAlreadyOpenRiderDialogAndKeepsTripHistory() {
+        val currentJourney = mutableStateOf(journey())
+        composeRule.setContent {
+            RydeTheme {
+                ConnectedTripsSection(listOf(trip()), viewerUid = "rider-private-uid", journeys = listOf(currentJourney.value),
+                    onCancelSeat = { throw AssertionError("Closed journey cannot release a seat") })
+            }
+        }
+        composeRule.onNodeWithText("Cancel my seat").performClick()
+        composeRule.onNodeWithText("Confirm cancellation").assertIsDisplayed()
+        composeRule.runOnIdle { currentJourney.value = journey().copy(status = ConnectedJourneyStatus.CANCELLED, cancelledAtEpochMillis = 1) }
+        composeRule.onNodeWithText("Status: CANCELLED_BY_DRIVER · Journey cancelled by driver").assertIsDisplayed()
+        composeRule.onNodeWithText("Rider").assertIsDisplayed()
+        composeRule.onAllNodesWithText("Cancel my seat").assertCountEquals(0)
+        composeRule.onAllNodesWithText("Confirm cancellation").assertCountEquals(0)
+        composeRule.onAllNodesWithText("You're riding").assertCountEquals(0)
+    }
+
+    @Test
+    fun laterDriverCancellationDoesNotReplaceRiderCancelledAttribution() {
+        composeRule.setContent {
+            RydeTheme {
+                ConnectedTripsSection(listOf(trip().copy(status = ConnectedTripStatus.CANCELLED_BY_RIDER, cancelledAtEpochMillis = 0)),
+                    viewerUid = "rider-private-uid", journeys = listOf(journey().copy(status = ConnectedJourneyStatus.CANCELLED, cancelledAtEpochMillis = 1)),
+                    onCancelSeat = {})
+            }
+        }
+        composeRule.onNodeWithText("Status: CANCELLED_BY_RIDER · Cancelled by rider").assertIsDisplayed()
+        composeRule.onAllNodesWithText("Cancel my seat").assertCountEquals(0)
+    }
+
+    private fun journey() = ConnectedJourney("journey-1", "driver-private-uid", "Mansfield", "Nottingham", 4_070_908_800_000L, 1, 0)
 
     private fun trip() = ConnectedConfirmedTrip(
         id = "journey-1_rider-private-uid",

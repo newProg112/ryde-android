@@ -134,7 +134,8 @@ The first 9C slice adds only these emulator-owned documents:
   departureAt: timestamp
   seatCapacity: int          # 1..8; immutable
   seatsRemaining: int        # initially capacity; 0..capacity
-  status: "OPEN"             # immutable in this slice
+  status: "OPEN" | "CANCELLED"
+  cancelledAt: timestamp     # required only for CANCELLED; server time
 
 /seatRequests/{journeyId}_{riderUid}
   journeyId: string          # immutable
@@ -161,8 +162,9 @@ The first 9C slice adds only these emulator-owned documents:
 ```
 
 Any authenticated emulator user may read the intentionally small journey document so that
-offers can be discovered. Only the driver may create their journey or change its remaining
-seat count. A request can be read only by its rider or the referenced driver. Rules require
+offers can be discovered. Only the owning driver may create or cancel their journey. Remaining
+seats change only through linked acceptance or rider cancellation. A request can be read only
+by its rider or the referenced driver. Rules require
 the deterministic request ID, derive/verify both participants against Auth and the referenced
 journey, reject self-requests, and permit only `PENDING -> ACCEPTED|DECLINED` by the driver.
 The rider alone may cancel a pending request. The rider may reopen that same deterministic
@@ -209,6 +211,7 @@ State transitions in 9C-1 are deliberately limited:
 journey + guard:  create OPEN(capacity) + count 0
                   -> OPEN(remaining - 1) + count + 1 per linked acceptance
                   -> OPEN(remaining + 1) + count - 1 per linked rider cancellation
+                  -> CANCELLED + frozen remaining/count on driver cancellation
 request:          create PENDING -> ACCEPTED -> CANCELLED_AFTER_ACCEPTANCE
                                  -> DECLINED
                                  -> CANCELLED -> PENDING while the journey is
@@ -218,8 +221,8 @@ confirmed trip:  absent -> CONFIRMED only with the matching request acceptance
 ```
 
 Rider-owned pending-request cancellation and safe re-requesting remain supported. An upcoming
-confirmed booking also supports the rider cancellation described below. There is no driver
-offer cancellation, later journey lifecycle, private pickup/drop-off, exact/live
+confirmed booking also supports the rider cancellation described below. Driver journey cancellation
+is supported as described below. There is no private pickup/drop-off, exact/live
 location, pricing/payment, messaging, notification, Circle, trust, rating, Function or Storage
 data in connected mode.
 
@@ -246,7 +249,7 @@ data in connected mode.
 8. For the acceptance path, repeat with a one-seat offer and two rider accounts; only one pending
    request can be accepted and the other acceptance must fail without a negative seat count.
 
-Remaining 9C work includes offer cancellation policy and later confirmed-trip/journey lifecycle,
+Remaining 9C work includes later confirmed-trip/journey lifecycle,
 richer discovery/query design, Circles, and any trusted backend operation needed for stronger
 multi-document invariants. None of those capabilities are silently delegated to the fictional
 local-demo repository in connected mode.
@@ -265,7 +268,7 @@ guard: count C -> C - 1, lastCancelledRequestId = acceptedRequestId
 
 Both participants retain the private trip/request history. The rider cannot re-request this
 same journey; another rider can use the restored capacity. Pending withdrawal/re-request is
-unchanged. Driver cancellation is not implemented. Trips retain their original immutable source
+unchanged while the journey remains OPEN. Trips retain their original immutable source
 fields, and cancellation is rejected after departure, for other participants, or on replay.
 
 The guard count remains equal to capacity minus remaining seats before and after cancellation.
@@ -286,9 +289,46 @@ firebase emulators:exec --config firebase.rules-test.json --only auth,firestore 
 ```
 
 The gateway test uses only demo-ryde-rules-test and ports 8180/9199, with unique disposable
-accounts/offers. It skips without that explicit argument and never clears manual data.
+accounts/offers. It also verifies driver cancellation, frozen pending requests and preservation
+of earlier rider cancellations. It skips without that explicit argument and never clears manual data.
 
 Manual verification: accept a one-seat booking, cancel it from the rider's Trips tab, refresh
 both accounts and verify retained cancelled history and one restored seat. Repeating cancellation
 or re-requesting from the original rider must fail. A third disposable rider can request that
 journey and be accepted into its restored seat. Other offers and bookings remain independent.
+
+### Driver journey cancellation (emulator only)
+
+Only the owning driver can cancel an upcoming OPEN offer. Your offers retains the offer as
+history after the confirmation explains that all confirmed riders/pending requests are affected
+and cancellation cannot be undone. The transaction reads the journey and its private guard,
+checks count/capacity agreement and writes only:
+
+```text
+journey: OPEN -> CANCELLED, cancelledAt = server timestamp
+capacity, guard, request and trip source records: unchanged
+```
+
+The journey is the sole authoritative cancellation record. `ConnectedJourneyLifecycle` resolves
+stored CONFIRMED trips to CANCELLED_BY_DRIVER when their linked journey is CANCELLED. Stored
+PENDING/ACCEPTED requests similarly resolve to cancelled-by-driver history. There is no separate
+persisted driver-cancellation status on requests/trips and no query-dependent fan-out operation.
+Earlier CANCELLED_BY_RIDER trips retain their attribution and timestamp. Missing or mismatched
+journeys make confirmed bookings unavailable and disable actions.
+
+Cancelled journeys are excluded from normal discovery. All linked request writes, decisions and
+accepted-seat releases are frozen after closure; neither riders nor drivers can reopen bookings
+or return additional seats. Capacity and guard count remain historical and consistent. The driver
+cannot reopen, delete or alter a cancelled offer, and riders/strangers cannot cancel it. Rules
+require server cancellation time, preserve immutable fields and keep guard reads driver-only.
+
+Acceptance, request creation, rider release and driver cancellation races leave complete valid
+states. A stale optimistic operation may fail safely and require refresh/retry. Refresh reads
+private sources before journeys so it resolves cancellation against the latest lifecycle authority
+read in that refresh; separate server queries still do not form one atomic read snapshot.
+
+Manual verification: cancel an empty offer, an offer with a pending request and an offer with
+confirmed riders. Refresh both accounts: the driver retains an unavailable cancelled offer,
+pending requests have no actions, and confirmed riders see Journey cancelled by driver without
+Cancel my seat. Repeat with an earlier rider-cancelled booking: it remains Cancelled by rider.
+Other offers remain independent. Automated tests use only the dedicated demo namespace/ports.
