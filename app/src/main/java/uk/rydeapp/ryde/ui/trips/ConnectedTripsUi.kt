@@ -13,11 +13,53 @@ internal data class ConnectedTripsItem(
     val statusText: Int,
     val roleText: Int,
     val cancellableTripId: String? = null,
+    val cancellableJourneyId: String? = null,
+    val seatsRemaining: Int? = null,
+    val seatCapacity: Int? = null,
+    val incoming: List<ConnectedIncomingRequest> = emptyList(),
+    val journeyStatusText: Int? = null,
+)
+
+internal data class ConnectedIncomingRequest(
+    val id: String,
+    val statusText: Int,
+    val canAccept: Boolean,
+    val canDecline: Boolean,
 )
 
 internal data class ConnectedTripsContent(
     val rider: List<ConnectedTripsItem>,
     val driver: List<ConnectedTripsItem>,
+    val unavailableIncoming: List<ConnectedIncomingRequest> = emptyList(),
+)
+
+/** Mirrors existing gateway preconditions; transactions remain authoritative. */
+internal fun canDecideConnectedRequest(
+    request: ConnectedSeatRequest, journey: ConnectedJourney?, uid: String, accept: Boolean,
+    nowEpochMillis: Long,
+): Boolean = request.driverUid == uid && request.riderUid != uid &&
+    request.status == ConnectedRequestStatus.PENDING &&
+    ConnectedJourneyLifecycle.requestJourneyOpen(request, journey) &&
+    (!accept || (journey!!.seatsRemaining > 0 && journey.departureEpochMillis > nowEpochMillis))
+
+private fun incomingRequest(
+    request: ConnectedSeatRequest, journey: ConnectedJourney?, uid: String, now: Long,
+): ConnectedIncomingRequest = ConnectedIncomingRequest(
+    request.id,
+    when {
+        ConnectedJourneyLifecycle.requestCancelledByDriver(request, journey) -> R.string.connected_trips_offer_cancelled
+        request.status in listOf(ConnectedRequestStatus.PENDING, ConnectedRequestStatus.ACCEPTED) &&
+            !ConnectedJourneyLifecycle.requestJourneyOpen(request, journey) -> R.string.connected_trips_unavailable
+        else -> when (request.status) {
+            ConnectedRequestStatus.PENDING -> R.string.connected_incoming_pending
+            ConnectedRequestStatus.ACCEPTED -> R.string.connected_incoming_accepted
+            ConnectedRequestStatus.DECLINED -> R.string.connected_incoming_declined
+            ConnectedRequestStatus.CANCELLED -> R.string.connected_incoming_cancelled
+            ConnectedRequestStatus.CANCELLED_AFTER_ACCEPTANCE -> R.string.connected_incoming_seat_cancelled
+        }
+    },
+    canDecideConnectedRequest(request, journey, uid, true, now),
+    canDecideConnectedRequest(request, journey, uid, false, now),
 )
 
 internal fun connectedTripsContent(
@@ -58,16 +100,31 @@ internal fun connectedTripsContent(
             }
         }
         ConnectedTripsItem("request:${request.id}", journey?.originArea, journey?.destinationArea,
-            journey?.departureEpochMillis, status, R.string.connected_trips_rider)
+            journey?.departureEpochMillis, status, R.string.connected_trips_rider,
+            // A terminal request remains historical even if its linked journey is later cancelled.
+            journeyStatusText = R.string.connected_trips_driver_cancelled.takeIf {
+                journey?.status == ConnectedJourneyStatus.CANCELLED && status != R.string.connected_trips_driver_cancelled
+            })
     }
-    val driver = snapshot.journeys.filter { it.driverUid == uid }.map { journey ->
+    val owned = snapshot.journeys.filter { it.driverUid == uid }
+    val incoming = snapshot.requests.filter { it.driverUid == uid && it.riderUid != uid }
+    val driver = owned.map { journey ->
         ConnectedTripsItem("journey:${journey.id}", journey.originArea, journey.destinationArea,
             journey.departureEpochMillis,
-            if (journey.status == ConnectedJourneyStatus.CANCELLED) R.string.connected_trips_offer_cancelled
-            else R.string.connected_trips_offer_open, R.string.connected_trips_driver)
+            when {
+                journey.status == ConnectedJourneyStatus.CANCELLED -> R.string.connected_trips_offer_cancelled
+                journey.departureEpochMillis <= nowEpochMillis -> R.string.connected_offer_departed
+                journey.seatsRemaining == 0 -> R.string.connected_offer_full
+                else -> R.string.connected_trips_offer_open
+            }, R.string.connected_trips_driver,
+            cancellableJourneyId = journey.id.takeIf { ConnectedJourneyLifecycle.canCancelJourney(journey, uid, nowEpochMillis) },
+            seatsRemaining = journey.seatsRemaining, seatCapacity = journey.seatCapacity,
+            incoming = incoming.filter { it.journeyId == journey.id }.map { incomingRequest(it, journey, uid, nowEpochMillis) })
     }
     return ConnectedTripsContent(
         (riderTrips + requests).sortedBy { it.departureEpochMillis ?: Long.MAX_VALUE },
         driver.sortedBy { it.departureEpochMillis },
+        incoming.filter { request -> owned.none { it.id == request.journeyId } }
+            .map { incomingRequest(it, null, uid, nowEpochMillis) },
     )
 }

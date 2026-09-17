@@ -90,4 +90,104 @@ class ConnectedTripsUiTest {
         assertEquals(R.string.connected_trips_offer_cancelled,
             content(uid = journey.driverUid, j = listOf(journey.copy(status = ConnectedJourneyStatus.CANCELLED))).driver.single().statusText)
     }
+
+    @Test fun `driver sees genuine capacity requests and valid cancellation`() {
+        val item = content(uid = journey.driverUid).driver.single()
+        assertEquals(1, item.seatsRemaining)
+        assertEquals(2, item.seatCapacity)
+        assertEquals(journey.id, item.cancellableJourneyId)
+        assertEquals(request.id, item.incoming.single().id)
+        assertTrue(item.incoming.single().canAccept)
+        assertTrue(item.incoming.single().canDecline)
+        assertEquals(R.string.connected_incoming_pending, item.incoming.single().statusText)
+    }
+
+    @Test fun `decision guards match ownership pending open capacity and time`() {
+        assertTrue(canDecideConnectedRequest(request, journey, journey.driverUid, true, 0))
+        listOf(null, journey.copy(driverUid = "other"), journey.copy(status = ConnectedJourneyStatus.CANCELLED)).forEach {
+            assertFalse(canDecideConnectedRequest(request, it, journey.driverUid, true, 0))
+            assertFalse(canDecideConnectedRequest(request, it, journey.driverUid, false, 0))
+        }
+        assertFalse(canDecideConnectedRequest(request, journey, request.riderUid, true, 0))
+        ConnectedRequestStatus.entries.filter { it != ConnectedRequestStatus.PENDING }.forEach {
+            assertFalse(canDecideConnectedRequest(request.copy(status = it), journey, journey.driverUid, true, 0))
+            assertFalse(canDecideConnectedRequest(request.copy(status = it), journey, journey.driverUid, false, 0))
+        }
+        assertFalse(canDecideConnectedRequest(request, journey.copy(seatsRemaining = 0), journey.driverUid, true, 0))
+        assertFalse(canDecideConnectedRequest(request, journey, journey.driverUid, true, 1000))
+        assertTrue(canDecideConnectedRequest(request, journey.copy(seatsRemaining = 0), journey.driverUid, false, 1000))
+    }
+
+    @Test fun `driver lifecycle retains request history without invalid actions`() {
+        val closed = content(uid = journey.driverUid, j = listOf(journey.copy(status = ConnectedJourneyStatus.CANCELLED))).driver.single()
+        assertNull(closed.cancellableJourneyId)
+        assertEquals(R.string.connected_trips_offer_cancelled, closed.incoming.single().statusText)
+        assertFalse(closed.incoming.single().canAccept)
+        assertFalse(closed.incoming.single().canDecline)
+        assertNull(content(uid = journey.driverUid, now = 1000).driver.single().cancellableJourneyId)
+        assertEquals(R.string.connected_offer_departed, content(uid = journey.driverUid, now = 1000).driver.single().statusText)
+        val missing = content(uid = journey.driverUid, j = emptyList()).unavailableIncoming.single()
+        assertEquals(R.string.connected_trips_unavailable, missing.statusText)
+        assertFalse(missing.canAccept)
+        assertFalse(missing.canDecline)
+        val unrelated = request.copy(driverUid = "someone-else")
+        assertTrue(content(uid = journey.driverUid, r = listOf(unrelated)).driver.single().incoming.isEmpty())
+        assertTrue(content(uid = journey.driverUid, r = listOf(unrelated)).unavailableIncoming.isEmpty())
+    }
+
+    @Test fun `driver terminal request labels describe the rider without invented identity`() {
+        mapOf(
+            ConnectedRequestStatus.ACCEPTED to R.string.connected_incoming_accepted,
+            ConnectedRequestStatus.DECLINED to R.string.connected_incoming_declined,
+            ConnectedRequestStatus.CANCELLED to R.string.connected_incoming_cancelled,
+            ConnectedRequestStatus.CANCELLED_AFTER_ACCEPTANCE to R.string.connected_incoming_seat_cancelled,
+        ).forEach { (status, label) ->
+            val incoming = content(uid = journey.driverUid, r = listOf(request.copy(status = status))).driver.single().incoming.single()
+            assertEquals(label, incoming.statusText)
+            assertFalse(incoming.canAccept)
+            assertFalse(incoming.canDecline)
+        }
+    }
+
+    @Test fun `declined request retains history and shows linked driver cancellation without affecting confirmed journey`() {
+        val cancelled = journey.copy(id = "declined-offer", destinationArea = "Sheffield", seatsRemaining = 2,
+            status = ConnectedJourneyStatus.CANCELLED)
+        val declined = request.copy(id = "declined-offer_private-rider", journeyId = cancelled.id,
+            status = ConnectedRequestStatus.DECLINED)
+        val accepted = request.copy(status = ConnectedRequestStatus.ACCEPTED)
+        val snapshot = ConnectedJourneySnapshot(listOf(journey, cancelled), listOf(accepted, declined), listOf(trip))
+        val result = connectedTripsContent(snapshot, request.riderUid, 0)
+        val history = result.rider.single { it.key == "request:${declined.id}" }
+        assertEquals(R.string.connected_request_declined, history.statusText)
+        assertEquals(R.string.connected_trips_driver_cancelled, history.journeyStatusText)
+        assertEquals("Sheffield", history.destination)
+        assertNull(history.cancellableTripId)
+        assertEquals(content(r = listOf(accepted), t = listOf(trip)).rider.single(),
+            result.rider.single { it.key == "trip:${trip.id}" })
+        assertEquals(ConnectedRequestStatus.DECLINED, snapshot.requests.single { it.id == declined.id }.status)
+        assertEquals(listOf(1, 2), snapshot.journeys.map { it.seatsRemaining })
+    }
+
+    @Test fun `terminal request journey context requires genuine cancelled link and preserves each request status`() {
+        mapOf(
+            ConnectedRequestStatus.DECLINED to R.string.connected_request_declined,
+            ConnectedRequestStatus.CANCELLED to R.string.connected_request_cancelled,
+            ConnectedRequestStatus.CANCELLED_AFTER_ACCEPTANCE to R.string.connected_seat_cancelled,
+        ).forEach { (requestStatus, label) ->
+            val historical = request.copy(status = requestStatus)
+            val cancelled = journey.copy(status = ConnectedJourneyStatus.CANCELLED)
+            val item = content(j = listOf(cancelled), r = listOf(historical)).rider.single()
+            assertEquals(label, item.statusText)
+            assertEquals(R.string.connected_trips_driver_cancelled, item.journeyStatusText)
+            listOf(emptyList(), listOf(journey), listOf(cancelled.copy(driverUid = "different-driver"))).forEach {
+                assertNull(content(j = it, r = listOf(historical)).rider.single().journeyStatusText)
+            }
+        }
+        listOf(ConnectedRequestStatus.PENDING, ConnectedRequestStatus.ACCEPTED).forEach {
+            val item = content(j = listOf(journey.copy(status = ConnectedJourneyStatus.CANCELLED)),
+                r = listOf(request.copy(status = it))).rider.single()
+            assertEquals(R.string.connected_trips_driver_cancelled, item.statusText)
+            assertNull(item.journeyStatusText) // Do not repeat the already resolved cancellation label.
+        }
+    }
 }

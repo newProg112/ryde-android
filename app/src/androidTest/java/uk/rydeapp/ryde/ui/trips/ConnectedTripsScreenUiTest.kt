@@ -16,6 +16,24 @@ class ConnectedTripsScreenUiTest {
     private val trip = ConnectedConfirmedTrip("private-trip-id", journey.id, request.id, journey.driverUid,
         request.riderUid, journey.originArea, journey.destinationArea, journey.departureEpochMillis, ConnectedTripStatus.CONFIRMED)
 
+    @Test fun driverLifecycleChangeClosesCancellationAndDecisionControls() {
+        val current = mutableStateOf(journey)
+        compose.setContent { RydeTheme {
+            ConnectedTripsScreen(connectedTripsContent(ConnectedJourneySnapshot(listOf(current.value), listOf(request)),
+                journey.driverUid, 0), false, true, null, {}, {},
+                onDecideRequest = { _, _ -> error("No valid decision") },
+                onCancelJourney = { error("No valid cancellation") })
+        } }
+        compose.onNodeWithText("Cancel journey").performScrollTo().performClick()
+        compose.onNodeWithText("Confirm journey cancellation").assertIsDisplayed()
+        compose.runOnIdle { current.value = journey.copy(status = ConnectedJourneyStatus.CANCELLED) }
+        compose.onAllNodesWithText("Confirm journey cancellation").assertCountEquals(0)
+        compose.onAllNodesWithText("Accept").assertCountEquals(0)
+        compose.onAllNodesWithText("Decline").assertCountEquals(0)
+        compose.onAllNodesWithText("Cancel journey").assertCountEquals(0)
+        assertSafe()
+    }
+
     @Test fun genuineTerminalRequestsRetainSafeFieldsWithoutUnsupportedActions() {
         val current = mutableStateOf(request)
         compose.setContent { RydeTheme {
@@ -63,6 +81,30 @@ class ConnectedTripsScreenUiTest {
         compose.onAllNodesWithText("York", substring = true).assertCountEquals(0)
         compose.onAllNodesWithText("Cancel my seat").assertCountEquals(0)
         assertSafe()
+    }
+
+    @Test fun declinedRequestShowsSubsequentJourneyCancellationAlongsideHistoryAndKeepsOtherSeatConfirmed() {
+        val offered = journey.copy(id = "declined-offer", originArea = "Mansfield", destinationArea = "Sheffield", seatsRemaining = 2)
+        val current = mutableStateOf(offered)
+        val declined = request.copy(id = "declined-request", journeyId = offered.id, status = ConnectedRequestStatus.DECLINED)
+        val confirmed = journey.copy(originArea = "Mansfield", destinationArea = "Nottingham")
+        val confirmedTrip = trip.copy(originArea = confirmed.originArea, destinationArea = confirmed.destinationArea)
+        compose.setContent { RydeTheme {
+            ConnectedTripsScreen(connectedTripsContent(
+                ConnectedJourneySnapshot(listOf(confirmed, current.value), listOf(declined), listOf(confirmedTrip)),
+                request.riderUid, 0), false, true, null, {}, { error("No cancellation expected") })
+        } }
+        compose.onNodeWithText("Your request was declined").performScrollTo().assertIsDisplayed()
+        compose.onAllNodesWithText("Journey cancelled by driver").assertCountEquals(0)
+        compose.runOnIdle { current.value = offered.copy(status = ConnectedJourneyStatus.CANCELLED) }
+        compose.onNodeWithText("Journey cancelled by driver").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Your request was declined").assertIsDisplayed()
+        compose.onNodeWithText("Mansfield → Sheffield").assertIsDisplayed()
+        compose.onNodeWithText("Your seat is confirmed").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Mansfield → Nottingham").assertIsDisplayed()
+        compose.onAllNodesWithText("Cancel my seat").assertCountEquals(1)
+        compose.onAllNodesWithText("Accept").assertCountEquals(0)
+        compose.onAllNodesWithText("Decline").assertCountEquals(0)
     }
 
     private fun assertSafe() {

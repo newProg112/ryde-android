@@ -1,19 +1,17 @@
 package uk.rydeapp.ryde.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.listSaver
@@ -23,25 +21,26 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import uk.rydeapp.ryde.R
 import uk.rydeapp.ryde.data.AccountCommandResult
 import uk.rydeapp.ryde.data.AccountSession
 import uk.rydeapp.ryde.data.connected.ConnectedJourneyCommandResult
+import uk.rydeapp.ryde.data.connected.ConnectedJourneyLifecycle
 import uk.rydeapp.ryde.data.connected.ConnectedRydeRepository
 import uk.rydeapp.ryde.domain.model.ProfileContent
 import uk.rydeapp.ryde.ui.account.ConnectedJourneyScreen
 import uk.rydeapp.ryde.ui.account.ConnectedJourneySection
 import uk.rydeapp.ryde.ui.account.ConnectedProfileScreen
 import uk.rydeapp.ryde.ui.account.canCancelConnectedConfirmedSeat
-import uk.rydeapp.ryde.ui.components.InfoCard
 import uk.rydeapp.ryde.ui.find.ConnectedFindScreen
 import uk.rydeapp.ryde.ui.home.ConnectedHomeScreen
 import uk.rydeapp.ryde.ui.home.connectedHomeJourneys
 import uk.rydeapp.ryde.ui.trips.ConnectedTripsScreen
 import uk.rydeapp.ryde.ui.trips.connectedTripsContent
+import uk.rydeapp.ryde.ui.trips.canDecideConnectedRequest
+import uk.rydeapp.ryde.ui.offer.ConnectedOfferScreen
 
 private data class ConnectedNavigation(
     val destination: RydeDestination = RydeDestination.HOME,
@@ -80,6 +79,7 @@ internal fun ConnectedReadyApp(
     var labBusy by remember { mutableStateOf(false) }
     var refreshRequired by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
+    var createdVersion by rememberSaveable { mutableIntStateOf(0) }
     // This scope survives tab changes and opening the Lab, and is disposed on account change/sign-out.
     val scope = rememberCoroutineScope()
 
@@ -169,6 +169,49 @@ internal fun ConnectedReadyApp(
             } else message = resources.getString(R.string.connected_trips_changed)
         }
     }
+    fun driverResult(result: ConnectedJourneyCommandResult, successText: Int): String = when (result) {
+        ConnectedJourneyCommandResult.Success -> resources.getString(successText)
+        is ConnectedJourneyCommandResult.InvalidInput -> result.userMessage
+        is ConnectedJourneyCommandResult.Failure -> {
+            refreshRequired = true
+            result.userMessage
+        }
+    }
+    val createOffer: (String, String, String, String) -> Unit = { origin, destination, departure, seats ->
+        if (!busy) {
+            if (!refreshRequired) runCommand {
+                val result = repository.createConnectedJourney(origin, destination, departure, seats)
+                if (result == ConnectedJourneyCommandResult.Success) {
+                    createdVersion++
+                    navigation = navigation.copy(destination = RydeDestination.TRIPS)
+                }
+                driverResult(result, R.string.connected_offer_created)
+            } else message = resources.getString(R.string.connected_trips_refresh_required)
+        }
+    }
+    val decideRequest: (String, Boolean) -> Unit = { requestId, accept ->
+        if (!busy) {
+            val current = repository.journeyState.value
+            val request = current.requests.firstOrNull { it.id == requestId }
+            val journey = current.journeys.firstOrNull { it.id == request?.journeyId }
+            if (!refreshRequired && request != null && canDecideConnectedRequest(
+                    request, journey, session.accountId, accept, System.currentTimeMillis(),
+                )) runCommand {
+                driverResult(repository.decideConnectedRequest(requestId, accept),
+                    if (accept) R.string.connected_accept_success else R.string.connected_decline_success)
+            } else message = resources.getString(R.string.connected_driver_changed)
+        }
+    }
+    val cancelJourney: (String) -> Unit = { journeyId ->
+        if (!busy) {
+            val journey = repository.journeyState.value.journeys.firstOrNull { it.id == journeyId }
+            if (!refreshRequired && journey != null && ConnectedJourneyLifecycle.canCancelJourney(
+                    journey, session.accountId, System.currentTimeMillis(),
+                )) runCommand {
+                driverResult(repository.cancelConnectedJourney(journeyId), R.string.connected_cancel_journey_success)
+            } else message = resources.getString(R.string.connected_driver_changed)
+        }
+    }
     RydeShell(navigation.destination, { navigation = navigation.copy(destination = it) }) { padding ->
         tabStateHolder.SaveableStateProvider("${session.accountId}:${navigation.destination.name}") {
             val modifier = Modifier.padding(padding)
@@ -196,14 +239,16 @@ internal fun ConnectedReadyApp(
                     onRequestSeat = requestSeat,
                     modifier = modifier,
                 )
-                RydeDestination.OFFER -> ConnectedTransition(
-                    R.string.connected_offer_title, R.string.connected_offer_body, R.string.connected_open_offer_lab,
-                    onAction = { openLab(ConnectedJourneySection.OFFER) }, enabled = !busy, modifier = modifier,
+                RydeDestination.OFFER -> ConnectedOfferScreen(
+                    busy = busy, actionsEnabled = !refreshRequired, message = message, createdVersion = createdVersion,
+                    onCreate = createOffer, onRefresh = refresh,
+                    onManageOffers = { navigation = navigation.copy(destination = RydeDestination.TRIPS) }, modifier = modifier,
                 )
                 RydeDestination.TRIPS -> ConnectedTripsScreen(
                     content = connectedTripsContent(snapshot, session.accountId, System.currentTimeMillis()),
                     busy = busy, actionsEnabled = !refreshRequired, message = message,
                     onRefresh = refresh, onCancelSeat = cancelSeat, modifier = modifier,
+                    onDecideRequest = decideRequest, onCancelJourney = cancelJourney,
                 )
                 RydeDestination.PROFILE -> ConnectedProfileScreen(
                     session, profile, onSave, onSignOut, modifier,
@@ -211,24 +256,5 @@ internal fun ConnectedReadyApp(
                 )
             }
         }
-    }
-}
-
-@Composable
-private fun ConnectedTransition(
-    title: Int,
-    body: Int,
-    action: Int,
-    onAction: () -> Unit,
-    modifier: Modifier,
-    enabled: Boolean = true,
-) {
-    Column(
-        modifier = modifier.fillMaxSize().padding(18.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        Text(stringResource(title), style = MaterialTheme.typography.headlineSmall)
-        InfoCard(stringResource(R.string.connected_transition_heading), stringResource(body))
-        Button(onClick = onAction, enabled = enabled) { Text(stringResource(action)) }
     }
 }
