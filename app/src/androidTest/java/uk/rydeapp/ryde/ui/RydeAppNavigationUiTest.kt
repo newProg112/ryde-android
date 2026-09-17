@@ -65,8 +65,9 @@ class RydeAppNavigationUiTest {
             assertEquals(ConnectedRequestStatus.PENDING, repository.journeyState.value.requests.single().status)
         }
         compose.onNodeWithText("Manage requests").performClick()
-        compose.onNodeWithText("Ryde journey lab").assertIsDisplayed()
-        compose.onNodeWithText("Your requests (1)").assertIsSelected()
+        tab("Trips").assertIsSelected()
+        compose.onNodeWithText("Your request is pending").performScrollTo().assertIsDisplayed()
+        compose.onAllNodesWithText("Ryde journey lab").assertCountEquals(0)
     }
 
     @Test
@@ -88,9 +89,9 @@ class RydeAppNavigationUiTest {
         tab("Offer").assertIsSelected()
         tab("Trips").performClick()
         assertNoFictionalContent()
-        compose.onNodeWithText("View trips in Journey Lab").performClick()
-        compose.onNodeWithText("Trips (0)").assertIsSelected()
-        compose.onNodeWithText("Back to Ryde").performClick()
+        compose.onNodeWithText("No trips yet").assertIsDisplayed()
+        compose.onNodeWithText("Refresh").assertIsEnabled()
+        compose.onAllNodesWithText("Ryde journey lab").assertCountEquals(0)
         tab("Trips").assertIsSelected()
         tab("Profile").performClick()
         assertNoFictionalContent()
@@ -310,6 +311,93 @@ class RydeAppNavigationUiTest {
         compose.onNodeWithTag("connected-find-list").performScrollToNode(hasText(text))
     }
 
+    @Test
+    fun tripsShowsPendingThenConfirmedWithGenuineFieldsAndPreservesFindStatus() {
+        launchConnected()
+        tab("Find").performClick()
+        compose.onNodeWithText("Request one seat").performScrollTo().performClick()
+        tab("Trips").performClick()
+        compose.onNodeWithText("Your request is pending").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Sheffield → Leeds").assertIsDisplayed()
+        compose.onNodeWithText("2099", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("Rider").assertIsDisplayed()
+        compose.onAllNodesWithText("Cancel my seat").assertCountEquals(0)
+        assertNoFictionalContent()
+        compose.runOnIdle { store.confirmSeat() }
+        compose.onNodeWithText("Refresh").performScrollTo().performClick()
+        compose.onNodeWithText("Your seat is confirmed").performScrollTo().assertIsDisplayed()
+        compose.onAllNodesWithText("Your request is pending").assertCountEquals(0)
+        compose.onNodeWithText("Cancel my seat").assertIsEnabled()
+        assertNoFictionalContent()
+        tab("Find").performClick()
+        compose.onNodeWithText("Your seat is confirmed").performScrollTo().assertIsDisplayed()
+        compose.runOnIdle { assertEquals(0, legacyCommands) }
+    }
+
+    @Test
+    fun tripsCancellationIsSingleInFlightCommandAcrossTabsAndRetainsRealHistory() {
+        store.confirmSeat()
+        store.cancelGate = CompletableDeferred()
+        launchConnected()
+        tab("Trips").performClick()
+        compose.onNodeWithText("Cancel my seat").performScrollTo().performClick()
+        compose.onNodeWithText("Keep my seat").performClick()
+        compose.runOnIdle { assertTrue(store.cancelCalls.isEmpty()) }
+        compose.onNodeWithText("Cancel my seat").performClick()
+        compose.onNodeWithText("Confirm cancellation").performClick()
+        compose.onNodeWithText("Cancel my seat").assertIsNotEnabled().performClick()
+        compose.onNodeWithText("Refresh").performScrollTo().assertIsNotEnabled()
+        tab("Find").performClick()
+        tab("Trips").performClick()
+        compose.onNodeWithText("Cancel my seat").performScrollTo().assertIsNotEnabled()
+        compose.runOnIdle { store.cancelGate!!.complete(Unit) }
+        compose.onNodeWithText("Your seat was cancelled").performScrollTo().assertIsDisplayed()
+        compose.onAllNodesWithText("Cancel my seat").assertCountEquals(0)
+        compose.onNodeWithText("Sheffield → Leeds").assertIsDisplayed()
+        assertNoFictionalContent()
+        compose.runOnIdle {
+            assertEquals(listOf("rider-private-uid" to "connected-offer_rider-private-uid"), store.cancelCalls)
+            assertEquals(ConnectedTripStatus.CANCELLED_BY_RIDER, repository.journeyState.value.confirmedTrips.single().status)
+            assertEquals(0, legacyCommands)
+        }
+    }
+
+    @Test
+    fun tripsCancellationAndRefreshFailuresRecoverBeforeRetry() {
+        store.confirmSeat()
+        store.failNextCancel = true
+        launchConnected()
+        tab("Trips").performClick()
+        compose.onNodeWithText("Cancel my seat").performScrollTo().performClick()
+        compose.onNodeWithText("Confirm cancellation").performClick()
+        compose.onNodeWithText("Cancel my seat").assertIsNotEnabled()
+        compose.onNodeWithText(ConnectedRydeRepository.SAFE_JOURNEY_ERROR).performScrollTo().assertIsDisplayed()
+        compose.runOnIdle { store.failNextLoad = true }
+        compose.onNodeWithText("Refresh").performClick()
+        compose.onNodeWithText("Ryde could not refresh. Please try again.").assertIsDisplayed()
+        compose.onNodeWithText("Cancel my seat").performScrollTo().assertIsNotEnabled()
+        compose.onNodeWithText("Refresh").performScrollTo().performClick()
+        compose.onNodeWithText("Cancel my seat").performScrollTo().assertIsEnabled().performClick()
+        compose.onNodeWithText("Confirm cancellation").performClick()
+        compose.onNodeWithText("Your seat was cancelled").performScrollTo().assertIsDisplayed()
+        compose.runOnIdle { assertEquals(2, store.cancelCalls.size) }
+    }
+
+    @Test
+    fun tripsRefreshAfterCommittedCancellationFailurePreventsSecondWrite() {
+        store.confirmSeat()
+        launchConnected()
+        tab("Trips").performClick()
+        compose.runOnIdle { store.failNextLoad = true }
+        compose.onNodeWithText("Cancel my seat").performScrollTo().performClick()
+        compose.onNodeWithText("Confirm cancellation").performClick()
+        compose.onNodeWithText("Cancel my seat").assertIsNotEnabled()
+        compose.onNodeWithText("Refresh").performScrollTo().performClick()
+        compose.onNodeWithText("Your seat was cancelled").performScrollTo().assertIsDisplayed()
+        compose.onAllNodesWithText("Cancel my seat").assertCountEquals(0)
+        compose.runOnIdle { assertEquals(1, store.cancelCalls.size) }
+    }
+
     // Match the selectable tab, not the icon child hidden/replaced by Material navigation semantics.
     private fun tab(label: String) = compose.onNode(isSelectable() and hasText(label))
 
@@ -348,6 +436,18 @@ class RydeAppNavigationUiTest {
     }
 
     private class TestJourneys : ConnectedJourneyStore {
+        val cancelCalls = mutableListOf<Pair<String, String>>()
+        var cancelGate: CompletableDeferred<Unit>? = null
+        var failNextCancel = false
+        val trips = mutableListOf<ConnectedConfirmedTrip>()
+        fun confirmSeat() {
+            val journey = journeys.single()
+            val id = "${journey.id}_rider-private-uid"
+            requests.clear()
+            requests += ConnectedSeatRequest(id, journey.id, journey.driverUid, "rider-private-uid", ConnectedRequestStatus.ACCEPTED)
+            trips += ConnectedConfirmedTrip(id, journey.id, id, journey.driverUid, "rider-private-uid",
+                journey.originArea, journey.destinationArea, journey.departureEpochMillis, ConnectedTripStatus.CONFIRMED)
+        }
         val requestCalls = mutableListOf<Pair<String, String>>()
         var requestGate: CompletableDeferred<Unit>? = null
         var createGate: CompletableDeferred<Unit>? = null
@@ -362,7 +462,7 @@ class RydeAppNavigationUiTest {
                 failNextLoad = false
                 error("Load failed after commit")
             }
-            return ConnectedJourneySnapshot(journeys, requests.filter { it.riderUid == uid })
+            return ConnectedJourneySnapshot(journeys, requests.filter { it.riderUid == uid }, trips.toList())
         }
         override suspend fun create(uid: String, draft: ConnectedJourneyDraft) { createGate?.await() }
         override suspend fun requestSeat(uid: String, journeyId: String) {
@@ -377,7 +477,18 @@ class RydeAppNavigationUiTest {
             requests += ConnectedSeatRequest("${journeyId}_$uid", journeyId, journey.driverUid, uid, ConnectedRequestStatus.PENDING)
         }
         override suspend fun cancelRequest(uid: String, requestId: String) = Unit
-        override suspend fun cancelConfirmedSeat(uid: String, tripId: String) = Unit
+        override suspend fun cancelConfirmedSeat(uid: String, tripId: String) {
+            cancelCalls += uid to tripId
+            cancelGate?.await()
+            if (failNextCancel) {
+                failNextCancel = false
+                error("Cancellation failed")
+            }
+            val index = trips.indexOfFirst { it.id == tripId }
+            trips[index] = trips[index].copy(status = ConnectedTripStatus.CANCELLED_BY_RIDER, cancelledAtEpochMillis = 1)
+            val requestIndex = requests.indexOfFirst { it.id == trips[index].acceptedRequestId }
+            requests[requestIndex] = requests[requestIndex].copy(status = ConnectedRequestStatus.CANCELLED_AFTER_ACCEPTANCE)
+        }
         override suspend fun cancelJourney(uid: String, journeyId: String) = Unit
         override suspend fun decide(uid: String, requestId: String, accept: Boolean) = Unit
     }

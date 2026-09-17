@@ -35,10 +35,13 @@ import uk.rydeapp.ryde.domain.model.ProfileContent
 import uk.rydeapp.ryde.ui.account.ConnectedJourneyScreen
 import uk.rydeapp.ryde.ui.account.ConnectedJourneySection
 import uk.rydeapp.ryde.ui.account.ConnectedProfileScreen
+import uk.rydeapp.ryde.ui.account.canCancelConnectedConfirmedSeat
 import uk.rydeapp.ryde.ui.components.InfoCard
 import uk.rydeapp.ryde.ui.find.ConnectedFindScreen
 import uk.rydeapp.ryde.ui.home.ConnectedHomeScreen
 import uk.rydeapp.ryde.ui.home.connectedHomeJourneys
+import uk.rydeapp.ryde.ui.trips.ConnectedTripsScreen
+import uk.rydeapp.ryde.ui.trips.connectedTripsContent
 
 private data class ConnectedNavigation(
     val destination: RydeDestination = RydeDestination.HOME,
@@ -147,6 +150,25 @@ internal fun ConnectedReadyApp(
             }
         } else message = resources.getString(R.string.connected_journey_changed)
     }
+    val cancelSeat: (String) -> Unit = { tripId ->
+        val current = repository.journeyState.value
+        val trip = current.confirmedTrips.firstOrNull { it.id == tripId }
+        val canCancel = trip != null && canCancelConnectedConfirmedSeat(
+            trip, session.accountId, journey = current.journeys.firstOrNull { it.id == trip.journeyId },
+        )
+        if (!busy) {
+            if (canCancel && !refreshRequired) runCommand {
+                when (val result = repository.cancelConnectedConfirmedSeat(tripId)) {
+                    ConnectedJourneyCommandResult.Success -> resources.getString(R.string.connected_trips_cancel_success)
+                    is ConnectedJourneyCommandResult.InvalidInput -> result.userMessage
+                    is ConnectedJourneyCommandResult.Failure -> {
+                        refreshRequired = true
+                        result.userMessage
+                    }
+                }
+            } else message = resources.getString(R.string.connected_trips_changed)
+        }
+    }
     RydeShell(navigation.destination, { navigation = navigation.copy(destination = it) }) { padding ->
         tabStateHolder.SaveableStateProvider("${session.accountId}:${navigation.destination.name}") {
             val modifier = Modifier.padding(padding)
@@ -162,7 +184,7 @@ internal fun ConnectedReadyApp(
                     onOffer = { navigation = navigation.copy(destination = RydeDestination.OFFER) },
                     onRefresh = refresh,
                     onRequestSeat = requestSeat,
-                    onManageRequests = { openLab(ConnectedJourneySection.YOUR_REQUESTS) },
+                    onManageRequests = { navigation = navigation.copy(destination = RydeDestination.TRIPS) },
                     modifier = modifier,
                 )
                 RydeDestination.FIND -> ConnectedFindScreen(
@@ -178,9 +200,10 @@ internal fun ConnectedReadyApp(
                     R.string.connected_offer_title, R.string.connected_offer_body, R.string.connected_open_offer_lab,
                     onAction = { openLab(ConnectedJourneySection.OFFER) }, enabled = !busy, modifier = modifier,
                 )
-                RydeDestination.TRIPS -> ConnectedTransition(
-                    R.string.connected_trips_title, R.string.connected_trips_body, R.string.connected_open_trips_lab,
-                    onAction = { openLab(ConnectedJourneySection.TRIPS) }, enabled = !busy, modifier = modifier,
+                RydeDestination.TRIPS -> ConnectedTripsScreen(
+                    content = connectedTripsContent(snapshot, session.accountId, System.currentTimeMillis()),
+                    busy = busy, actionsEnabled = !refreshRequired, message = message,
+                    onRefresh = refresh, onCancelSeat = cancelSeat, modifier = modifier,
                 )
                 RydeDestination.PROFILE -> ConnectedProfileScreen(
                     session, profile, onSave, onSignOut, modifier,
