@@ -151,6 +151,8 @@ fun ConnectedProfileScreen(
     profile: ProfileContent,
     onSave: suspend (String, String, String) -> AccountCommandResult?,
     onSignOut: suspend () -> AccountCommandResult?,
+    modifier: Modifier = Modifier,
+    onOpenJourneyLab: (() -> Unit)? = null,
 ) {
     val initialHome = profile.savedPlaces.firstOrNull { it.label == "Home" }?.area.orEmpty()
     val initialWork = profile.savedPlaces.firstOrNull { it.label == "Work" }?.area.orEmpty()
@@ -162,11 +164,15 @@ fun ConnectedProfileScreen(
     val scope = rememberCoroutineScope()
 
     Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
+        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Text("Your Ryde profile", style = MaterialTheme.typography.headlineSmall)
         Text("Connected to local Firebase emulators", color = MaterialTheme.colorScheme.primary)
+        onOpenJourneyLab?.let { openLab ->
+            OutlinedButton(onClick = openLab, enabled = !busy) { Text("Journey Lab") }
+            Text("Development and testing tools", style = MaterialTheme.typography.bodySmall)
+        }
         OutlinedTextField(displayName, { displayName = it }, label = { Text("Display name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         OutlinedTextField(homeArea, { homeArea = it }, label = { Text("Home broad area") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         OutlinedTextField(workArea, { workArea = it }, label = { Text("Work broad area") }, singleLine = true, modifier = Modifier.fillMaxWidth())
@@ -336,13 +342,15 @@ private fun datePickerEpochDay(utcMillis: Long): Long =
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ConnectedJourneyScreen(
+internal fun ConnectedJourneyScreen(
     session: AccountSession.Authenticated,
     profile: ProfileContent,
     repository: ConnectedRydeRepository,
     onSave: suspend (String, String, String) -> AccountCommandResult?,
     onSignOut: suspend () -> AccountCommandResult?,
     onRefresh: () -> Unit,
+    initialSection: ConnectedJourneySection = ConnectedJourneySection.PROFILE,
+    onBusyChanged: (Boolean) -> Unit = {},
 ) {
     val snapshot by repository.journeyState.collectAsState()
     val initialHome = profile.savedPlaces.firstOrNull { it.label == "Home" }?.area.orEmpty()
@@ -359,7 +367,7 @@ fun ConnectedJourneyScreen(
     var showDepartureTimePicker by rememberSaveable { mutableStateOf(false) }
     var requestToCancelId by rememberSaveable { mutableStateOf<String?>(null) }
     var seats by rememberSaveable { mutableStateOf("1") }
-    var selectedSection by rememberSaveable { mutableStateOf(ConnectedJourneySection.PROFILE) }
+    var selectedSection by rememberSaveable(session.accountId, initialSection) { mutableStateOf(initialSection) }
     var message by rememberSaveable { mutableStateOf<String?>(null) }
     var busy by rememberSaveable { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -376,6 +384,7 @@ fun ConnectedJourneyScreen(
 
     fun runCommand(action: suspend () -> Any?) {
         busy = true
+        onBusyChanged(true)
         message = null
         scope.launch {
             try {
@@ -389,6 +398,7 @@ fun ConnectedJourneyScreen(
                 }
             } finally {
                 busy = false
+                onBusyChanged(false)
             }
         }
     }

@@ -16,6 +16,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -45,11 +46,10 @@ import uk.rydeapp.ryde.ui.home.HomeScreen
 import uk.rydeapp.ryde.ui.offer.OfferScreen
 import uk.rydeapp.ryde.ui.theme.RydeTheme
 import uk.rydeapp.ryde.data.AccountSession
-import uk.rydeapp.ryde.ui.account.ConnectedJourneyScreen
 import uk.rydeapp.ryde.ui.account.SignedOutAccountScreen
 import uk.rydeapp.ryde.data.connected.ConnectedRydeRepository
 
-private enum class RydeDestination(@param:StringRes val labelRes: Int, val iconType: DestinationIconType) {
+internal enum class RydeDestination(@param:StringRes val labelRes: Int, val iconType: DestinationIconType) {
     HOME(R.string.nav_home, DestinationIconType.HOME),
     FIND(R.string.nav_find, DestinationIconType.FIND),
     OFFER(R.string.nav_offer, DestinationIconType.OFFER),
@@ -80,14 +80,16 @@ fun RydeApp(
         }
         is RydeAppUiState.Error -> AppError(state.userMessage, controller::retry)
         is RydeAppUiState.Ready -> if (state.mode == AppMode.CONNECTED) {
-            ConnectedJourneyScreen(
-                session = state.session as AccountSession.Authenticated,
-                profile = state.snapshot.profileContent,
-                repository = appRepository as ConnectedRydeRepository,
-                onSave = controller::updateConnectedProfile,
-                onSignOut = controller::signOut,
-                onRefresh = controller::retry,
-            )
+            val session = state.session as AccountSession.Authenticated
+            key(session.accountId) {
+                ConnectedReadyApp(
+                    session = session,
+                    profile = state.snapshot.profileContent,
+                    repository = appRepository as ConnectedRydeRepository,
+                    onSave = controller::updateConnectedProfile,
+                    onSignOut = controller::signOut,
+                )
+            }
         } else {
             ReadyApp(state, controller, commandScope)
         }
@@ -109,28 +111,7 @@ private fun ReadyApp(
         }
     }
 
-    Scaffold(
-        modifier = Modifier.fillMaxSize(),
-        containerColor = MaterialTheme.colorScheme.background,
-        bottomBar = {
-            NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
-                RydeDestination.entries.forEach { destination ->
-                    val label = stringResource(destination.labelRes)
-                    NavigationBarItem(
-                        selected = selectedDestination == destination,
-                        onClick = { selectedDestination = destination },
-                        icon = {
-                            DestinationIcon(
-                                type = destination.iconType,
-                                contentDescription = stringResource(R.string.nav_description, label),
-                            )
-                        },
-                        label = { Text(label) },
-                    )
-                }
-            }
-        },
-    ) { innerPadding ->
+    RydeShell(selectedDestination, { selectedDestination = it }) { innerPadding ->
         stateHolder.SaveableStateProvider(selectedDestination.name) {
             when (selectedDestination) {
                 RydeDestination.HOME -> HomeScreen(
@@ -193,6 +174,37 @@ private fun ReadyApp(
             }
         }
     }
+}
+
+@Composable
+internal fun RydeShell(
+    selectedDestination: RydeDestination,
+    onSelect: (RydeDestination) -> Unit,
+    content: @Composable (androidx.compose.foundation.layout.PaddingValues) -> Unit,
+) {
+    Scaffold(
+        modifier = Modifier.fillMaxSize(),
+        containerColor = MaterialTheme.colorScheme.background,
+        bottomBar = {
+            NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+                RydeDestination.entries.forEach { destination ->
+                    val label = stringResource(destination.labelRes)
+                    NavigationBarItem(
+                        selected = selectedDestination == destination,
+                        onClick = { onSelect(destination) },
+                        icon = {
+                            DestinationIcon(
+                                type = destination.iconType,
+                                contentDescription = stringResource(R.string.nav_description, label),
+                            )
+                        },
+                        label = { Text(label) },
+                    )
+                }
+            }
+        },
+        content = content,
+    )
 }
 
 @Composable
