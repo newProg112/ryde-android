@@ -16,6 +16,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,6 +43,7 @@ internal fun ConnectedHomeScreen(
     onRequestSeat: (String) -> Unit,
     onManageRequests: () -> Unit,
     modifier: Modifier = Modifier,
+    onOpenJourney: (String) -> Unit = {},
 ) {
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -111,7 +113,12 @@ internal fun ConnectedHomeScreen(
             }
         }
         items(journeys, key = { it.journey.id }) { item ->
-            ConnectedJourneyCard(item, busy, requestsEnabled, onRequestSeat, onManageRequests = onManageRequests)
+            Column {
+                ConnectedJourneyCard(item, busy, requestsEnabled, onRequestSeat, onManageRequests = onManageRequests)
+                TextButton(onClick = { onOpenJourney(item.journey.id) }) {
+                    Text(stringResource(R.string.connected_view_trip_details))
+                }
+            }
         }
         item {
             OutlinedButton(onClick = onFind, modifier = Modifier.fillMaxWidth()) {

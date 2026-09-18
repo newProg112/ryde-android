@@ -3,6 +3,8 @@ package uk.rydeapp.ryde.ui
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.test.espresso.Espresso
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -350,7 +352,8 @@ class RydeAppNavigationUiTest {
         compose.onNodeWithText("Request one seat").performClick().assertIsNotEnabled()
         tab("Home").performClick()
         compose.onNodeWithText("Sheffield → Leeds").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText("York → Wakefield").performScrollTo().assertIsDisplayed()
+        compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("York → Wakefield"))
+        compose.onNodeWithText("York → Wakefield").assertIsDisplayed()
         compose.runOnIdle { store.requestGate!!.complete(Unit) }
         tab("Find").performClick()
         findField("connected-find-origin").performScrollTo().assert(hasText("  YORK  "))
@@ -632,6 +635,200 @@ class RydeAppNavigationUiTest {
     }
 
     private fun tab(label: String) = compose.onNode(isSelectable() and hasText(label))
+
+    private fun detailsText(label: String): SemanticsNodeInteraction {
+        compose.onNodeWithTag("connected-trip-details-list").performScrollToNode(hasText(label))
+        return compose.onNodeWithText(label)
+    }
+
+    private fun openDetails() {
+        compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("View trip details"))
+        compose.onNodeWithText("View trip details").performClick()
+        compose.onNodeWithText("Trip details").assertIsDisplayed()
+    }
+
+    @Test
+    fun homeDetailsKeepFiveTabsToolbarAndSystemBackReturnToHomeAndTabSelectionClosesDetails() {
+        launchConnected()
+        openDetails()
+        assertShell()
+        tab("Home").assertIsSelected()
+        detailsText("Request one seat").assertIsEnabled()
+        detailsText("Back").performClick()
+        tab("Home").assertIsSelected()
+        compose.onAllNodesWithText("Trip details").assertCountEquals(0)
+        openDetails()
+        Espresso.pressBack()
+        tab("Home").assertIsSelected()
+        compose.onAllNodesWithText("Trip details").assertCountEquals(0)
+        openDetails()
+        tab("Offer").performClick()
+        tab("Offer").assertIsSelected()
+        compose.onAllNodesWithText("Trip details").assertCountEquals(0)
+        compose.onNodeWithText("From town or district").assertIsDisplayed()
+    }
+
+    @Test
+    fun filteredFindDetailsPreserveOriginatingScrollAndFiltersAndRequestCorrectJourneyOnce() {
+        val original = store.journeys.single()
+        store.journeys = listOf(original, original.copy(id = "selected-offer", originArea = "York", destinationArea = "Wakefield"))
+        launchConnected()
+        tab("Find").performClick()
+        findField("connected-find-origin").performTextInput("York")
+        findField("connected-find-destination").performTextInput("wake")
+        scrollFindTo("View trip details")
+        val scrollBefore = compose.onNodeWithTag("connected-find-list").fetchSemanticsNode()
+            .config[SemanticsProperties.VerticalScrollAxisRange].value()
+        compose.onNodeWithText("View trip details").performClick()
+        tab("Find").assertIsSelected()
+        detailsText("Back").performClick()
+        compose.onNodeWithText("View trip details").assertIsDisplayed()
+        val scrollAfter = compose.onNodeWithTag("connected-find-list").fetchSemanticsNode()
+            .config[SemanticsProperties.VerticalScrollAxisRange].value()
+        assertEquals(scrollBefore, scrollAfter, 0.01f)
+        compose.onNodeWithText("View trip details").performClick()
+        store.requestGate = CompletableDeferred()
+        detailsText("Request one seat").performClick().assertIsNotEnabled().performClick()
+        compose.runOnIdle { store.requestGate!!.complete(Unit) }
+        detailsText("Your request is pending").assertIsDisplayed()
+        detailsText("Refresh").performClick()
+        detailsText("Back").performClick()
+        findField("connected-find-origin").assert(hasText("York"))
+        findField("connected-find-destination").assert(hasText("wake"))
+        tab("Home").performClick()
+        compose.onNodeWithText("Sheffield → Leeds").performScrollTo().assertIsDisplayed()
+        compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("York → Wakefield"))
+        compose.onNodeWithText("York → Wakefield").assertIsDisplayed()
+        compose.runOnIdle {
+            assertEquals(listOf("rider-private-uid" to "selected-offer"), store.requestCalls)
+            assertEquals(0, legacyCommands)
+        }
+    }
+
+    @Test
+    fun detailsRestoreForSameAccountButAccountChangeClearsSelectionAndFindFilters() {
+        val restoration = StateRestorationTester(compose)
+        restoration.setContent { RydeTheme { RydeApp(repository, AppMode.CONNECTED) } }
+        tab("Find").performClick()
+        findField("connected-find-origin").performTextInput("Sheffield")
+        openDetails()
+        restoration.emulateSavedInstanceStateRestore()
+        compose.onNodeWithText("Trip details").assertIsDisplayed()
+        tab("Find").assertIsSelected()
+        detailsText("Back").performClick()
+        findField("connected-find-origin").assert(hasText("Sheffield"))
+        openDetails()
+        compose.runOnIdle { runBlocking { auth.uid = "second-private-uid"; repository.refresh() } }
+        tab("Home").assertIsSelected()
+        compose.onAllNodesWithText("Trip details").assertCountEquals(0)
+        tab("Find").performClick()
+        findField("connected-find-origin").assert(hasText("Sheffield").not())
+    }
+
+    @Test
+    fun signOutClearsDetailsAndSigningBackIntoSameAccountStartsAtHome() {
+        launchConnected()
+        tab("Find").performClick()
+        openDetails()
+        compose.runOnIdle { runBlocking { repository.signOut() } }
+        compose.onAllNodesWithText("Trip details").assertCountEquals(0)
+        compose.onAllNodes(isSelectable()).assertCountEquals(0)
+        compose.runOnIdle { runBlocking { auth.uid = "rider-private-uid"; repository.refresh() } }
+        tab("Home").assertIsSelected()
+        compose.onAllNodesWithText("Trip details").assertCountEquals(0)
+    }
+
+    @Test
+    fun riderTripsDetailsCancelByTripIdRetainDestinationAndReturnToRealHistory() {
+        store.confirmSeat()
+        launchConnected()
+        tab("Trips").performClick()
+        openDetails()
+        detailsText("Your seat is confirmed").assertIsDisplayed()
+        detailsText("Cancel my seat").performClick()
+        compose.onNodeWithText("Keep my seat").performClick()
+        compose.runOnIdle { assertTrue(store.cancelCalls.isEmpty()) }
+        detailsText("Cancel my seat").performClick()
+        compose.onNodeWithText("Confirm cancellation").performClick()
+        detailsText("Your seat was cancelled").assertIsDisplayed()
+        compose.onAllNodesWithText("Cancel my seat").assertCountEquals(0)
+        detailsText("Back").performClick()
+        tab("Trips").assertIsSelected()
+        compose.onNodeWithText("Your seat was cancelled").performScrollTo().assertIsDisplayed()
+        compose.runOnIdle {
+            assertEquals(listOf("rider-private-uid" to "connected-offer_rider-private-uid"), store.cancelCalls)
+            assertEquals(0, legacyCommands)
+        }
+    }
+
+    @Test
+    fun driverTripsDetailsReuseDecisionsAndCancellationAndStayOpenAfterMutations() {
+        pendingForDriver()
+        val first = store.requests.single()
+        val second = first.copy(id = "second-request-id", riderUid = "second-private-uid")
+        store.requests += second
+        launchConnected()
+        tab("Trips").performClick()
+        openDetails()
+        val list = compose.onNodeWithTag("connected-trip-details-list")
+        list.performScrollToNode(hasTestTag("details-incoming:${first.id}"))
+        compose.onNode(hasText("Accept") and hasAnyAncestor(hasTestTag("details-incoming:${first.id}"))).performClick()
+        list.performScrollToNode(hasTestTag("details-incoming:${second.id}"))
+        compose.onNode(hasText("Decline") and hasAnyAncestor(hasTestTag("details-incoming:${second.id}"))).performClick()
+        detailsText("Cancel journey").performClick()
+        compose.onNodeWithText("Keep journey").performClick()
+        compose.runOnIdle { assertTrue(store.journeyCancelCalls.isEmpty()) }
+        detailsText("Cancel journey").performClick()
+        compose.onNodeWithText("Confirm journey cancellation").performClick()
+        compose.onNodeWithText("Trip details").performScrollTo().assertIsDisplayed()
+        compose.onAllNodesWithText("Accept").assertCountEquals(0)
+        compose.onAllNodesWithText("Decline").assertCountEquals(0)
+        compose.onAllNodesWithText("Cancel journey").assertCountEquals(0)
+        detailsText("Back").performClick()
+        tab("Trips").assertIsSelected()
+        compose.runOnIdle {
+            assertEquals(listOf(Triple("driver-private-uid", first.id, true), Triple("driver-private-uid", second.id, false)), store.decisionCalls)
+            assertEquals(listOf("driver-private-uid" to "connected-offer"), store.journeyCancelCalls)
+            assertEquals(0, legacyCommands)
+        }
+    }
+
+    @Test
+    fun detailsRefreshFailsClosedWhenSelectedJourneyDisappearsAndLabRemainsIndependent() {
+        launchConnected()
+        openDetails()
+        compose.runOnIdle { store.journeys = emptyList() }
+        detailsText("Refresh").performClick()
+        detailsText("Journey details unavailable").assertIsDisplayed()
+        compose.onAllNodesWithText("Request one seat").assertCountEquals(0)
+        compose.onNodeWithText("Trip details").assertIsDisplayed()
+        tab("Profile").performClick()
+        compose.onNodeWithText("Journey Lab").performClick()
+        compose.onNodeWithText("Ryde journey lab").assertIsDisplayed()
+        compose.onAllNodesWithText("Trip details").assertCountEquals(0)
+        compose.onNodeWithText("Back to Ryde").performClick()
+        tab("Profile").assertIsSelected()
+        compose.onAllNodesWithText("Trip details").assertCountEquals(0)
+    }
+
+    @Test
+    fun pendingRiderTripsDetailsHaveNoWithdrawalAndCommittedRequestRefreshFailureDoesNotDuplicate() {
+        launchConnected()
+        openDetails()
+        compose.runOnIdle { store.failNextLoad = true }
+        detailsText("Request one seat").performClick().assertIsNotEnabled()
+        detailsText("Refresh").performClick()
+        detailsText("Your request is pending").assertIsDisplayed()
+        compose.onAllNodesWithText("Request one seat").assertCountEquals(0)
+        tab("Trips").performClick()
+        openDetails()
+        detailsText("Your request is pending").assertIsDisplayed()
+        compose.onAllNodesWithText("Cancel my seat").assertCountEquals(0)
+        compose.onAllNodesWithText("Withdraw request").assertCountEquals(0)
+        detailsText("Back").performClick()
+        tab("Trips").assertIsSelected()
+        compose.runOnIdle { assertEquals(listOf("rider-private-uid" to "connected-offer"), store.requestCalls) }
+    }
 
     private fun assertShell() {
         val labels = listOf("Home", "Find", "Offer", "Trips", "Profile")

@@ -56,6 +56,7 @@ internal fun ConnectedFindScreen(
     onRequestSeat: (String) -> Unit,
     onManageRequests: () -> Unit,
     modifier: Modifier = Modifier,
+    onOpenJourney: (String) -> Unit = {},
 ) {
     var origin by rememberSaveable { mutableStateOf("") }
     var destination by rememberSaveable { mutableStateOf("") }
@@ -171,10 +172,15 @@ internal fun ConnectedFindScreen(
             }
         }
         items(matches, key = { it.journey.id }) { item ->
-            ConnectedJourneyCard(
-                item, busy, requestsEnabled, onRequestSeat, allowRerequest = true,
-                onManageRequests = onManageRequests,
-            )
+            Column {
+                ConnectedJourneyCard(
+                    item, busy, requestsEnabled, onRequestSeat, allowRerequest = true,
+                    onManageRequests = onManageRequests,
+                )
+                TextButton(onClick = { onOpenJourney(item.journey.id) }) {
+                    Text(stringResource(R.string.connected_view_trip_details))
+                }
+            }
         }
         item {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {

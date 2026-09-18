@@ -38,6 +38,8 @@ import uk.rydeapp.ryde.ui.find.ConnectedFindScreen
 import uk.rydeapp.ryde.ui.home.ConnectedHomeScreen
 import uk.rydeapp.ryde.ui.home.connectedHomeJourneys
 import uk.rydeapp.ryde.ui.trips.ConnectedTripsScreen
+import uk.rydeapp.ryde.ui.trips.ConnectedTripDetailsScreen
+import uk.rydeapp.ryde.ui.trips.connectedTripDetailsContent
 import uk.rydeapp.ryde.ui.trips.connectedTripsContent
 import uk.rydeapp.ryde.ui.trips.canDecideConnectedRequest
 import uk.rydeapp.ryde.ui.offer.ConnectedOfferScreen
@@ -45,6 +47,7 @@ import uk.rydeapp.ryde.ui.offer.ConnectedOfferScreen
 private data class ConnectedNavigation(
     val destination: RydeDestination = RydeDestination.HOME,
     val labSection: ConnectedJourneySection? = null,
+    val detailJourneyId: String? = null,
 )
 
 /** The only new connected repository observation/command boundary; tabs receive data and callbacks. */
@@ -61,12 +64,13 @@ internal fun ConnectedReadyApp(
     // Include the owner in saved values: rememberSaveable inputs alone do not validate restored state.
     val navigationSaver = remember(session.accountId) {
         listSaver<ConnectedNavigation, String>(
-            save = { listOf(session.accountId, it.destination.name, it.labSection?.name.orEmpty()) },
+            save = { listOf(session.accountId, it.destination.name, it.labSection?.name.orEmpty(), it.detailJourneyId.orEmpty()) },
             restore = {
                 if (it[0] != session.accountId) ConnectedNavigation()
                 else ConnectedNavigation(
                     RydeDestination.valueOf(it[1]),
                     it[2].takeIf(String::isNotEmpty)?.let(ConnectedJourneySection::valueOf),
+                    it.getOrNull(3)?.takeIf { id -> id.isNotBlank() && it[2].isEmpty() },
                 )
             },
         )
@@ -109,13 +113,15 @@ internal fun ConnectedReadyApp(
         }
     }
     val openLab: (ConnectedJourneySection) -> Unit = { section ->
-        if (!busy) navigation = navigation.copy(labSection = section)
+        if (!busy) navigation = navigation.copy(labSection = section, detailJourneyId = null)
     }
     val closeLab: () -> Unit = {
         if (!busy && !labBusy) navigation = navigation.copy(labSection = null)
     }
     val labSection = navigation.labSection
     BackHandler(enabled = labSection != null, onBack = closeLab)
+    val closeDetails: () -> Unit = { navigation = navigation.copy(detailJourneyId = null) }
+    BackHandler(enabled = labSection == null && navigation.detailJourneyId != null, onBack = closeDetails)
     if (labSection != null) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
             TextButton(onClick = closeLab, enabled = !busy && !labBusy) {
@@ -212,7 +218,24 @@ internal fun ConnectedReadyApp(
             } else message = resources.getString(R.string.connected_driver_changed)
         }
     }
-    RydeShell(navigation.destination, { navigation = navigation.copy(destination = it) }) { padding ->
+    val openJourney: (String) -> Unit = { id ->
+        if (id.isNotBlank()) navigation = navigation.copy(detailJourneyId = id, labSection = null)
+    }
+    RydeShell(navigation.destination, { navigation = navigation.copy(destination = it, detailJourneyId = null) }) { padding ->
+        val detailJourneyId = navigation.detailJourneyId
+        if (detailJourneyId != null) {
+            tabStateHolder.SaveableStateProvider("${session.accountId}:details:$detailJourneyId") {
+                ConnectedTripDetailsScreen(
+                    content = connectedTripDetailsContent(snapshot, session.accountId, detailJourneyId,
+                        discoveryJourneys, connectedTripsContent(snapshot, session.accountId, System.currentTimeMillis())),
+                    busy = busy, actionsEnabled = !refreshRequired, message = message,
+                    onBack = closeDetails, onRefresh = refresh, onRequestSeat = requestSeat,
+                    onDecideRequest = decideRequest, onCancelSeat = cancelSeat, onCancelJourney = cancelJourney,
+                    modifier = Modifier.padding(padding),
+                )
+            }
+            return@RydeShell
+        }
         tabStateHolder.SaveableStateProvider("${session.accountId}:${navigation.destination.name}") {
             val modifier = Modifier.padding(padding)
             when (navigation.destination) {
@@ -229,6 +252,7 @@ internal fun ConnectedReadyApp(
                     onRequestSeat = requestSeat,
                     onManageRequests = { navigation = navigation.copy(destination = RydeDestination.TRIPS) },
                     modifier = modifier,
+                    onOpenJourney = openJourney,
                 )
                 RydeDestination.FIND -> ConnectedFindScreen(
                     journeys = discoveryJourneys,
@@ -239,6 +263,7 @@ internal fun ConnectedReadyApp(
                     onRequestSeat = requestSeat,
                     onManageRequests = { navigation = navigation.copy(destination = RydeDestination.TRIPS) },
                     modifier = modifier,
+                    onOpenJourney = openJourney,
                 )
                 RydeDestination.OFFER -> ConnectedOfferScreen(
                     busy = busy, actionsEnabled = !refreshRequired, message = message, createdVersion = createdVersion,
@@ -250,6 +275,7 @@ internal fun ConnectedReadyApp(
                     busy = busy, actionsEnabled = !refreshRequired, message = message,
                     onRefresh = refresh, onCancelSeat = cancelSeat, modifier = modifier,
                     onDecideRequest = decideRequest, onCancelJourney = cancelJourney,
+                    onOpenJourney = openJourney,
                 )
                 RydeDestination.PROFILE -> ConnectedProfileScreen(
                     session, profile, onSave, onSignOut, modifier,

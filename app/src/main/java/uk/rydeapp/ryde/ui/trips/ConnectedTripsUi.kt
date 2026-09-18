@@ -18,6 +18,7 @@ internal data class ConnectedTripsItem(
     val seatCapacity: Int? = null,
     val incoming: List<ConnectedIncomingRequest> = emptyList(),
     val journeyStatusText: Int? = null,
+    val journeyId: String? = null,
 )
 
 internal data class ConnectedIncomingRequest(
@@ -82,6 +83,7 @@ internal fun connectedTripsContent(
             },
             R.string.connected_trips_rider,
             trip.id.takeIf { canCancelConnectedConfirmedSeat(trip, uid, nowEpochMillis, journey) },
+            journeyId = trip.journeyId,
         )
     }
     val representedRequests = trips.map { it.acceptedRequestId }.toSet()
@@ -104,7 +106,7 @@ internal fun connectedTripsContent(
             // A terminal request remains historical even if its linked journey is later cancelled.
             journeyStatusText = R.string.connected_trips_driver_cancelled.takeIf {
                 journey?.status == ConnectedJourneyStatus.CANCELLED && status != R.string.connected_trips_driver_cancelled
-            })
+            }, journeyId = request.journeyId)
     }
     val owned = snapshot.journeys.filter { it.driverUid == uid }
     val incoming = snapshot.requests.filter { it.driverUid == uid && it.riderUid != uid }
@@ -119,7 +121,8 @@ internal fun connectedTripsContent(
             }, R.string.connected_trips_driver,
             cancellableJourneyId = journey.id.takeIf { ConnectedJourneyLifecycle.canCancelJourney(journey, uid, nowEpochMillis) },
             seatsRemaining = journey.seatsRemaining, seatCapacity = journey.seatCapacity,
-            incoming = incoming.filter { it.journeyId == journey.id }.map { incomingRequest(it, journey, uid, nowEpochMillis) })
+            incoming = incoming.filter { it.journeyId == journey.id }.map { incomingRequest(it, journey, uid, nowEpochMillis) },
+            journeyId = journey.id)
     }
     return ConnectedTripsContent(
         (riderTrips + requests).sortedBy { it.departureEpochMillis ?: Long.MAX_VALUE },

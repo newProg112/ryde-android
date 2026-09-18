@@ -28,6 +28,7 @@ internal fun ConnectedTripsScreen(
     modifier: Modifier = Modifier,
     onDecideRequest: (String, Boolean) -> Unit = { _, _ -> },
     onCancelJourney: (String) -> Unit = {},
+    onOpenJourney: (String) -> Unit = {},
 ) {
     var selectedTripId by remember { mutableStateOf<String?>(null) }
     var selectedJourneyId by remember { mutableStateOf<String?>(null) }
@@ -67,13 +68,23 @@ internal fun ConnectedTripsScreen(
             Text(stringResource(R.string.connected_trips_rider_heading), style = MaterialTheme.typography.titleMedium)
         }
         items(content.rider, key = { it.key }) { item ->
-            TripCard(item, busy, actionsEnabled, onCancel = { selectedTripId = it })
+            Column {
+                TripCard(item, busy, actionsEnabled, onCancel = { selectedTripId = it })
+                item.journeyId?.takeIf(String::isNotBlank)?.let { id ->
+                    TextButton(onClick = { onOpenJourney(id) }) { Text(stringResource(R.string.connected_view_trip_details)) }
+                }
+            }
         }
         if (content.driver.isNotEmpty()) item {
             Text(stringResource(R.string.connected_trips_driver_heading), style = MaterialTheme.typography.titleMedium)
         }
         items(content.driver, key = { it.key }) { item ->
-            TripCard(item, busy, actionsEnabled, {}, onDecideRequest) { selectedJourneyId = it }
+            Column {
+                TripCard(item, busy, actionsEnabled, {}, onDecideRequest) { selectedJourneyId = it }
+                item.journeyId?.takeIf(String::isNotBlank)?.let { id ->
+                    TextButton(onClick = { onOpenJourney(id) }) { Text(stringResource(R.string.connected_view_trip_details)) }
+                }
+            }
         }
         if (content.unavailableIncoming.isNotEmpty()) item {
             InfoCard(stringResource(R.string.connected_trips_details_unavailable),

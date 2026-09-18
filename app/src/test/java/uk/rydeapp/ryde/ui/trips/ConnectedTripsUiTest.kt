@@ -16,6 +16,14 @@ class ConnectedTripsUiTest {
         t: List<ConnectedConfirmedTrip> = emptyList(), uid: String = request.riderUid, now: Long = 0) =
         connectedTripsContent(ConnectedJourneySnapshot(j, r, t), uid, now)
 
+    @Test fun `entries carry explicit journey ids for requests bookings owners and missing links`() {
+        assertEquals(journey.id, content().rider.single().journeyId)
+        assertEquals(journey.id, content(t = listOf(trip)).rider.single().journeyId)
+        assertEquals(journey.id, content(uid = journey.driverUid).driver.single().journeyId)
+        assertEquals(journey.id, content(j = emptyList()).rider.single().journeyId)
+        assertEquals(journey.id, content(j = emptyList(), t = listOf(trip)).rider.single().journeyId)
+    }
+
     @Test fun `empty repository and unrelated user have no trips`() {
         assertEquals(ConnectedTripsContent(emptyList(), emptyList()), content(emptyList(), emptyList()))
         assertEquals(ConnectedTripsContent(emptyList(), emptyList()), content(t = listOf(trip), uid = "stranger"))
