@@ -26,6 +26,18 @@
     <string name="connected_back_to_ryde">Back to Ryde</string>
     <string name="connected_find_title">Find your next Ryde</string>
     <string name="connected_find_intro">Browse upcoming journeys heading your way and request one spare seat.</string>
+    <string name="connected_find_origin">Origin area (optional)</string>
+    <string name="connected_find_destination">Destination area (optional)</string>
+    <string name="connected_find_swap">Swap origin and destination</string>
+    <string name="connected_find_departure_date">Departure date</string>
+    <string name="connected_find_any_date">Any date</string>
+    <string name="connected_find_clear">Clear filters</string>
+    <string name="connected_find_no_matches">No journeys match your filters</string>
+    <string name="connected_find_no_matches_body">Try another area or date, or clear your filters to browse all upcoming journeys.</string>
+    <plurals name="connected_find_matching_count">
+        <item quantity="one">%d matching journey</item>
+        <item quantity="other">%d matching journeys</item>
+    </plurals>
     <string name="connected_find_empty">No journeys currently available</string>
     <string name="connected_find_empty_body">There are no upcoming journeys to browse right now. Refresh to check for new offers.</string>
     <string name="connected_find_privacy">Only broad town or district areas are shown. No exact address or live location is shared here.</string>

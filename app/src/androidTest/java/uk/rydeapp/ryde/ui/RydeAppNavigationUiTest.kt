@@ -75,6 +75,7 @@ class RydeAppNavigationUiTest {
         launchConnected()
         tab("Find").performClick()
         compose.onNodeWithText("Find your next Ryde").assertIsDisplayed()
+        scrollFindTo("Sheffield → Leeds")
         compose.onNodeWithText("Sheffield → Leeds").performScrollTo().assertIsDisplayed()
         assertNoFictionalContent()
         tab("Home").performClick()
@@ -174,13 +175,15 @@ class RydeAppNavigationUiTest {
         launchConnected()
         compose.onNodeWithText("Find a Ryde").performClick()
         tab("Find").assertIsSelected()
-        compose.onNodeWithText("Find your next Ryde").assertIsDisplayed()
-        compose.onNodeWithText("1 upcoming journey").assertIsDisplayed()
-        compose.onNodeWithText("Sheffield → Leeds").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText("Seats remaining: 1/2").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText("2099", substring = true).performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText("Request one seat").performScrollTo().assertIsEnabled()
-        compose.onNodeWithText("Only broad town or district areas are shown. No exact address or live location is shared here.")
+        findText("Find your next Ryde").assertIsDisplayed()
+        scrollFindTo("1 upcoming journey")
+        findText("1 upcoming journey").performScrollTo().assertIsDisplayed()
+        scrollFindTo("Sheffield → Leeds")
+        findText("Sheffield → Leeds").performScrollTo().assertIsDisplayed()
+        findText("Seats remaining: 1/2").performScrollTo().assertIsDisplayed()
+        findText("2099", substring = true).performScrollTo().assertIsDisplayed()
+        findText("Request one seat").performScrollTo().assertIsEnabled()
+        findText("Only broad town or district areas are shown. No exact address or live location is shared here.")
             .performScrollTo().assertIsDisplayed()
         assertNoFictionalContent()
         compose.onAllNodesWithText("Ryde journey lab").assertCountEquals(0)
@@ -194,13 +197,16 @@ class RydeAppNavigationUiTest {
         store.journeys = emptyList()
         launchConnected()
         tab("Find").performClick()
-        compose.onNodeWithText("No journeys currently available").assertIsDisplayed()
-        compose.onNodeWithText("0 upcoming journeys").assertIsDisplayed()
+        scrollFindTo("No journeys currently available")
+        findText("No journeys currently available").assertIsDisplayed()
+        scrollFindTo("0 upcoming journeys")
+        findText("0 upcoming journeys").performScrollTo().assertIsDisplayed()
         compose.onAllNodesWithText("Request one seat").assertCountEquals(0)
         assertNoFictionalContent()
         compose.runOnIdle { store.journeys = listOf(offer) }
-        compose.onNodeWithText("Refresh").performClick()
-        compose.onNodeWithText("Sheffield → Leeds").performScrollTo().assertIsDisplayed()
+        findText("Refresh").performClick()
+        scrollFindTo("Sheffield → Leeds")
+        findText("Sheffield → Leeds").performScrollTo().assertIsDisplayed()
         compose.runOnIdle { assertTrue(store.loadCalls >= 2) }
     }
 
@@ -220,11 +226,12 @@ class RydeAppNavigationUiTest {
             .performScrollToNode(hasText("View all journeys in Find"))
         compose.onNodeWithText("View all journeys in Find").assertIsDisplayed().performClick()
         tab("Find").assertIsSelected()
-        compose.onNodeWithText("5 upcoming journeys").assertIsDisplayed()
+        scrollFindTo("5 upcoming journeys")
+        findText("5 upcoming journeys").performScrollTo().assertIsDisplayed()
         scrollFindTo("Area D → Leeds")
-        compose.onNodeWithText("Area D → Leeds").assertIsDisplayed()
+        findText("Area D → Leeds").assertIsDisplayed()
         scrollFindTo("Full area → Leeds")
-        compose.onNodeWithText("No seats available").performScrollTo().assertIsDisplayed()
+        findText("No seats available").performScrollTo().assertIsDisplayed()
         listOf("Closed area", "Departed area", "Own area").forEach {
             compose.onAllNodesWithText(it, substring = true).assertCountEquals(0)
         }
@@ -236,15 +243,16 @@ class RydeAppNavigationUiTest {
         launchConnected()
         store.requestGate = CompletableDeferred()
         tab("Find").performClick()
-        compose.onNodeWithText("Request one seat").performScrollTo().performClick()
-        compose.onNodeWithText("Request one seat").assertIsNotEnabled()
-        compose.onNodeWithText("Refresh").performScrollTo().assertIsNotEnabled()
+        scrollFindTo("Request one seat")
+        findText("Request one seat").performScrollTo().performClick()
+        findText("Request one seat").assertIsNotEnabled()
+        findText("Refresh").performScrollTo().assertIsNotEnabled()
         compose.onAllNodesWithText("Your request is pending").assertCountEquals(0)
         tab("Home").performClick()
         compose.onNodeWithText("Request one seat").performScrollTo().assertIsNotEnabled()
         compose.runOnIdle { store.requestGate!!.complete(Unit) }
         tab("Find").performClick()
-        compose.onNodeWithText("Your request is pending").performScrollTo().assertIsDisplayed()
+        findText("Your request is pending").performScrollTo().assertIsDisplayed()
         compose.onAllNodesWithText("Request one seat").assertCountEquals(0)
         compose.onAllNodesWithText("Ryde journey lab").assertCountEquals(0)
         compose.runOnIdle {
@@ -258,17 +266,18 @@ class RydeAppNavigationUiTest {
         launchConnected()
         store.failNextRequest = true
         tab("Find").performClick()
-        compose.onNodeWithText("Request one seat").performScrollTo().performClick()
-        compose.onNodeWithText("Request one seat").assertIsNotEnabled()
+        scrollFindTo("Request one seat")
+        findText("Request one seat").performScrollTo().performClick()
+        findText("Request one seat").assertIsNotEnabled()
         compose.onAllNodesWithText("Your request is pending").assertCountEquals(0)
-        compose.onNodeWithText(ConnectedRydeRepository.SAFE_JOURNEY_ERROR).performScrollTo().assertIsDisplayed()
+        findText(ConnectedRydeRepository.SAFE_JOURNEY_ERROR).performScrollTo().assertIsDisplayed()
         compose.runOnIdle { store.failNextLoad = true }
-        compose.onNodeWithText("Refresh").performScrollTo().performClick()
-        compose.onNodeWithText("Ryde could not refresh. Please try again.").assertIsDisplayed()
-        compose.onNodeWithText("Request one seat").performScrollTo().assertIsNotEnabled()
-        compose.onNodeWithText("Refresh").performScrollTo().performClick()
-        compose.onNodeWithText("Request one seat").performScrollTo().assertIsEnabled().performClick()
-        compose.onNodeWithText("Your request is pending").performScrollTo().assertIsDisplayed()
+        findText("Refresh").performScrollTo().performClick()
+        findText("Ryde could not refresh. Please try again.").assertIsDisplayed()
+        findText("Request one seat").performScrollTo().assertIsNotEnabled()
+        findText("Refresh").performScrollTo().performClick()
+        findText("Request one seat").performScrollTo().assertIsEnabled().performClick()
+        findText("Your request is pending").performScrollTo().assertIsDisplayed()
         compose.onAllNodesWithText("Request one seat").assertCountEquals(0)
         compose.runOnIdle {
             assertEquals(2, store.requestCalls.size)
@@ -284,9 +293,10 @@ class RydeAppNavigationUiTest {
             "rider-private-uid", ConnectedRequestStatus.CANCELLED)
         launchConnected()
         tab("Find").performClick()
-        compose.onNodeWithText("Your request was cancelled").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText("Request one seat").performScrollTo().performClick()
-        compose.onNodeWithText("Your request is pending").performScrollTo().assertIsDisplayed()
+        scrollFindTo("Your request was cancelled")
+        findText("Your request was cancelled").performScrollTo().assertIsDisplayed()
+        findText("Request one seat").performScrollTo().performClick()
+        findText("Your request is pending").performScrollTo().assertIsDisplayed()
         val terminalLabels = mapOf(
             ConnectedRequestStatus.ACCEPTED to "Your seat is confirmed",
             ConnectedRequestStatus.DECLINED to "Your request was declined",
@@ -294,8 +304,9 @@ class RydeAppNavigationUiTest {
         )
         terminalLabels.forEach { (status, label) ->
             compose.runOnIdle { store.requests[0] = store.requests[0].copy(status = status) }
-            compose.onNodeWithText("Refresh").performScrollTo().performClick()
-            compose.onNodeWithText(label).performScrollTo().assertIsDisplayed()
+            findText("Refresh").performScrollTo().performClick()
+            scrollFindTo(label)
+            findText(label).performScrollTo().assertIsDisplayed()
             compose.onAllNodesWithText("Request one seat").assertCountEquals(0)
             assertNoFictionalContent()
         }
@@ -309,10 +320,93 @@ class RydeAppNavigationUiTest {
         compose.onNodeWithTag("connected-find-list").performScrollToNode(hasText(text))
     }
 
+    private fun findText(text: String, substring: Boolean = false): SemanticsNodeInteraction {
+        compose.onNodeWithTag("connected-find-list").performScrollToNode(hasText(text, substring = substring))
+        return compose.onNodeWithText(text, substring = substring)
+    }
+
+    private fun findField(tag: String): SemanticsNodeInteraction {
+        compose.onNodeWithTag("connected-find-list").performScrollToNode(hasTestTag(tag))
+        return compose.onNodeWithTag(tag)
+    }
+
+    @Test
+    fun filteredRequestUsesCorrectJourneyOnceAndHomeStaysUnfiltered() {
+        val original = store.journeys.single()
+        store.journeys = listOf(original, original.copy(id = "filtered-offer", originArea = "York", destinationArea = "Wakefield",
+            departureEpochMillis = original.departureEpochMillis + 60_000))
+        launchConnected()
+        tab("Find").performClick()
+        findField("connected-find-origin").performTextInput("  YORK  ")
+        findField("connected-find-destination").performScrollTo().performTextInput("wake")
+        scrollFindTo("1 matching journey")
+        compose.onNodeWithText("1 matching journey").assertIsDisplayed()
+        scrollFindTo("Refresh")
+        compose.onNodeWithText("Refresh").performClick()
+        findField("connected-find-origin").performScrollTo().assert(hasText("  YORK  "))
+        findField("connected-find-destination").performScrollTo().assert(hasText("wake"))
+        store.requestGate = CompletableDeferred()
+        scrollFindTo("Request one seat")
+        compose.onNodeWithText("Request one seat").performClick().assertIsNotEnabled()
+        tab("Home").performClick()
+        compose.onNodeWithText("Sheffield → Leeds").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("York → Wakefield").performScrollTo().assertIsDisplayed()
+        compose.runOnIdle { store.requestGate!!.complete(Unit) }
+        tab("Find").performClick()
+        findField("connected-find-origin").performScrollTo().assert(hasText("  YORK  "))
+        findField("connected-find-destination").performScrollTo().assert(hasText("wake"))
+        scrollFindTo("Your request is pending")
+        compose.onNodeWithText("Your request is pending").assertIsDisplayed()
+        scrollFindTo("Manage requests")
+        compose.onNodeWithText("Manage requests").performClick()
+        tab("Trips").assertIsSelected()
+        compose.onNodeWithText("Your request is pending").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("York → Wakefield").assertIsDisplayed()
+        compose.onAllNodesWithText("Ryde journey lab").assertCountEquals(0)
+        compose.runOnIdle {
+            assertEquals(listOf("rider-private-uid" to "filtered-offer"), store.requestCalls)
+            assertEquals(0, legacyCommands)
+        }
+    }
+
+    @Test
+    fun findFiltersRestoreForSameAccountAndResetWhenAccountChanges() {
+        val restoration = StateRestorationTester(compose)
+        restoration.setContent { RydeTheme { RydeApp(repository, AppMode.CONNECTED) } }
+        tab("Find").performClick()
+        findField("connected-find-origin").performTextInput("sheff")
+        findField("connected-find-destination").performScrollTo().performTextInput("leed")
+        scrollFindTo("Choose date")
+        compose.onNodeWithText("Choose date").performClick()
+        compose.onNodeWithText("OK").performClick()
+        val selectedDate = findField("connected-find-date").performScrollTo().fetchSemanticsNode()
+            .config[androidx.compose.ui.semantics.SemanticsProperties.Text].single().text
+        tab("Home").performClick()
+        tab("Find").performClick()
+        findField("connected-find-date").performScrollTo().assert(hasText(selectedDate))
+        restoration.emulateSavedInstanceStateRestore()
+        tab("Find").assertIsSelected()
+        findField("connected-find-origin").performScrollTo().assert(hasText("sheff"))
+        findField("connected-find-destination").performScrollTo().assert(hasText("leed"))
+        findField("connected-find-date").performScrollTo().assert(hasText(selectedDate))
+        scrollFindTo("Refresh")
+        compose.onNodeWithText("Refresh").performClick()
+        findField("connected-find-date").performScrollTo().assert(hasText(selectedDate))
+        compose.runOnIdle { runBlocking { auth.uid = "second-private-uid"; repository.refresh() } }
+        tab("Home").assertIsSelected()
+        tab("Find").performClick()
+        findField("connected-find-origin").assert(hasText(""))
+        findField("connected-find-destination").performScrollTo().assert(hasText(""))
+        findField("connected-find-date").performScrollTo().assert(hasText("Any date"))
+        scrollFindTo("1 upcoming journey")
+        compose.onNodeWithText("1 upcoming journey").assertIsDisplayed()
+    }
+
     @Test
     fun tripsShowsPendingThenConfirmedWithGenuineFieldsAndPreservesFindStatus() {
         launchConnected()
         tab("Find").performClick()
+        scrollFindTo("Request one seat")
         compose.onNodeWithText("Request one seat").performScrollTo().performClick()
         tab("Trips").performClick()
         compose.onNodeWithText("Your request is pending").performScrollTo().assertIsDisplayed()

@@ -237,6 +237,7 @@ internal fun ConnectedReadyApp(
                     message = message,
                     onRefresh = refresh,
                     onRequestSeat = requestSeat,
+                    onManageRequests = { navigation = navigation.copy(destination = RydeDestination.TRIPS) },
                     modifier = modifier,
                 )
                 RydeDestination.OFFER -> ConnectedOfferScreen(
