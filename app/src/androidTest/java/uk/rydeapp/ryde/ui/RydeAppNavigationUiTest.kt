@@ -533,7 +533,7 @@ class RydeAppNavigationUiTest {
         auth.uid = "driver-private-uid"
         val journey = store.journeys.single()
         store.requests += ConnectedSeatRequest("${journey.id}_rider-private-uid", journey.id,
-            journey.driverUid, "rider-private-uid", ConnectedRequestStatus.PENDING)
+            journey.driverUid, "rider-private-uid", ConnectedRequestStatus.PENDING, "Taylor")
     }
 
     @Test
@@ -543,6 +543,7 @@ class RydeAppNavigationUiTest {
         launchConnected()
         tab("Trips").performClick()
         compose.onNodeWithText("Pending request for one seat").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Rider: Taylor").assertIsDisplayed()
         compose.onNodeWithText("Accept").performScrollTo().performClick()
         compose.onNodeWithText("Decline").assertIsNotEnabled().performClick()
         tab("Offer").performClick()
@@ -770,6 +771,7 @@ class RydeAppNavigationUiTest {
         launchConnected()
         tab("Trips").performClick()
         openDetails()
+        compose.onAllNodesWithText("Rider: Taylor").assertCountEquals(2)
         val list = compose.onNodeWithTag("connected-trip-details-list")
         list.performScrollToNode(hasTestTag("details-incoming:${first.id}"))
         compose.onNode(hasText("Accept") and hasAnyAncestor(hasTestTag("details-incoming:${first.id}"))).performClick()
@@ -918,7 +920,8 @@ class RydeAppNavigationUiTest {
             val journey = journeys.single()
             val id = "${journey.id}_rider-private-uid"
             requests.clear()
-            requests += ConnectedSeatRequest(id, journey.id, journey.driverUid, "rider-private-uid", ConnectedRequestStatus.ACCEPTED)
+            requests += ConnectedSeatRequest(id, journey.id, journey.driverUid, "rider-private-uid",
+                ConnectedRequestStatus.ACCEPTED, "Taylor")
             trips += ConnectedConfirmedTrip(id, journey.id, id, journey.driverUid, "rider-private-uid",
                 journey.originArea, journey.destinationArea, journey.departureEpochMillis, ConnectedTripStatus.CONFIRMED)
         }
@@ -953,7 +956,8 @@ class RydeAppNavigationUiTest {
             }
             val journey = journeys.single { it.id == journeyId }
             requests.removeAll { it.journeyId == journeyId && it.riderUid == uid }
-            requests += ConnectedSeatRequest("${journeyId}_$uid", journeyId, journey.driverUid, uid, ConnectedRequestStatus.PENDING)
+            requests += ConnectedSeatRequest("${journeyId}_$uid", journeyId, journey.driverUid, uid,
+                ConnectedRequestStatus.PENDING, if (uid == "rider-private-uid") "Taylor" else "Morgan")
         }
         override suspend fun cancelRequest(uid: String, requestId: String) {
             requestCancelCalls += uid to requestId

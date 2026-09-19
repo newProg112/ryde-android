@@ -7,7 +7,11 @@ service cloud.firestore {
     }
 
     function validDisplayName(value) {
-      return value is string && value.size() > 0 && value.size() <= 60;
+      return value is string
+        && value.size() > 0
+        && value.size() <= 60
+        && value.matches('.*[^\\s].*')
+        && !value.matches('.*[\\x00-\\x1F\\x7F-\\x9F].*');
     }
 
     function validBroadArea(value) {
@@ -23,6 +27,10 @@ service cloud.firestore {
 
     function journeyPath(journeyId) {
       return /databases/$(database)/documents/journeys/$(journeyId);
+    }
+
+    function userPath(uid) {
+      return /databases/$(database)/documents/users/$(uid);
     }
 
     function seatRequestPath(requestId) {
@@ -56,12 +64,23 @@ service cloud.firestore {
     }
 
     function validSeatRequest(data) {
-      return data.keys().hasOnly(['journeyId', 'driverUid', 'riderUid', 'status'])
+      return data.keys().hasOnly(['journeyId', 'driverUid', 'riderUid', 'status', 'riderDisplayName'])
+        && data.keys().hasAll(['journeyId', 'driverUid', 'riderUid', 'status'])
         && data.journeyId is string
         && data.driverUid is string
         && data.riderUid is string
         && data.driverUid != data.riderUid
+        && (!('riderDisplayName' in data) || validDisplayName(data.riderDisplayName))
         && data.status in ['PENDING', 'ACCEPTED', 'DECLINED', 'CANCELLED', 'CANCELLED_AFTER_ACCEPTANCE'];
+    }
+
+    function requestSnapshotMatchesRiderProfile(data) {
+      return 'riderDisplayName' in data
+        && validDisplayName(data.riderDisplayName)
+        && exists(userPath(data.riderUid))
+        && get(userPath(data.riderUid)).data.uid == data.riderUid
+        && validDisplayName(get(userPath(data.riderUid)).data.displayName)
+        && data.riderDisplayName == get(userPath(data.riderUid)).data.displayName;
     }
 
     function validAcceptanceGuard(data) {
@@ -330,10 +349,9 @@ service cloud.firestore {
       allow read: if signedIn()
         && (resource.data.riderUid == request.auth.uid || resource.data.driverUid == request.auth.uid);
       allow create: if signedIn()
-        && request.resource.data.keys().hasOnly(['journeyId', 'driverUid', 'riderUid', 'status'])
-        && request.resource.data.journeyId is string
+        && validSeatRequest(request.resource.data)
+        && requestSnapshotMatchesRiderProfile(request.resource.data)
         && request.resource.data.riderUid == request.auth.uid
-        && request.resource.data.driverUid is string
         && request.resource.data.driverUid != request.auth.uid
         && requestId == request.resource.data.journeyId + '_' + request.auth.uid
         && request.resource.data.status == 'PENDING'
@@ -356,11 +374,14 @@ service cloud.firestore {
         && request.resource.data.journeyId == resource.data.journeyId
         && request.resource.data.driverUid == resource.data.driverUid
         && request.resource.data.riderUid == resource.data.riderUid
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
         && ((resource.data.status == 'PENDING'
-            && request.resource.data.status == 'CANCELLED')
+            && request.resource.data.status == 'CANCELLED'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']))
           || (resource.data.status == 'CANCELLED'
             && request.resource.data.status == 'PENDING'
+            && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['status', 'riderDisplayName'])
+            && requestSnapshotMatchesRiderProfile(request.resource.data)
             && exists(journeyPath(resource.data.journeyId))
             && get(journeyPath(resource.data.journeyId)).data.driverUid == resource.data.driverUid
             && get(journeyPath(resource.data.journeyId)).data.status == 'OPEN'

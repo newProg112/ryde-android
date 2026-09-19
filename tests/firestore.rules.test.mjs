@@ -62,13 +62,31 @@ before(async () => {
   connectAuthEmulator(auth, `http://${authEmulatorHost}`, { disableWarnings: true });
 });
 
-beforeEach(async () => environment.clearFirestore());
+beforeEach(async () => {
+  await environment.clearFirestore();
+  await environment.withSecurityRulesDisabled(async (context) => {
+    const batch = writeBatch(context.firestore());
+    for (const uid of TEST_PROFILE_UIDS) {
+      batch.set(doc(context.firestore(), `users/${uid}`), profile(uid, displayNameFor(uid)));
+    }
+    await batch.commit();
+  });
+});
 after(async () => {
   await environment.cleanup();
   await deleteApp(authApp);
 });
 
 const profile = (uid, displayName = "Alex") => ({ uid, displayName });
+const TEST_PROFILE_UIDS = [
+  "alex", "driver", "rider", "other", "stranger", "new", "pending",
+  "rider-a", "rider-b", "accepted-rider", "declined-rider",
+];
+const displayNameFor = (uid) => {
+  if (uid === "rider-a" || uid === "rider-b") return "Shared rider name";
+  if (uid === "rider") return "Riley Rider";
+  return `User ${uid}`;
+};
 const place = (uid, label, area) => ({ uid, label, area });
 const journey = (driverUid, seats = 2) => ({
   driverUid,
@@ -79,7 +97,10 @@ const journey = (driverUid, seats = 2) => ({
   seatsRemaining: seats,
   status: "OPEN",
 });
-const request = (journeyId, driverUid, riderUid, status = "PENDING") => ({
+const request = (journeyId, driverUid, riderUid, status = "PENDING", riderDisplayName = displayNameFor(riderUid)) => ({
+  journeyId, driverUid, riderUid, status, riderDisplayName,
+});
+const legacyRequest = (journeyId, driverUid, riderUid, status = "PENDING") => ({
   journeyId, driverUid, riderUid, status,
 });
 const guard = (driverUid, acceptanceCount = 0, lastAcceptedRequestId = null) => ({
@@ -151,11 +172,15 @@ const acceptRequest = (db, journeyId, requestId, seatsRemaining, acceptanceCount
 
 const requestSeatLikeGateway = (db, journeyId, riderUid) => runTransaction(db, async (transaction) => {
   const journeyRef = doc(db, `journeys/${journeyId}`);
-  const journeySnapshot = await transaction.get(journeyRef);
+  const [journeySnapshot, profileSnapshot] = await Promise.all([
+    transaction.get(journeyRef),
+    transaction.get(doc(db, `users/${riderUid}`)),
+  ]);
   if (!journeySnapshot.exists()) throw new Error("Journey unavailable");
+  if (!profileSnapshot.exists()) throw new Error("Rider profile unavailable");
   transaction.set(
     doc(db, `seatRequests/${journeyId}_${riderUid}`),
-    request(journeyId, journeySnapshot.data().driverUid, riderUid),
+    request(journeyId, journeySnapshot.data().driverUid, riderUid, "PENDING", profileSnapshot.data().displayName),
   );
 });
 
@@ -629,6 +654,8 @@ test("identity mutation, extra fields, private-looking areas and extra place IDs
   await assertSucceeds(setDoc(doc(db, "users/alex"), profile("alex")));
   await assertFails(setDoc(doc(db, "users/alex"), { uid: "beth", displayName: "Alex" }));
   await assertFails(setDoc(doc(db, "users/alex"), { ...profile("alex"), role: "admin" }));
+  await assertFails(updateDoc(doc(db, "users/alex"), { displayName: "   " }));
+  await assertFails(updateDoc(doc(db, "users/alex"), { displayName: "Alex\u0007" }));
   await assertFails(setDoc(doc(db, "users/alex/savedPlaces/home"), place("alex", "Home", "12 High Street")));
   await assertFails(setDoc(doc(db, "users/alex/savedPlaces/gym"), place("alex", "Gym", "Nottingham")));
 });
@@ -687,6 +714,52 @@ test("requests enforce real participants deterministic ownership and self-reques
   await assertFails(setDoc(doc(driver, "seatRequests/j1_driver"), request("j1", "driver", "driver")));
 });
 
+test("request identity is the rider profile snapshot and remains participant private", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  const rider = environment.authenticatedContext("rider").firestore();
+  const stranger = environment.authenticatedContext("stranger").firestore();
+  const noProfile = environment.authenticatedContext("no-profile").firestore();
+  await assertSucceeds(createJourney(driver, "identity", "driver", 2));
+
+  await assertFails(setDoc(
+    doc(rider, "seatRequests/identity_rider"),
+    request("identity", "driver", "rider", "PENDING", "Spoofed rider"),
+  ));
+  await assertFails(setDoc(
+    doc(noProfile, "seatRequests/identity_no-profile"),
+    request("identity", "driver", "no-profile", "PENDING", "No profile"),
+  ));
+  await assertSucceeds(requestSeatLikeGateway(rider, "identity", "rider"));
+
+  const driverRequest = await assertSucceeds(getDoc(doc(driver, "seatRequests/identity_rider")));
+  const riderRequest = await assertSucceeds(getDoc(doc(rider, "seatRequests/identity_rider")));
+  assert.equal(driverRequest.data().riderDisplayName, "Riley Rider");
+  assert.deepEqual(driverRequest.data(), riderRequest.data());
+  await assertFails(getDoc(doc(stranger, "seatRequests/identity_rider")));
+  await assertFails(getDoc(doc(driver, "users/rider")));
+
+  await assertSucceeds(updateDoc(doc(rider, "users/rider"), { displayName: "Riley Renamed" }));
+  assert.equal((await getDoc(doc(rider, "seatRequests/identity_rider"))).data().riderDisplayName, "Riley Rider");
+  await assertFails(updateDoc(doc(rider, "seatRequests/identity_rider"), { riderDisplayName: "Riley Renamed" }));
+  await assertFails(updateDoc(doc(driver, "seatRequests/identity_rider"), { riderDisplayName: "Riley Renamed" }));
+});
+
+test("duplicate display names remain distinct requests keyed by deterministic request id", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  const riderA = environment.authenticatedContext("rider-a").firestore();
+  const riderB = environment.authenticatedContext("rider-b").firestore();
+  await assertSucceeds(createJourney(driver, "same-name", "driver", 2));
+  await assertSucceeds(requestSeatLikeGateway(riderA, "same-name", "rider-a"));
+  await assertSucceeds(requestSeatLikeGateway(riderB, "same-name", "rider-b"));
+
+  const requests = await assertSucceeds(getDocs(query(
+    collection(driver, "seatRequests"),
+    where("driverUid", "==", "driver"),
+  )));
+  assert.deepEqual(requests.docs.map((item) => item.id).sort(), ["same-name_rider-a", "same-name_rider-b"]);
+  assert.deepEqual(requests.docs.map((item) => item.data().riderDisplayName), ["Shared rider name", "Shared rider name"]);
+});
+
 test("gateway transaction can blindly create a deterministic request without reading private absence", async () => {
   const driver = environment.authenticatedContext("driver").firestore();
   const rider = environment.authenticatedContext("rider").firestore();
@@ -712,8 +785,34 @@ test("rider can cancel and safely re-request the same available journey", async 
   await assertSucceeds(updateDoc(requestRef, { status: "CANCELLED" }));
   await assertFails(updateDoc(doc(driver, "seatRequests/j1_rider"), { status: "ACCEPTED" }));
   await assertFails(updateDoc(doc(driver, "seatRequests/j1_rider"), { status: "DECLINED" }));
+  await assertSucceeds(updateDoc(doc(rider, "users/rider"), { displayName: "Riley Re-requested" }));
+  await assertFails(setDoc(requestRef, request("j1", "driver", "rider", "PENDING", "Spoofed rider")));
   await assertSucceeds(requestSeatLikeGateway(rider, "j1", "rider"));
-  assert.equal((await getDoc(requestRef)).data().status, "PENDING");
+  const rerequested = (await getDoc(requestRef)).data();
+  assert.equal(rerequested.status, "PENDING");
+  assert.equal(rerequested.riderDisplayName, "Riley Re-requested");
+});
+
+test("legacy requests stay operable and a re-request adds the current verified snapshot", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  const rider = environment.authenticatedContext("rider").firestore();
+  await assertSucceeds(createJourney(driver, "legacy-request", "driver", 2));
+  await environment.withSecurityRulesDisabled(async (context) => {
+    await setDoc(
+      doc(context.firestore(), "seatRequests/legacy-request_rider"),
+      legacyRequest("legacy-request", "driver", "rider"),
+    );
+  });
+
+  const legacy = await assertSucceeds(getDoc(doc(driver, "seatRequests/legacy-request_rider")));
+  assert.equal("riderDisplayName" in legacy.data(), false);
+  await assertSucceeds(updateDoc(doc(rider, "seatRequests/legacy-request_rider"), { status: "CANCELLED" }));
+  await assertSucceeds(updateDoc(doc(rider, "users/rider"), { displayName: "Current Rider" }));
+  await assertSucceeds(requestSeatLikeGateway(rider, "legacy-request", "rider"));
+  assert.deepEqual(
+    (await getDoc(doc(driver, "seatRequests/legacy-request_rider"))).data(),
+    request("legacy-request", "driver", "rider", "PENDING", "Current Rider"),
+  );
 });
 
 test("rider cancellation racing driver acceptance leaves one consistent outcome", async () => {

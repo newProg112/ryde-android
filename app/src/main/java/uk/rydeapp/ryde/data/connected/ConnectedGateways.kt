@@ -111,16 +111,19 @@ class FirestoreConnectedJourneyStore(private val firestore: FirebaseFirestore) :
     override suspend fun requestSeat(uid: String, journeyId: String) {
         val journeyRef = firestore.collection(JOURNEYS).document(journeyId)
         val requestRef = firestore.collection(REQUESTS).document("${journeyId}_$uid")
+        val profileRef = firestore.collection(USERS).document(uid)
         firestore.runTransaction { transaction ->
             val journey = FirestoreJourneyMapper.journey(journeyId, transaction.get(journeyRef).data.orEmpty())
                 ?: error("Journey unavailable")
+            val profile = FirestoreProfileMapper.user(uid, transaction.get(profileRef).data.orEmpty())
+                ?: error("Rider profile unavailable")
             check(
                 journey.driverUid != uid &&
                     journey.status == ConnectedJourneyStatus.OPEN &&
                     journey.seatsRemaining > 0 &&
                     journey.departureEpochMillis > System.currentTimeMillis(),
             )
-            transaction.set(requestRef, FirestoreJourneyMapper.requestData(journey, uid))
+            transaction.set(requestRef, FirestoreJourneyMapper.requestData(journey, uid, profile.displayName))
         }.await()
     }
 
@@ -227,5 +230,6 @@ class FirestoreConnectedJourneyStore(private val firestore: FirebaseFirestore) :
         const val REQUESTS = "seatRequests"
         const val ACCEPTANCE_GUARDS = "journeyAcceptanceGuards"
         const val CONFIRMED_TRIPS = "confirmedTrips"
+        const val USERS = "users"
     }
 }

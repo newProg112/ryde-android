@@ -8,7 +8,8 @@ import uk.rydeapp.ryde.ui.home.connectedHomeJourneys
 
 class ConnectedTripDetailsUiTest {
     private val journey = ConnectedJourney("journey", "driver", "Mansfield", "Sheffield", 1000, 3, 2)
-    private val request = ConnectedSeatRequest("request-id", journey.id, "driver", "rider", ConnectedRequestStatus.PENDING)
+    private val request = ConnectedSeatRequest("request-id", journey.id, "driver", "rider",
+        ConnectedRequestStatus.PENDING, "Riley Rider")
     private val trip = ConnectedConfirmedTrip("trip-id", journey.id, request.id, "driver", "rider",
         "Persisted area", "Sheffield", 1000, ConnectedTripStatus.CONFIRMED)
     private fun details(snapshot: ConnectedJourneySnapshot, uid: String = "rider", id: String = journey.id, now: Long = 0) =
@@ -20,6 +21,7 @@ class ConnectedTripDetailsUiTest {
         assertEquals(connectedTripsContent(snapshot, "driver", 0).driver.single(), details.summary)
         assertEquals(journey.id, details.summary!!.cancellableJourneyId)
         assertEquals(request.id, details.summary.incoming.single().id)
+        assertEquals("Riley Rider", details.summary.incoming.single().riderDisplayName)
         assertTrue(details.summary.incoming.single().canAccept)
         assertFalse(details.canRequest)
         assertFalse(details( snapshot, "driver", now = 1000).summary!!.incoming.single().canAccept)

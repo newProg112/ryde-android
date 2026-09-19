@@ -24,6 +24,7 @@ internal data class ConnectedTripsItem(
 
 internal data class ConnectedIncomingRequest(
     val id: String,
+    val riderDisplayName: String?,
     val statusText: Int,
     val canAccept: Boolean,
     val canDecline: Boolean,
@@ -48,6 +49,7 @@ private fun incomingRequest(
     request: ConnectedSeatRequest, journey: ConnectedJourney?, uid: String, now: Long,
 ): ConnectedIncomingRequest = ConnectedIncomingRequest(
     request.id,
+    request.riderDisplayName,
     when {
         ConnectedJourneyLifecycle.requestCancelledByDriver(request, journey) -> R.string.connected_trips_offer_cancelled
         request.status in listOf(ConnectedRequestStatus.PENDING, ConnectedRequestStatus.ACCEPTED) &&

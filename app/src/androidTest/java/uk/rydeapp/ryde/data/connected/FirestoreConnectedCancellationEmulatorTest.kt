@@ -23,7 +23,7 @@ class FirestoreConnectedCancellationEmulatorTest {
         assumeTrue(InstrumentationRegistry.getArguments().getString("rydeRulesEmulator") == "true")
         val apps = mutableListOf<FirebaseApp>()
         try {
-            suspend fun account(): Triple<String, FirebaseFirestore, FirestoreConnectedJourneyStore> {
+            suspend fun account(displayName: String): Triple<String, FirebaseFirestore, FirestoreConnectedJourneyStore> {
                 val unique = UUID.randomUUID().toString()
                 val app = FirebaseApp.initializeApp(
                     InstrumentationRegistry.getInstrumentation().targetContext,
@@ -38,15 +38,22 @@ class FirestoreConnectedCancellationEmulatorTest {
                 val auth = FirebaseAuth.getInstance(app).apply { useEmulator("10.0.2.2", 9199) }
                 val firestore = FirebaseFirestore.getInstance(app).apply { useEmulator("10.0.2.2", 8180) }
                 val uid = checkNotNull(auth.createUserWithEmailAndPassword("$unique@example.test", "password-123").await().user?.uid)
+                FirestoreConnectedProfileStore(firestore).create(ConnectedUserProfile(uid, displayName))
                 return Triple(uid, firestore, FirestoreConnectedJourneyStore(firestore))
             }
-            val (driverUid, driverDb, driver) = account()
-            val (riderUid, riderDb, rider) = account()
-            val (otherUid, _, other) = account()
+            val (driverUid, driverDb, driver) = account("Driver Label")
+            val (riderUid, riderDb, rider) = account("Shared Rider Label")
+            val (otherUid, _, other) = account("Shared Rider Label")
             driver.create(driverUid, ConnectedJourneyDraft("Mansfield", "Nottingham", System.currentTimeMillis() + 86_400_000, 1))
             val journey = driver.load(driverUid).journeys.single { it.driverUid == driverUid }
             rider.requestSeat(riderUid, journey.id)
             val requestId = "${journey.id}_$riderUid"
+            val driverRequest = driver.load(driverUid).requests.single { it.id == requestId }
+            assertEquals("Shared Rider Label", driverRequest.riderDisplayName)
+            assertEquals(driverRequest, rider.load(riderUid).requests.single { it.id == requestId })
+            assertFalse(runCatching {
+                driverDb.collection("users").document(riderUid).get(Source.SERVER).await()
+            }.isSuccess)
             driver.decide(driverUid, requestId, true)
             val guardRef = riderDb.collection("journeyAcceptanceGuards").document(journey.id)
             val denied = runCatching { guardRef.get(Source.SERVER).await() }.exceptionOrNull()
@@ -68,6 +75,10 @@ class FirestoreConnectedCancellationEmulatorTest {
             assertEquals(0L, driverGuard.get(Source.SERVER).await().getLong("acceptanceCount"))
             assertTrue(other.load(otherUid).confirmedTrips.isEmpty())
             other.requestSeat(otherUid, journey.id)
+            assertEquals(
+                "Shared Rider Label",
+                driver.load(driverUid).requests.single { it.riderUid == otherUid }.riderDisplayName,
+            )
             driver.decide(driverUid, "${journey.id}_$otherUid", true)
             assertEquals(1L, driverGuard.get(Source.SERVER).await().getLong("acceptanceCount"))
             assertEquals(0, driver.load(driverUid).journeys.single { it.id == journey.id }.seatsRemaining)

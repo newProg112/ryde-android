@@ -14,7 +14,8 @@ import uk.rydeapp.ryde.ui.theme.RydeTheme
 class ConnectedTripDetailsScreenUiTest {
     @get:Rule val compose = createComposeRule()
     private val journey = ConnectedJourney("journey-id", "driver-uid", "York", "Leeds", 4_070_908_800_000L, 3, 2)
-    private val request = ConnectedSeatRequest("request-id", journey.id, journey.driverUid, "rider-uid", ConnectedRequestStatus.PENDING)
+    private val request = ConnectedSeatRequest("request-id", journey.id, journey.driverUid, "rider-uid",
+        ConnectedRequestStatus.PENDING, "Riley Rider")
     private val trip = ConnectedConfirmedTrip("trip-id", journey.id, request.id, journey.driverUid, request.riderUid,
         journey.originArea, journey.destinationArea, journey.departureEpochMillis, ConnectedTripStatus.CONFIRMED)
     private fun content(snapshot: ConnectedJourneySnapshot, uid: String = request.riderUid) =
@@ -129,6 +130,7 @@ class ConnectedTripDetailsScreenUiTest {
             ConnectedTripDetailsScreen(content(ConnectedJourneySnapshot(listOf(journey), listOf(request)), journey.driverUid), false, true, null,
                 {}, {}, {}, { id, accept -> decisions += id to accept }, {}, { cancellations += it })
         } }
+        text("Rider: Riley Rider").assertIsDisplayed()
         text("Accept").performClick()
         text("Decline").performClick()
         text("Cancel journey").performClick()
@@ -142,6 +144,21 @@ class ConnectedTripDetailsScreenUiTest {
         compose.runOnIdle {
             assertEquals(listOf(request.id to true, request.id to false), decisions)
             assertEquals(listOf(journey.id), cancellations)
+        }
+    }
+
+    @Test fun driverDetailsUsesGenericRiderFallbackForLegacyTerminalHistory() {
+        val legacy = request.copy(status = ConnectedRequestStatus.CANCELLED, riderDisplayName = null)
+        compose.setContent { RydeTheme {
+            ConnectedTripDetailsScreen(
+                content(ConnectedJourneySnapshot(listOf(journey), listOf(legacy)), journey.driverUid),
+                false, true, null, {}, {}, {}, { _, _ -> error("Terminal") }, {}, {},
+            )
+        } }
+        text("Rider").assertIsDisplayed()
+        text("Request cancelled by rider").assertIsDisplayed()
+        listOf(request.id, request.riderUid, journey.driverUid).forEach {
+            compose.onAllNodesWithText(it, substring = true).assertCountEquals(0)
         }
     }
 

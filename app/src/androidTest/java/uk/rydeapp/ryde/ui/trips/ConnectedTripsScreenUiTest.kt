@@ -14,7 +14,7 @@ class ConnectedTripsScreenUiTest {
     @get:Rule val compose = createComposeRule()
     private val journey = ConnectedJourney("private-journey-id", "private-driver-uid", "York", "Leeds", 4_070_908_800_000L, 2, 1)
     private val request = ConnectedSeatRequest("private-request-id", journey.id, journey.driverUid,
-        "private-rider-uid", ConnectedRequestStatus.PENDING)
+        "private-rider-uid", ConnectedRequestStatus.PENDING, "Riley Rider")
     private val trip = ConnectedConfirmedTrip("private-trip-id", journey.id, request.id, journey.driverUid,
         request.riderUid, journey.originArea, journey.destinationArea, journey.departureEpochMillis, ConnectedTripStatus.CONFIRMED)
 
@@ -27,12 +27,29 @@ class ConnectedTripsScreenUiTest {
                 onCancelJourney = { error("No valid cancellation") })
         } }
         compose.onNodeWithText("Cancel journey").performScrollTo().performClick()
+        compose.onNodeWithText("Rider: Riley Rider").assertIsDisplayed()
         compose.onNodeWithText("Confirm journey cancellation").assertIsDisplayed()
         compose.runOnIdle { current.value = journey.copy(status = ConnectedJourneyStatus.CANCELLED) }
         compose.onAllNodesWithText("Confirm journey cancellation").assertCountEquals(0)
         compose.onAllNodesWithText("Accept").assertCountEquals(0)
         compose.onAllNodesWithText("Decline").assertCountEquals(0)
         compose.onAllNodesWithText("Cancel journey").assertCountEquals(0)
+        assertSafe()
+    }
+
+    @Test fun driverSeesSafeSnapshotForTerminalHistoryAndRiderFallbackForLegacyRequests() {
+        val current = mutableStateOf(request.copy(status = ConnectedRequestStatus.DECLINED))
+        compose.setContent { RydeTheme {
+            ConnectedTripsScreen(
+                connectedTripsContent(ConnectedJourneySnapshot(listOf(journey), listOf(current.value)), journey.driverUid, 0),
+                false, true, null, {}, {},
+            )
+        } }
+        compose.onNodeWithText("Rider: Riley Rider").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Request declined").assertIsDisplayed()
+        compose.runOnIdle { current.value = current.value.copy(riderDisplayName = null) }
+        compose.onNodeWithText("Rider").assertIsDisplayed()
+        compose.onAllNodesWithText("Rider: Riley Rider").assertCountEquals(0)
         assertSafe()
     }
 

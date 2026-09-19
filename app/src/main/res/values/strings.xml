@@ -70,6 +70,8 @@
     <string name="connected_offer_departed">Departure has passed</string>
     <string name="connected_offer_full">Journey full</string>
     <string name="connected_incoming_heading">Seat requests</string>
+    <string name="connected_incoming_rider_name">Rider: %1$s</string>
+    <string name="connected_incoming_rider_fallback">Rider</string>
     <string name="connected_incoming_empty">No seat requests yet</string>
     <string name="connected_incoming_pending">Pending request for one seat</string>
     <string name="connected_incoming_accepted">Accepted — rider seat confirmed</string>

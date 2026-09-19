@@ -217,6 +217,9 @@ private fun IncomingRequest(
 ) {
     Column(Modifier.fillMaxWidth().testTag("incoming:${request.id}"), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         HorizontalDivider()
+        Text(request.riderDisplayName?.let {
+            stringResource(R.string.connected_incoming_rider_name, it)
+        } ?: stringResource(R.string.connected_incoming_rider_fallback))
         Text(stringResource(request.statusText))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (request.canAccept) Button(enabled = !busy && actionsEnabled,

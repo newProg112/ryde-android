@@ -5,6 +5,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -212,6 +213,27 @@ class ConnectedJourneyFlowTest {
                     "status" to "CANCELLED",
                 ),
             )?.status,
+        )
+        val namedRequestData = mapOf(
+            "journeyId" to "journey-1",
+            "driverUid" to "driver",
+            "riderUid" to "rider",
+            "status" to "PENDING",
+            "riderDisplayName" to "Riley Rider",
+        )
+        assertEquals(
+            "Riley Rider",
+            FirestoreJourneyMapper.request("journey-1_rider", namedRequestData)?.riderDisplayName,
+        )
+        assertNull(FirestoreJourneyMapper.request("journey-1_rider", namedRequestData + ("riderDisplayName" to "\u0007")))
+        assertNull(FirestoreJourneyMapper.request("journey-1_rider", namedRequestData + ("extra" to true)))
+        assertEquals(
+            namedRequestData,
+            FirestoreJourneyMapper.requestData(
+                ConnectedJourney("journey-1", "driver", "Mansfield", "Nottingham", 4_070_908_800_000L, 1, 1),
+                "rider",
+                "Riley Rider",
+            ),
         )
 
         val journey = ConnectedJourney(

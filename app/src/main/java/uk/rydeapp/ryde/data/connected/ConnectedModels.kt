@@ -98,6 +98,8 @@ data class ConnectedSeatRequest(
     val driverUid: String,
     val riderUid: String,
     val status: ConnectedRequestStatus,
+    /** Immutable for one request cycle; null only for legacy records. */
+    val riderDisplayName: String? = null,
 )
 
 data class ConnectedConfirmedTrip(
@@ -177,7 +179,8 @@ object ConnectedJourneyValidator {
 
 object FirestoreJourneyMapper {
     private val journeyFields = setOf("driverUid", "originArea", "destinationArea", "departureAt", "seatCapacity", "seatsRemaining", "status")
-    private val requestFields = setOf("journeyId", "driverUid", "riderUid", "status")
+    private val legacyRequestFields = setOf("journeyId", "driverUid", "riderUid", "status")
+    private val requestFields = legacyRequestFields + "riderDisplayName"
     private val acceptanceGuardFields = setOf("driverUid", "acceptanceCount", "lastAcceptedRequestId")
     private val confirmedTripFields = setOf(
         "journeyId",
@@ -200,11 +203,16 @@ object FirestoreJourneyMapper {
         "status" to "OPEN",
     )
 
-    fun requestData(journey: ConnectedJourney, riderUid: String): Map<String, Any> = mapOf(
+    fun requestData(
+        journey: ConnectedJourney,
+        riderUid: String,
+        riderDisplayName: String,
+    ): Map<String, Any> = mapOf(
         "journeyId" to journey.id,
         "driverUid" to journey.driverUid,
         "riderUid" to riderUid,
         "status" to ConnectedRequestStatus.PENDING.name,
+        "riderDisplayName" to riderDisplayName,
     )
 
     fun initialAcceptanceGuardData(driverUid: String): Map<String, Any?> = mapOf(
@@ -246,12 +254,15 @@ object FirestoreJourneyMapper {
     }
 
     fun request(id: String, data: Map<String, Any?>): ConnectedSeatRequest? {
-        if (data.keys != requestFields) return null
+        if (data.keys != legacyRequestFields && data.keys != requestFields) return null
         val status = runCatching { ConnectedRequestStatus.valueOf(data["status"] as? String ?: return null) }.getOrNull() ?: return null
+        val riderDisplayName = if ("riderDisplayName" in data) {
+            (data["riderDisplayName"] as? String)?.takeIf(::isSafeDisplayName) ?: return null
+        } else null
         return ConnectedSeatRequest(
             id, data["journeyId"] as? String ?: return null,
             data["driverUid"] as? String ?: return null,
-            data["riderUid"] as? String ?: return null, status,
+            data["riderUid"] as? String ?: return null, status, riderDisplayName,
         ).takeIf { it.id == "${it.journeyId}_${it.riderUid}" && it.driverUid != it.riderUid }
     }
 
@@ -309,6 +320,9 @@ object FirestoreJourneyMapper {
             !journey.originArea.equals(journey.destinationArea, true) &&
             journey.seatCapacity in 1..8 && journey.seatsRemaining in 0..journey.seatCapacity
 
+    private fun isSafeDisplayName(value: String): Boolean =
+        value.isNotBlank() && value.length <= 60 && value.none(Char::isISOControl)
+
     private fun Long.toTimestamp(): Timestamp =
         Timestamp(this / 1000, ((this % 1000) * 1_000_000).toInt())
 }
@@ -335,7 +349,8 @@ object FirestoreProfileMapper {
         val storedUid = data[UID] as? String ?: return null
         val displayName = data[DISPLAY_NAME] as? String ?: return null
         return ConnectedUserProfile(storedUid, displayName).takeIf {
-            storedUid == uid && displayName.isNotBlank() && displayName.length <= 60
+            storedUid == uid && displayName.isNotBlank() && displayName.length <= 60 &&
+                displayName.none(Char::isISOControl)
         }
     }
 

@@ -8,7 +8,7 @@ import uk.rydeapp.ryde.data.connected.*
 class ConnectedTripsUiTest {
     private val journey = ConnectedJourney("offer", "private-driver", "York", "Leeds", 1000, 2, 1)
     private val request = ConnectedSeatRequest("offer_private-rider", journey.id, journey.driverUid,
-        "private-rider", ConnectedRequestStatus.PENDING)
+        "private-rider", ConnectedRequestStatus.PENDING, "Riley Rider")
     private val trip = ConnectedConfirmedTrip(request.id, journey.id, request.id, journey.driverUid,
         request.riderUid, journey.originArea, journey.destinationArea, journey.departureEpochMillis,
         ConnectedTripStatus.CONFIRMED)
@@ -118,6 +118,7 @@ class ConnectedTripsUiTest {
         assertEquals(2, item.seatCapacity)
         assertEquals(journey.id, item.cancellableJourneyId)
         assertEquals(request.id, item.incoming.single().id)
+        assertEquals("Riley Rider", item.incoming.single().riderDisplayName)
         assertTrue(item.incoming.single().canAccept)
         assertTrue(item.incoming.single().canDecline)
         assertEquals(R.string.connected_incoming_pending, item.incoming.single().statusText)
@@ -156,7 +157,7 @@ class ConnectedTripsUiTest {
         assertTrue(content(uid = journey.driverUid, r = listOf(unrelated)).unavailableIncoming.isEmpty())
     }
 
-    @Test fun `driver terminal request labels describe the rider without invented identity`() {
+    @Test fun `driver terminal request labels retain safe rider snapshot and legacy fallback`() {
         mapOf(
             ConnectedRequestStatus.ACCEPTED to R.string.connected_incoming_accepted,
             ConnectedRequestStatus.DECLINED to R.string.connected_incoming_declined,
@@ -165,9 +166,12 @@ class ConnectedTripsUiTest {
         ).forEach { (status, label) ->
             val incoming = content(uid = journey.driverUid, r = listOf(request.copy(status = status))).driver.single().incoming.single()
             assertEquals(label, incoming.statusText)
+            assertEquals("Riley Rider", incoming.riderDisplayName)
             assertFalse(incoming.canAccept)
             assertFalse(incoming.canDecline)
         }
+        assertNull(content(uid = journey.driverUid, r = listOf(request.copy(riderDisplayName = null)))
+            .driver.single().incoming.single().riderDisplayName)
     }
 
     @Test fun `declined request retains history and shows linked driver cancellation without affecting confirmed journey`() {
