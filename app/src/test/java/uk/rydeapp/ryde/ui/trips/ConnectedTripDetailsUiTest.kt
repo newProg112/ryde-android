@@ -67,6 +67,37 @@ class ConnectedTripDetailsUiTest {
         assertFalse(cancelled.canRequest)
     }
 
+    @Test fun pastConfirmedDetailsRetainRouteAndHistoryWithoutCancellation() {
+        val snapshot = ConnectedJourneySnapshot(
+            listOf(journey),
+            listOf(request.copy(status = ConnectedRequestStatus.ACCEPTED)),
+            listOf(trip),
+        )
+        val result = details(snapshot, now = 1000)
+        assertEquals("Persisted area", result.summary!!.origin)
+        assertEquals("Sheffield", result.summary.destination)
+        assertEquals(1000L, result.summary.departureEpochMillis)
+        assertEquals(R.string.connected_trips_departure_passed, result.summary.statusText)
+        assertNull(result.summary.cancellableTripId)
+        assertFalse(result.canRequest)
+    }
+
+    @Test fun pastPendingDetailsRetainCleanupIdsButCloseFutureActions() {
+        val snapshot = ConnectedJourneySnapshot(listOf(journey), listOf(request))
+        val rider = details(snapshot, now = 1000)
+        assertEquals(R.string.connected_request_pending_departed, rider.summary!!.statusText)
+        assertEquals(request.id, rider.summary.cancellableRequestId)
+        assertFalse(rider.canRequest)
+
+        val driver = details(snapshot, uid = "driver", now = 1000)
+        val incoming = driver.summary!!.incoming.single()
+        assertEquals(R.string.connected_incoming_pending_departed, incoming.statusText)
+        assertEquals("Riley Rider", incoming.riderDisplayName)
+        assertFalse(incoming.canAccept)
+        assertTrue(incoming.canDecline)
+        assertNull(driver.summary.cancellableJourneyId)
+    }
+
     @Test fun driverCancellationAndTerminalHistoryReuseResolvedTripsStatuses() {
         val closed = journey.copy(status = ConnectedJourneyStatus.CANCELLED)
         val pending = details(ConnectedJourneySnapshot(listOf(closed), listOf(request)))

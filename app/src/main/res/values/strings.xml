@@ -16,6 +16,7 @@
     <string name="connected_route">%1$s → %2$s</string>
     <string name="connected_seats">Seats remaining: %1$d/%2$d</string>
     <string name="connected_request_pending">Your request is pending</string>
+    <string name="connected_request_pending_departed">Departure has passed - this request can no longer be accepted</string>
     <string name="connected_request_accepted">Your seat is confirmed</string>
     <string name="connected_request_declined">Your request was declined</string>
     <string name="connected_request_cancelled">Your request was cancelled</string>
@@ -74,6 +75,8 @@
     <string name="connected_incoming_rider_fallback">Rider</string>
     <string name="connected_incoming_empty">No seat requests yet</string>
     <string name="connected_incoming_pending">Pending request for one seat</string>
+    <string name="connected_incoming_pending_departed">Departure has passed - this request can no longer be accepted</string>
+    <string name="connected_incoming_accepted_departed">Departure has passed - rider had a confirmed seat</string>
     <string name="connected_incoming_accepted">Accepted — rider seat confirmed</string>
     <string name="connected_incoming_declined">Request declined</string>
     <string name="connected_incoming_cancelled">Request cancelled by rider</string>
@@ -103,6 +106,7 @@
     <string name="connected_trips_cancelled">Your seat was cancelled</string>
     <string name="connected_trips_cancel_success">Seat cancelled. Your trips are up to date.</string>
     <string name="connected_trips_driver_cancelled">Journey cancelled by driver</string>
+    <string name="connected_trips_departure_passed">Departure has passed</string>
     <string name="connected_trips_unavailable">Journey unavailable</string>
     <string name="connected_trips_details_unavailable">Journey details unavailable</string>
     <string name="connected_trips_cancel_seat">Cancel my seat</string>

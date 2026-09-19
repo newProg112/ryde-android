@@ -138,7 +138,9 @@ internal fun ConnectedReadyApp(
         return
     }
 
-    val discoveryJourneys = connectedHomeJourneys(snapshot, session.accountId, System.currentTimeMillis())
+    val nowEpochMillis = System.currentTimeMillis()
+    val discoveryJourneys = connectedHomeJourneys(snapshot, session.accountId, nowEpochMillis)
+    val tripsContent = connectedTripsContent(snapshot, session.accountId, nowEpochMillis)
     val requestSeat: (String) -> Unit = { journeyId ->
         // Check repository truth and time again at the shared Home/Find command boundary.
         val canRequest = connectedHomeJourneys(
@@ -246,7 +248,7 @@ internal fun ConnectedReadyApp(
             tabStateHolder.SaveableStateProvider("${session.accountId}:details:$detailJourneyId") {
                 ConnectedTripDetailsScreen(
                     content = connectedTripDetailsContent(snapshot, session.accountId, detailJourneyId,
-                        discoveryJourneys, connectedTripsContent(snapshot, session.accountId, System.currentTimeMillis())),
+                        discoveryJourneys, tripsContent),
                     busy = busy, actionsEnabled = !refreshRequired, message = message,
                     onBack = closeDetails, onRefresh = refresh, onRequestSeat = requestSeat,
                     onDecideRequest = decideRequest, onCancelSeat = cancelSeat, onCancelJourney = cancelJourney,
@@ -291,7 +293,7 @@ internal fun ConnectedReadyApp(
                     onManageOffers = { navigation = navigation.copy(destination = RydeDestination.TRIPS) }, modifier = modifier,
                 )
                 RydeDestination.TRIPS -> ConnectedTripsScreen(
-                    content = connectedTripsContent(snapshot, session.accountId, System.currentTimeMillis()),
+                    content = tripsContent,
                     busy = busy, actionsEnabled = !refreshRequired, message = message,
                     onRefresh = refresh, onCancelSeat = cancelSeat, modifier = modifier,
                     onDecideRequest = decideRequest, onCancelJourney = cancelJourney,

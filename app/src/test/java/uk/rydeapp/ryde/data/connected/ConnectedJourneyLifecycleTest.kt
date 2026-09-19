@@ -11,6 +11,43 @@ class ConnectedJourneyLifecycleTest {
     private val cancelled = journey.copy(status = ConnectedJourneyStatus.CANCELLED, cancelledAtEpochMillis = 100_000)
 
     @Test
+    fun `confirmed trip becomes departure passed exactly at departure without mutating persisted truth`() {
+        assertEquals(
+            ConnectedTripLifecycle.CONFIRMED,
+            ConnectedJourneyLifecycle.trip(trip, journey, journey.departureEpochMillis - 1),
+        )
+        assertEquals(
+            ConnectedTripLifecycle.DEPARTURE_PASSED,
+            ConnectedJourneyLifecycle.trip(trip, journey, journey.departureEpochMillis),
+        )
+        assertEquals(
+            ConnectedTripLifecycle.DEPARTURE_PASSED,
+            ConnectedJourneyLifecycle.trip(trip, journey, journey.departureEpochMillis + 1),
+        )
+        assertEquals(ConnectedTripStatus.CONFIRMED, trip.status)
+        assertEquals(ConnectedJourneyStatus.OPEN, journey.status)
+    }
+
+    @Test
+    fun `request departure presentation is derived without changing persisted status`() {
+        assertEquals(
+            ConnectedRequestLifecycle.PENDING,
+            ConnectedJourneyLifecycle.request(request, journey, journey.departureEpochMillis - 1),
+        )
+        assertEquals(
+            ConnectedRequestLifecycle.DEPARTURE_PASSED_PENDING,
+            ConnectedJourneyLifecycle.request(request, journey, journey.departureEpochMillis),
+        )
+        val accepted = request.copy(status = ConnectedRequestStatus.ACCEPTED)
+        assertEquals(
+            ConnectedRequestLifecycle.DEPARTURE_PASSED_ACCEPTED,
+            ConnectedJourneyLifecycle.request(accepted, journey, journey.departureEpochMillis),
+        )
+        assertEquals(ConnectedRequestStatus.PENDING, request.status)
+        assertEquals(ConnectedRequestStatus.ACCEPTED, accepted.status)
+    }
+
+    @Test
     fun `driver cancellation resolves confirmed history without changing source records`() {
         assertEquals(ConnectedTripLifecycle.CONFIRMED, ConnectedJourneyLifecycle.trip(trip, journey))
         assertEquals(ConnectedTripLifecycle.CANCELLED_BY_DRIVER, ConnectedJourneyLifecycle.trip(trip, cancelled))
@@ -26,9 +63,33 @@ class ConnectedJourneyLifecycleTest {
     @Test
     fun `earlier rider cancellation keeps its attribution and timestamp`() {
         val riderCancelled = trip.copy(status = ConnectedTripStatus.CANCELLED_BY_RIDER, cancelledAtEpochMillis = 1)
-        assertEquals(ConnectedTripLifecycle.CANCELLED_BY_RIDER, ConnectedJourneyLifecycle.trip(riderCancelled, cancelled))
-        assertEquals(ConnectedTripLifecycle.CANCELLED_BY_RIDER, ConnectedJourneyLifecycle.trip(riderCancelled, null))
+        assertEquals(ConnectedTripLifecycle.CANCELLED_BY_RIDER, ConnectedJourneyLifecycle.trip(riderCancelled, cancelled, Long.MAX_VALUE))
+        assertEquals(ConnectedTripLifecycle.CANCELLED_BY_RIDER, ConnectedJourneyLifecycle.trip(riderCancelled, null, Long.MAX_VALUE))
         assertEquals(1L, riderCancelled.cancelledAtEpochMillis)
+    }
+
+    @Test
+    fun `driver cancellation and unavailable links take precedence over passed departure`() {
+        assertEquals(
+            ConnectedTripLifecycle.CANCELLED_BY_DRIVER,
+            ConnectedJourneyLifecycle.trip(trip, cancelled, Long.MAX_VALUE),
+        )
+        assertEquals(
+            ConnectedTripLifecycle.UNAVAILABLE,
+            ConnectedJourneyLifecycle.trip(trip, null, Long.MAX_VALUE),
+        )
+        assertEquals(
+            ConnectedTripLifecycle.UNAVAILABLE,
+            ConnectedJourneyLifecycle.trip(trip, journey.copy(driverUid = "other"), Long.MAX_VALUE),
+        )
+        assertEquals(
+            ConnectedRequestLifecycle.CANCELLED_BY_DRIVER,
+            ConnectedJourneyLifecycle.request(request, cancelled, Long.MAX_VALUE),
+        )
+        assertEquals(
+            ConnectedRequestLifecycle.UNAVAILABLE,
+            ConnectedJourneyLifecycle.request(request, null, Long.MAX_VALUE),
+        )
     }
 
     @Test

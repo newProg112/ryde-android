@@ -50,21 +50,34 @@ private fun incomingRequest(
 ): ConnectedIncomingRequest = ConnectedIncomingRequest(
     request.id,
     request.riderDisplayName,
-    when {
-        ConnectedJourneyLifecycle.requestCancelledByDriver(request, journey) -> R.string.connected_trips_offer_cancelled
-        request.status in listOf(ConnectedRequestStatus.PENDING, ConnectedRequestStatus.ACCEPTED) &&
-            !ConnectedJourneyLifecycle.requestJourneyOpen(request, journey) -> R.string.connected_trips_unavailable
-        else -> when (request.status) {
-            ConnectedRequestStatus.PENDING -> R.string.connected_incoming_pending
-            ConnectedRequestStatus.ACCEPTED -> R.string.connected_incoming_accepted
-            ConnectedRequestStatus.DECLINED -> R.string.connected_incoming_declined
-            ConnectedRequestStatus.CANCELLED -> R.string.connected_incoming_cancelled
-            ConnectedRequestStatus.CANCELLED_AFTER_ACCEPTANCE -> R.string.connected_incoming_seat_cancelled
-        }
+    when (ConnectedJourneyLifecycle.request(request, journey, now)) {
+        ConnectedRequestLifecycle.PENDING -> R.string.connected_incoming_pending
+        ConnectedRequestLifecycle.ACCEPTED -> R.string.connected_incoming_accepted
+        ConnectedRequestLifecycle.DECLINED -> R.string.connected_incoming_declined
+        ConnectedRequestLifecycle.CANCELLED -> R.string.connected_incoming_cancelled
+        ConnectedRequestLifecycle.CANCELLED_AFTER_ACCEPTANCE -> R.string.connected_incoming_seat_cancelled
+        ConnectedRequestLifecycle.DEPARTURE_PASSED_PENDING -> R.string.connected_incoming_pending_departed
+        ConnectedRequestLifecycle.DEPARTURE_PASSED_ACCEPTED -> R.string.connected_incoming_accepted_departed
+        ConnectedRequestLifecycle.CANCELLED_BY_DRIVER -> R.string.connected_trips_offer_cancelled
+        ConnectedRequestLifecycle.UNAVAILABLE -> R.string.connected_trips_unavailable
     },
     canDecideConnectedRequest(request, journey, uid, true, now),
     canDecideConnectedRequest(request, journey, uid, false, now),
 )
+
+private fun List<ConnectedTripsItem>.orderedForTrips(nowEpochMillis: Long): List<ConnectedTripsItem> =
+    sortedWith { first, second ->
+        fun group(item: ConnectedTripsItem): Int = when {
+            item.departureEpochMillis == null -> 2
+            item.departureEpochMillis > nowEpochMillis -> 0
+            else -> 1
+        }
+        val firstGroup = group(first)
+        val groupComparison = firstGroup.compareTo(group(second))
+        if (groupComparison != 0) groupComparison
+        else if (firstGroup == 1) compareValues(second.departureEpochMillis, first.departureEpochMillis)
+        else compareValues(first.departureEpochMillis, second.departureEpochMillis)
+    }
 
 internal fun connectedTripsContent(
     snapshot: ConnectedJourneySnapshot,
@@ -75,11 +88,12 @@ internal fun connectedTripsContent(
     val trips = snapshot.confirmedTrips.filter { it.riderUid == uid }
     val riderTrips = trips.map { trip ->
         val journey = journeys[trip.journeyId]
-        val lifecycle = ConnectedJourneyLifecycle.trip(trip, journey)
+        val lifecycle = ConnectedJourneyLifecycle.trip(trip, journey, nowEpochMillis)
         ConnectedTripsItem(
             "trip:${trip.id}", trip.originArea, trip.destinationArea, trip.departureEpochMillis,
             when (lifecycle) {
                 ConnectedTripLifecycle.CONFIRMED -> R.string.connected_request_accepted
+                ConnectedTripLifecycle.DEPARTURE_PASSED -> R.string.connected_trips_departure_passed
                 ConnectedTripLifecycle.CANCELLED_BY_RIDER -> R.string.connected_trips_cancelled
                 ConnectedTripLifecycle.CANCELLED_BY_DRIVER -> R.string.connected_trips_driver_cancelled
                 ConnectedTripLifecycle.UNAVAILABLE -> R.string.connected_trips_unavailable
@@ -92,17 +106,16 @@ internal fun connectedTripsContent(
     val representedRequests = trips.map { it.acceptedRequestId }.toSet()
     val requests = snapshot.requests.filter { it.riderUid == uid && it.id !in representedRequests }.map { request ->
         val journey = journeys[request.journeyId]?.takeIf { it.driverUid == request.driverUid }
-        val status = when {
-            ConnectedJourneyLifecycle.requestCancelledByDriver(request, journey) -> R.string.connected_trips_driver_cancelled
-            request.status in listOf(ConnectedRequestStatus.PENDING, ConnectedRequestStatus.ACCEPTED) &&
-                !ConnectedJourneyLifecycle.requestJourneyOpen(request, journey) -> R.string.connected_trips_unavailable
-            else -> when (request.status) {
-                ConnectedRequestStatus.PENDING -> R.string.connected_request_pending
-                ConnectedRequestStatus.ACCEPTED -> R.string.connected_request_accepted
-                ConnectedRequestStatus.DECLINED -> R.string.connected_request_declined
-                ConnectedRequestStatus.CANCELLED -> R.string.connected_request_cancelled
-                ConnectedRequestStatus.CANCELLED_AFTER_ACCEPTANCE -> R.string.connected_seat_cancelled
-            }
+        val status = when (ConnectedJourneyLifecycle.request(request, journey, nowEpochMillis)) {
+            ConnectedRequestLifecycle.PENDING -> R.string.connected_request_pending
+            ConnectedRequestLifecycle.ACCEPTED -> R.string.connected_request_accepted
+            ConnectedRequestLifecycle.DECLINED -> R.string.connected_request_declined
+            ConnectedRequestLifecycle.CANCELLED -> R.string.connected_request_cancelled
+            ConnectedRequestLifecycle.CANCELLED_AFTER_ACCEPTANCE -> R.string.connected_seat_cancelled
+            ConnectedRequestLifecycle.DEPARTURE_PASSED_PENDING -> R.string.connected_request_pending_departed
+            ConnectedRequestLifecycle.DEPARTURE_PASSED_ACCEPTED -> R.string.connected_trips_departure_passed
+            ConnectedRequestLifecycle.CANCELLED_BY_DRIVER -> R.string.connected_trips_driver_cancelled
+            ConnectedRequestLifecycle.UNAVAILABLE -> R.string.connected_trips_unavailable
         }
         ConnectedTripsItem("request:${request.id}", journey?.originArea, journey?.destinationArea,
             journey?.departureEpochMillis, status, R.string.connected_trips_rider,
@@ -131,8 +144,8 @@ internal fun connectedTripsContent(
             journeyId = journey.id)
     }
     return ConnectedTripsContent(
-        (riderTrips + requests).sortedBy { it.departureEpochMillis ?: Long.MAX_VALUE },
-        driver.sortedBy { it.departureEpochMillis },
+        (riderTrips + requests).orderedForTrips(nowEpochMillis),
+        driver.orderedForTrips(nowEpochMillis),
         incoming.filter { request -> owned.none { it.id == request.journeyId } }
             .map { incomingRequest(it, null, uid, nowEpochMillis) },
     )

@@ -18,8 +18,17 @@ class ConnectedTripDetailsScreenUiTest {
         ConnectedRequestStatus.PENDING, "Riley Rider")
     private val trip = ConnectedConfirmedTrip("trip-id", journey.id, request.id, journey.driverUid, request.riderUid,
         journey.originArea, journey.destinationArea, journey.departureEpochMillis, ConnectedTripStatus.CONFIRMED)
-    private fun content(snapshot: ConnectedJourneySnapshot, uid: String = request.riderUid) =
-        connectedTripDetailsContent(snapshot, uid, journey.id, connectedHomeJourneys(snapshot, uid, 0), connectedTripsContent(snapshot, uid, 0))
+    private fun content(
+        snapshot: ConnectedJourneySnapshot,
+        uid: String = request.riderUid,
+        now: Long = 0,
+    ) = connectedTripDetailsContent(
+        snapshot,
+        uid,
+        journey.id,
+        connectedHomeJourneys(snapshot, uid, now),
+        connectedTripsContent(snapshot, uid, now),
+    )
     private fun text(label: String): SemanticsNodeInteraction {
         compose.onNodeWithTag("connected-trip-details-list").performScrollToNode(hasText(label))
         return compose.onNodeWithText(label)
@@ -173,6 +182,48 @@ class ConnectedTripDetailsScreenUiTest {
         compose.onAllNodesWithText("Confirm cancellation").assertCountEquals(0)
         compose.onAllNodesWithText("Cancel my seat").assertCountEquals(0)
         text("Journey cancelled by driver").assertIsDisplayed()
+    }
+
+    @Test fun passedConfirmedDetailsKeepRouteDepartureAndBackButNoInvalidAction() {
+        var backs = 0
+        compose.setContent { RydeTheme {
+            ConnectedTripDetailsScreen(
+                content(
+                    ConnectedJourneySnapshot(listOf(journey), confirmedTrips = listOf(trip)),
+                    now = journey.departureEpochMillis,
+                ),
+                false, true, null, { backs++ }, {}, {}, { _, _ -> },
+                { error("Past seat cannot be cancelled") }, {},
+            )
+        } }
+        text("Departure has passed").assertIsDisplayed()
+        text("${journey.originArea} \u2192 ${journey.destinationArea}").assertIsDisplayed()
+        compose.onNodeWithText("2099", substring = true).assertIsDisplayed()
+        compose.onAllNodesWithText("Your seat is confirmed").assertCountEquals(0)
+        compose.onAllNodesWithText("Cancel my seat").assertCountEquals(0)
+        text("Back").performClick()
+        compose.runOnIdle { assertEquals(1, backs) }
+    }
+
+    @Test fun driverPassedPendingDetailsCloseAcceptanceAndDeclineByRequestId() {
+        val decisions = mutableListOf<Pair<String, Boolean>>()
+        compose.setContent { RydeTheme {
+            ConnectedTripDetailsScreen(
+                content(
+                    ConnectedJourneySnapshot(listOf(journey), listOf(request)),
+                    uid = journey.driverUid,
+                    now = journey.departureEpochMillis,
+                ),
+                false, true, null, {}, {}, {}, { id, accept -> decisions += id to accept }, {},
+                { error("Past journey cannot be cancelled") },
+            )
+        } }
+        text("Rider: Riley Rider").assertIsDisplayed()
+        text("Departure has passed - this request can no longer be accepted").assertIsDisplayed()
+        compose.onAllNodesWithText("Accept").assertCountEquals(0)
+        compose.onAllNodesWithText("Cancel journey").assertCountEquals(0)
+        text("Decline").performClick()
+        compose.runOnIdle { assertEquals(listOf(request.id to false), decisions) }
     }
 
     @Test fun unavailableAndMismatchedSelectionHasNoActionsButKeepsPersistedBookingHistory() {

@@ -50,6 +50,50 @@ class ConnectedTripsUiTest {
         assertEquals(trip.id, item.cancellableTripId)
     }
 
+    @Test fun `past confirmed trip and accepted driver row use truthful history and retain rider name`() {
+        val accepted = request.copy(status = ConnectedRequestStatus.ACCEPTED)
+        val rider = content(r = listOf(accepted), t = listOf(trip), now = 1000).rider.single()
+        assertEquals(R.string.connected_trips_departure_passed, rider.statusText)
+        assertNull(rider.cancellableTripId)
+        assertEquals("York", rider.origin)
+        assertEquals(1000L, rider.departureEpochMillis)
+
+        val driver = content(r = listOf(accepted), uid = journey.driverUid, now = 1000).driver.single()
+        assertEquals(R.string.connected_offer_departed, driver.statusText)
+        assertNull(driver.cancellableJourneyId)
+        val incoming = driver.incoming.single()
+        assertEquals(R.string.connected_incoming_accepted_departed, incoming.statusText)
+        assertEquals("Riley Rider", incoming.riderDisplayName)
+        assertFalse(incoming.canAccept)
+        assertFalse(incoming.canDecline)
+    }
+
+    @Test fun `past pending request is historical while authorised cleanup remains routed by request id`() {
+        val rider = content(now = 1000).rider.single()
+        assertEquals(R.string.connected_request_pending_departed, rider.statusText)
+        assertEquals(request.id, rider.cancellableRequestId)
+
+        val incoming = content(uid = journey.driverUid, now = 1000).driver.single().incoming.single()
+        assertEquals(R.string.connected_incoming_pending_departed, incoming.statusText)
+        assertFalse(incoming.canAccept)
+        assertTrue(incoming.canDecline)
+        assertEquals(request.id, incoming.id)
+    }
+
+    @Test fun `upcoming entries sort first and past history sorts newest first`() {
+        fun offer(id: String, departure: Long) = journey.copy(id = id, departureEpochMillis = departure)
+        val result = content(
+            j = listOf(offer("past-old", 100), offer("future-late", 500), offer("past-new", 200), offer("future-soon", 400)),
+            r = emptyList(),
+            uid = journey.driverUid,
+            now = 300,
+        )
+        assertEquals(
+            listOf("future-soon", "future-late", "past-new", "past-old"),
+            result.driver.map { it.journeyId },
+        )
+    }
+
     @Test fun `cancellation follows existing lifecycle ownership and departure`() {
         assertNull(content(t = listOf(trip), now = 1000).rider.single().cancellableTripId)
         val closed = journey.copy(status = ConnectedJourneyStatus.CANCELLED)
@@ -155,6 +199,23 @@ class ConnectedTripsUiTest {
         val unrelated = request.copy(driverUid = "someone-else")
         assertTrue(content(uid = journey.driverUid, r = listOf(unrelated)).driver.single().incoming.isEmpty())
         assertTrue(content(uid = journey.driverUid, r = listOf(unrelated)).unavailableIncoming.isEmpty())
+    }
+
+    @Test fun `past presentation does not override cancellation or unavailable precedence`() {
+        val riderCancelled = trip.copy(status = ConnectedTripStatus.CANCELLED_BY_RIDER)
+        assertEquals(
+            R.string.connected_trips_cancelled,
+            content(t = listOf(riderCancelled), now = 1000).rider.single().statusText,
+        )
+        assertEquals(
+            R.string.connected_trips_driver_cancelled,
+            content(j = listOf(journey.copy(status = ConnectedJourneyStatus.CANCELLED)), t = listOf(trip), now = 1000)
+                .rider.single().statusText,
+        )
+        assertEquals(
+            R.string.connected_trips_unavailable,
+            content(j = emptyList(), t = listOf(trip), now = 1000).rider.single().statusText,
+        )
     }
 
     @Test fun `driver terminal request labels retain safe rider snapshot and legacy fallback`() {

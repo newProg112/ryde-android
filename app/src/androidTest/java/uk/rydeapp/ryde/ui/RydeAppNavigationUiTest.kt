@@ -430,6 +430,33 @@ class RydeAppNavigationUiTest {
     }
 
     @Test
+    fun confirmedJourneyRefreshesFromFutureToPastAcrossTripsAndDetailsWithoutLosingShell() {
+        store.confirmSeat()
+        launchConnected()
+        tab("Trips").performClick()
+        compose.onNodeWithText("Your seat is confirmed").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Cancel my seat").assertIsEnabled()
+
+        compose.runOnIdle {
+            store.journeys = store.journeys.map { it.copy(departureEpochMillis = 1) }
+            store.trips[0] = store.trips.single().copy(departureEpochMillis = 1)
+        }
+        compose.onNodeWithText("Refresh").performScrollTo().performClick()
+        compose.onNodeWithText("Departure has passed").performScrollTo().assertIsDisplayed()
+        compose.onAllNodesWithText("Your seat is confirmed").assertCountEquals(0)
+        compose.onAllNodesWithText("Cancel my seat").assertCountEquals(0)
+        assertShell()
+
+        openDetails()
+        detailsText("Departure has passed").assertIsDisplayed()
+        detailsText("Sheffield \u2192 Leeds").assertIsDisplayed()
+        compose.onAllNodesWithText("Cancel my seat").assertCountEquals(0)
+        detailsText("Back").performClick()
+        tab("Trips").assertIsSelected()
+        compose.onNodeWithText("Departure has passed").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
     fun tripsCancellationIsSingleInFlightCommandAcrossTabsAndRetainsRealHistory() {
         store.confirmSeat()
         store.cancelGate = CompletableDeferred()

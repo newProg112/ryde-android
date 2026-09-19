@@ -141,6 +141,69 @@ class ConnectedTripsScreenUiTest {
         assertSafe()
     }
 
+    @Test fun passedConfirmedSeatIsHistoricalAndCannotBeCancelled() {
+        compose.setContent { RydeTheme {
+            ConnectedTripsScreen(
+                connectedTripsContent(
+                    ConnectedJourneySnapshot(listOf(journey), confirmedTrips = listOf(trip)),
+                    request.riderUid,
+                    journey.departureEpochMillis,
+                ),
+                false, true, null, {}, { error("Past seat cannot be cancelled") },
+            )
+        } }
+        compose.onNodeWithText("Departure has passed").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("${journey.originArea} \u2192 ${journey.destinationArea}")
+            .performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("2099", substring = true).assertIsDisplayed()
+        compose.onAllNodesWithText("Your seat is confirmed").assertCountEquals(0)
+        compose.onAllNodesWithText("Cancel my seat").assertCountEquals(0)
+    }
+
+    @Test fun passedPendingRequestKeepsOnlyAuthorisedCleanupByRequestId() {
+        val calls = mutableListOf<String>()
+        compose.setContent { RydeTheme {
+            ConnectedTripsScreen(
+                connectedTripsContent(
+                    ConnectedJourneySnapshot(listOf(journey), listOf(request)),
+                    request.riderUid,
+                    journey.departureEpochMillis,
+                ),
+                false, true, null, {}, {}, onWithdrawRequest = { calls += it },
+            )
+        } }
+        compose.onNodeWithText("Departure has passed - this request can no longer be accepted")
+            .performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Withdraw request").performClick()
+        compose.onNodeWithText("Confirm withdrawal").performClick()
+        compose.runOnIdle { assertEquals(listOf(request.id), calls) }
+    }
+
+    @Test fun driverPastRowsKeepSafeNamesCloseAcceptanceAndRouteDeclineByRequestId() {
+        val accepted = request.copy(id = "accepted-request", status = ConnectedRequestStatus.ACCEPTED)
+        val pending = request.copy(id = "pending-request", riderDisplayName = null)
+        val decisions = mutableListOf<Pair<String, Boolean>>()
+        compose.setContent { RydeTheme {
+            ConnectedTripsScreen(
+                connectedTripsContent(
+                    ConnectedJourneySnapshot(listOf(journey), listOf(accepted, pending)),
+                    journey.driverUid,
+                    journey.departureEpochMillis,
+                ),
+                false, true, null, {}, {}, onDecideRequest = { id, accept -> decisions += id to accept },
+                onCancelJourney = { error("Past journey cannot be cancelled") },
+            )
+        } }
+        compose.onNodeWithText("Rider: Riley Rider").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Departure has passed - rider had a confirmed seat").assertIsDisplayed()
+        compose.onNodeWithText("Rider").assertIsDisplayed()
+        compose.onNodeWithText("Departure has passed - this request can no longer be accepted").assertIsDisplayed()
+        compose.onAllNodesWithText("Accept").assertCountEquals(0)
+        compose.onAllNodesWithText("Cancel journey").assertCountEquals(0)
+        compose.onNodeWithText("Decline").performClick()
+        compose.runOnIdle { assertEquals(listOf(pending.id to false), decisions) }
+    }
+
     @Test fun missingJourneyKeepsPendingRecordWithoutFabricatedDetails() {
         compose.setContent { RydeTheme {
             ConnectedTripsScreen(connectedTripsContent(ConnectedJourneySnapshot(requests = listOf(request)), request.riderUid, 0),

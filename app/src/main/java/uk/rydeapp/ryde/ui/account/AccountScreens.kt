@@ -52,6 +52,7 @@ import uk.rydeapp.ryde.data.connected.ConnectedJourney
 import uk.rydeapp.ryde.data.connected.ConnectedJourneySnapshot
 import uk.rydeapp.ryde.data.connected.ConnectedConfirmedTrip
 import uk.rydeapp.ryde.data.connected.ConnectedRequestStatus
+import uk.rydeapp.ryde.data.connected.ConnectedRequestLifecycle
 import uk.rydeapp.ryde.data.connected.ConnectedRydeRepository
 import uk.rydeapp.ryde.data.connected.ConnectedSeatRequest
 import uk.rydeapp.ryde.data.connected.ConnectedJourneyStatus
@@ -240,17 +241,23 @@ internal fun connectedRequestStatusLabel(status: ConnectedRequestStatus): String
     "Status: ${status.name}"
 
 internal fun connectedRequestStatusLabel(request: ConnectedSeatRequest, journey: ConnectedJourney?): String =
-    if (ConnectedJourneyLifecycle.requestCancelledByDriver(request, journey)) {
-        "Status: CANCELLED_BY_DRIVER · Journey cancelled by driver"
-    } else if (!ConnectedJourneyLifecycle.requestJourneyOpen(request, journey) && request.status in listOf(ConnectedRequestStatus.PENDING, ConnectedRequestStatus.ACCEPTED)) {
-        "Status: UNAVAILABLE"
-    } else connectedRequestStatusLabel(request.status)
+    when (ConnectedJourneyLifecycle.request(request, journey)) {
+        ConnectedRequestLifecycle.DEPARTURE_PASSED_PENDING ->
+            "Status: PENDING · Departure has passed; this request can no longer be accepted"
+        ConnectedRequestLifecycle.DEPARTURE_PASSED_ACCEPTED ->
+            "Status: ACCEPTED · Departure has passed"
+        ConnectedRequestLifecycle.CANCELLED_BY_DRIVER ->
+            "Status: CANCELLED_BY_DRIVER · Journey cancelled by driver"
+        ConnectedRequestLifecycle.UNAVAILABLE -> "Status: UNAVAILABLE"
+        else -> connectedRequestStatusLabel(request.status)
+    }
 
 internal fun connectedTripRouteLabel(trip: ConnectedConfirmedTrip): String =
     "${trip.originArea} → ${trip.destinationArea}"
 
 internal fun connectedTripStatusLabel(trip: ConnectedConfirmedTrip, journey: ConnectedJourney? = null): String = when (ConnectedJourneyLifecycle.trip(trip, journey)) {
     ConnectedTripLifecycle.CONFIRMED -> "Status: CONFIRMED"
+    ConnectedTripLifecycle.DEPARTURE_PASSED -> "Status: DEPARTURE_PASSED · Scheduled departure has passed"
     ConnectedTripLifecycle.CANCELLED_BY_RIDER -> "Status: CANCELLED_BY_RIDER · Cancelled by rider"
     ConnectedTripLifecycle.CANCELLED_BY_DRIVER -> "Status: CANCELLED_BY_DRIVER · Journey cancelled by driver"
     ConnectedTripLifecycle.UNAVAILABLE -> "Status: UNAVAILABLE"
@@ -261,7 +268,8 @@ internal fun canCancelConnectedConfirmedSeat(
     viewerUid: String,
     nowEpochMillis: Long = System.currentTimeMillis(),
     journey: ConnectedJourney? = null,
-): Boolean = trip.riderUid == viewerUid && ConnectedJourneyLifecycle.trip(trip, journey) == ConnectedTripLifecycle.CONFIRMED &&
+): Boolean = trip.riderUid == viewerUid &&
+    ConnectedJourneyLifecycle.trip(trip, journey, nowEpochMillis) == ConnectedTripLifecycle.CONFIRMED &&
     trip.departureEpochMillis > nowEpochMillis
 
 internal fun connectedTripRoleLabel(trip: ConnectedConfirmedTrip, viewerUid: String, journey: ConnectedJourney? = null): String? = when (viewerUid) {
