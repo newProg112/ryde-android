@@ -29,7 +29,7 @@ class ConnectedTripsUiTest {
         assertEquals(ConnectedTripsContent(emptyList(), emptyList()), content(t = listOf(trip), uid = "stranger"))
     }
 
-    @Test fun `pending joins genuine broad areas departure and role without cancellation`() {
+    @Test fun `pending joins genuine broad areas departure and exposes request id for withdrawal`() {
         val item = content().rider.single()
         assertEquals("York", item.origin)
         assertEquals("Leeds", item.destination)
@@ -37,6 +37,7 @@ class ConnectedTripsUiTest {
         assertEquals(R.string.connected_request_pending, item.statusText)
         assertEquals(R.string.connected_trips_rider, item.roleText)
         assertNull(item.cancellableTripId)
+        assertEquals(request.id, item.cancellableRequestId)
     }
 
     @Test fun `confirmed trip replaces linked request and uses persisted trip fields`() {
@@ -74,6 +75,7 @@ class ConnectedTripsUiTest {
             val item = content(r = listOf(request.copy(status = status))).rider.single()
             assertEquals(label, item.statusText)
             assertNull(item.cancellableTripId)
+            assertNull(item.cancellableRequestId)
         }
         assertEquals(R.string.connected_trips_driver_cancelled,
             content(j = listOf(journey.copy(status = ConnectedJourneyStatus.CANCELLED))).rider.single().statusText)
@@ -86,7 +88,10 @@ class ConnectedTripsUiTest {
             assertNull(item.destination)
             assertNull(item.departureEpochMillis)
             assertEquals(R.string.connected_trips_unavailable, item.statusText)
+            assertNull(item.cancellableRequestId)
         }
+        assertNull(content(j = listOf(journey.copy(status = ConnectedJourneyStatus.CANCELLED))).rider.single().cancellableRequestId)
+        assertNull(content(r = listOf(request.copy(riderUid = "other"))).rider.singleOrNull())
     }
 
     @Test fun `owned journey is separate driver state with no rider action`() {
@@ -95,8 +100,16 @@ class ConnectedTripsUiTest {
         assertEquals(R.string.connected_trips_offer_open, item.statusText)
         assertEquals("York", item.origin)
         assertNull(item.cancellableTripId)
+        assertNull(item.cancellableRequestId)
         assertEquals(R.string.connected_trips_offer_cancelled,
             content(uid = journey.driverUid, j = listOf(journey.copy(status = ConnectedJourneyStatus.CANCELLED))).driver.single().statusText)
+    }
+
+    @Test fun `withdrawal eligibility uses lifecycle truth and blank action ids fail closed`() {
+        assertEquals(request.id, content(now = journey.departureEpochMillis).rider.single().cancellableRequestId)
+        assertNull(content(r = listOf(request.copy(id = ""))).rider.single().cancellableRequestId)
+        assertNull(content(j = listOf(journey.copy(driverUid = "different"))).rider.single().cancellableRequestId)
+        assertNull(content(j = listOf(journey.copy(status = ConnectedJourneyStatus.CANCELLED))).rider.single().cancellableRequestId)
     }
 
     @Test fun `driver sees genuine capacity requests and valid cancellation`() {

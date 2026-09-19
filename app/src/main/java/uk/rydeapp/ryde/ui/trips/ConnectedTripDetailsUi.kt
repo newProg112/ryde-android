@@ -34,6 +34,9 @@ internal fun connectedTripDetailsContent(
     // Existing projections own statuses and eligibility. Blank action IDs fail closed here.
     val safeSummary = summary?.copy(
         cancellableTripId = summary.cancellableTripId?.takeIf { journey != null && it.isNotBlank() && trip?.id == it },
+        cancellableRequestId = summary.cancellableRequestId?.takeIf {
+            journey != null && it.isNotBlank() && request?.id == it
+        },
         cancellableJourneyId = summary.cancellableJourneyId?.takeIf { journey?.driverUid == uid && it.isNotBlank() && journey.id == it },
         incoming = summary.incoming.map {
             if (it.id.isBlank() || journey?.driverUid != uid) it.copy(canAccept = false, canDecline = false) else it

@@ -27,17 +27,22 @@ internal fun ConnectedTripDetailsScreen(
     onCancelSeat: (String) -> Unit,
     onCancelJourney: (String) -> Unit,
     modifier: Modifier = Modifier,
+    onWithdrawRequest: (String) -> Unit = {},
 ) {
     val summary = content.summary
     val journey = content.journey
     // Never save an armed destructive confirmation.
     var selectedTripId by remember { mutableStateOf<String?>(null) }
+    var selectedRequestId by remember { mutableStateOf<String?>(null) }
     var selectedJourneyId by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(summary?.cancellableTripId, actionsEnabled) {
         if (!actionsEnabled || selectedTripId != summary?.cancellableTripId) selectedTripId = null
     }
     LaunchedEffect(summary?.cancellableJourneyId, actionsEnabled) {
         if (!actionsEnabled || selectedJourneyId != summary?.cancellableJourneyId) selectedJourneyId = null
+    }
+    LaunchedEffect(summary?.cancellableRequestId, actionsEnabled) {
+        if (!actionsEnabled || selectedRequestId != summary?.cancellableRequestId) selectedRequestId = null
     }
     LazyColumn(
         modifier.fillMaxSize().testTag("connected-trip-details-list"),
@@ -104,6 +109,11 @@ internal fun ConnectedTripDetailsScreen(
                 Text(stringResource(R.string.connected_trips_cancel_seat))
             }
         } }
+        summary?.cancellableRequestId?.let { id -> item {
+            OutlinedButton(enabled = !busy && actionsEnabled, onClick = { selectedRequestId = id }) {
+                Text(stringResource(R.string.connected_withdraw_request))
+            }
+        } }
         summary?.cancellableJourneyId?.let { id -> item {
             OutlinedButton(enabled = !busy && actionsEnabled, onClick = { selectedJourneyId = id }) {
                 Text(stringResource(R.string.connected_cancel_journey))
@@ -125,6 +135,19 @@ internal fun ConnectedTripDetailsScreen(
         }) { Text(stringResource(R.string.connected_trips_confirm_cancel)) } },
         dismissButton = { TextButton(enabled = !busy, onClick = { selectedTripId = null }) {
             Text(stringResource(R.string.connected_trips_keep_seat))
+        } },
+    )
+    if (selectedRequestId != null && selectedRequestId == summary?.cancellableRequestId && actionsEnabled) AlertDialog(
+        onDismissRequest = { if (!busy) selectedRequestId = null },
+        title = { Text(stringResource(R.string.connected_withdraw_title)) },
+        text = { Text(stringResource(R.string.connected_withdraw_body)) },
+        confirmButton = { TextButton(enabled = !busy, onClick = {
+            val id = selectedRequestId
+            selectedRequestId = null
+            if (id != null && !busy && actionsEnabled) onWithdrawRequest(id)
+        }) { Text(stringResource(R.string.connected_withdraw_confirm)) } },
+        dismissButton = { TextButton(enabled = !busy, onClick = { selectedRequestId = null }) {
+            Text(stringResource(R.string.connected_withdraw_keep))
         } },
     )
     if (selectedJourneyId != null && selectedJourneyId == summary?.cancellableJourneyId && actionsEnabled) AlertDialog(

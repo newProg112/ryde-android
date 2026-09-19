@@ -13,6 +13,7 @@ internal data class ConnectedTripsItem(
     val statusText: Int,
     val roleText: Int,
     val cancellableTripId: String? = null,
+    val cancellableRequestId: String? = null,
     val cancellableJourneyId: String? = null,
     val seatsRemaining: Int? = null,
     val seatCapacity: Int? = null,
@@ -103,6 +104,9 @@ internal fun connectedTripsContent(
         }
         ConnectedTripsItem("request:${request.id}", journey?.originArea, journey?.destinationArea,
             journey?.departureEpochMillis, status, R.string.connected_trips_rider,
+            cancellableRequestId = request.id.takeIf {
+                it.isNotBlank() && ConnectedJourneyLifecycle.canCancelRequest(request, journey, uid)
+            },
             // A terminal request remains historical even if its linked journey is later cancelled.
             journeyStatusText = R.string.connected_trips_driver_cancelled.takeIf {
                 journey?.status == ConnectedJourneyStatus.CANCELLED && status != R.string.connected_trips_driver_cancelled

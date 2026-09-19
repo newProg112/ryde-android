@@ -2,7 +2,9 @@ package uk.rydeapp.ryde.ui.trips
 
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.*
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createComposeRule
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import uk.rydeapp.ryde.data.connected.*
@@ -51,8 +53,59 @@ class ConnectedTripsScreenUiTest {
             compose.onNodeWithText("York → Leeds").assertIsDisplayed()
             compose.onNodeWithText("2099", substring = true).assertIsDisplayed()
             compose.onAllNodesWithText("Cancel my seat").assertCountEquals(0)
+            compose.onAllNodesWithText("Withdraw request").assertCountEquals(
+                if (status == ConnectedRequestStatus.PENDING) 1 else 0,
+            )
             assertSafe()
         }
+    }
+
+    @Test fun pendingWithdrawalRequiresConfirmationUsesRequestIdOnceAndIsNotRestoredArmed() {
+        val busy = mutableStateOf(false)
+        val current = mutableStateOf(request)
+        val calls = mutableListOf<String>()
+        val restoration = StateRestorationTester(compose)
+        restoration.setContent { RydeTheme {
+            ConnectedTripsScreen(
+                connectedTripsContent(ConnectedJourneySnapshot(listOf(journey), listOf(current.value)), request.riderUid, 0),
+                busy.value, true, null, {}, {},
+                onWithdrawRequest = { calls += it; busy.value = true },
+            )
+        } }
+        compose.onNodeWithText("Withdraw request").performScrollTo().performClick()
+        compose.onNodeWithText("Keep request").performClick()
+        compose.runOnIdle { assertEquals(emptyList<String>(), calls) }
+        compose.onNodeWithText("Withdraw request").performClick()
+        restoration.emulateSavedInstanceStateRestore()
+        compose.onAllNodesWithText("Confirm withdrawal").assertCountEquals(0)
+        compose.onNodeWithText("Withdraw request").performScrollTo().performClick()
+        compose.onNodeWithText("Confirm withdrawal").performClick()
+        compose.onNodeWithText("Withdraw request").assertIsNotEnabled().performClick()
+        compose.runOnIdle {
+            assertEquals(listOf(request.id), calls)
+            busy.value = false
+            current.value = request.copy(status = ConnectedRequestStatus.CANCELLED)
+        }
+        compose.onNodeWithText("Your request was cancelled").performScrollTo().assertIsDisplayed()
+        compose.onAllNodesWithText("Withdraw request").assertCountEquals(0)
+        assertSafe()
+    }
+
+    @Test fun pendingWithdrawalConfirmationClosesWhenJourneyEligibilityChanges() {
+        val current = mutableStateOf(journey)
+        val calls = mutableListOf<String>()
+        compose.setContent { RydeTheme {
+            ConnectedTripsScreen(
+                connectedTripsContent(ConnectedJourneySnapshot(listOf(current.value), listOf(request)), request.riderUid, 0),
+                false, true, null, {}, {}, onWithdrawRequest = { calls += it },
+            )
+        } }
+        compose.onNodeWithText("Withdraw request").performScrollTo().performClick()
+        compose.onNodeWithText("Confirm withdrawal").assertIsDisplayed()
+        compose.runOnIdle { current.value = journey.copy(status = ConnectedJourneyStatus.CANCELLED) }
+        compose.onAllNodesWithText("Confirm withdrawal").assertCountEquals(0)
+        compose.onAllNodesWithText("Withdraw request").assertCountEquals(0)
+        compose.runOnIdle { assertEquals(emptyList<String>(), calls) }
     }
 
     @Test fun lifecycleChangeClosesConfirmationWithoutCallingCancellation() {
@@ -67,6 +120,7 @@ class ConnectedTripsScreenUiTest {
         compose.onNodeWithText("Journey cancelled by driver").assertIsDisplayed()
         compose.onAllNodesWithText("Confirm cancellation").assertCountEquals(0)
         compose.onAllNodesWithText("Cancel my seat").assertCountEquals(0)
+        compose.onAllNodesWithText("Withdraw request").assertCountEquals(0)
         assertSafe()
     }
 
@@ -109,7 +163,7 @@ class ConnectedTripsScreenUiTest {
 
     private fun assertSafe() {
         listOf("private-driver-uid", "private-rider-uid", "private-request-id", "private-trip-id", "private-journey-id",
-            "Demo", "Alex", "£", "Circle", "Withdraw request", "Accept", "Decline").forEach {
+            "Demo", "Alex", "£", "Circle", "Accept", "Decline").forEach {
             compose.onAllNodesWithText(it, substring = true).assertCountEquals(0)
         }
     }

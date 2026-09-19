@@ -104,6 +104,13 @@
     <string name="connected_trips_unavailable">Journey unavailable</string>
     <string name="connected_trips_details_unavailable">Journey details unavailable</string>
     <string name="connected_trips_cancel_seat">Cancel my seat</string>
+    <string name="connected_withdraw_request">Withdraw request</string>
+    <string name="connected_withdraw_title">Withdraw this seat request?</string>
+    <string name="connected_withdraw_body">The driver will no longer be able to accept this request. You may request again later only while the journey remains upcoming, open and has a seat available.</string>
+    <string name="connected_withdraw_confirm">Confirm withdrawal</string>
+    <string name="connected_withdraw_keep">Keep request</string>
+    <string name="connected_withdraw_success">Request withdrawn. Your request history is up to date.</string>
+    <string name="connected_request_changed">This request or journey has changed. Refresh before trying again.</string>
     <string name="connected_trips_cancel_title">Cancel your confirmed seat?</string>
     <string name="connected_trips_cancel_body">Your seat will be returned to the journey. This booking cannot be reopened.</string>
     <string name="connected_trips_confirm_cancel">Confirm cancellation</string>

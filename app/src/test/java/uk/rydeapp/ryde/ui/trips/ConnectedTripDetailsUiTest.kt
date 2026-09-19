@@ -44,6 +44,7 @@ class ConnectedTripDetailsUiTest {
             assertEquals(connectedTripsContent(snapshot, "rider", 0).rider.single(), result.summary)
             assertEquals(status == ConnectedRequestStatus.CANCELLED, result.canRequest)
             assertNull(result.summary!!.cancellableTripId)
+            assertEquals(request.id.takeIf { status == ConnectedRequestStatus.PENDING }, result.summary.cancellableRequestId)
         }
     }
 
@@ -55,6 +56,7 @@ class ConnectedTripDetailsUiTest {
         assertEquals(trip.id, result.summary.cancellableTripId)
         assertEquals(journey.id, result.summary.journeyId)
         assertFalse(result.canRequest)
+        assertNull(result.summary.cancellableRequestId)
         // A partial read without the accepted request must never re-enable a new request.
         assertFalse(details(snapshot.copy(requests = emptyList())).canRequest)
         val cancelled = details(snapshot.copy(confirmedTrips = listOf(trip.copy(status = ConnectedTripStatus.CANCELLED_BY_RIDER))))
@@ -82,6 +84,7 @@ class ConnectedTripDetailsUiTest {
             assertNull(pending.journey)
             assertNull(pending.summary!!.origin)
             assertEquals(R.string.connected_trips_unavailable, pending.summary.statusText)
+            assertNull(pending.summary.cancellableRequestId)
             assertFalse(pending.canRequest)
             val confirmed = details(ConnectedJourneySnapshot(journeys, listOf(request), listOf(trip)))
             assertNull(confirmed.journey)
@@ -97,5 +100,6 @@ class ConnectedTripDetailsUiTest {
         val driver = details(snapshot.copy(requests = listOf(request.copy(id = ""))), "driver")
         assertFalse(driver.summary!!.incoming.single().canAccept)
         assertFalse(driver.summary.incoming.single().canDecline)
+        assertNull(details(ConnectedJourneySnapshot(listOf(journey), listOf(request.copy(id = "")))).summary!!.cancellableRequestId)
     }
 }

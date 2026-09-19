@@ -175,6 +175,25 @@ internal fun ConnectedReadyApp(
             } else message = resources.getString(R.string.connected_trips_changed)
         }
     }
+    val cancelRequest: (String) -> Unit = { requestId ->
+        val current = repository.journeyState.value
+        val request = current.requests.firstOrNull { it.id == requestId }
+        val journey = current.journeys.firstOrNull { it.id == request?.journeyId }
+        val canCancel = request != null && request.id.isNotBlank() &&
+            ConnectedJourneyLifecycle.canCancelRequest(request, journey, session.accountId)
+        if (!busy) {
+            if (canCancel && !refreshRequired) runCommand {
+                when (val result = repository.cancelConnectedRequest(requestId)) {
+                    ConnectedJourneyCommandResult.Success -> resources.getString(R.string.connected_withdraw_success)
+                    is ConnectedJourneyCommandResult.InvalidInput -> result.userMessage
+                    is ConnectedJourneyCommandResult.Failure -> {
+                        refreshRequired = true
+                        result.userMessage
+                    }
+                }
+            } else message = resources.getString(R.string.connected_request_changed)
+        }
+    }
     fun driverResult(result: ConnectedJourneyCommandResult, successText: Int): String = when (result) {
         ConnectedJourneyCommandResult.Success -> resources.getString(successText)
         is ConnectedJourneyCommandResult.InvalidInput -> result.userMessage
@@ -231,6 +250,7 @@ internal fun ConnectedReadyApp(
                     busy = busy, actionsEnabled = !refreshRequired, message = message,
                     onBack = closeDetails, onRefresh = refresh, onRequestSeat = requestSeat,
                     onDecideRequest = decideRequest, onCancelSeat = cancelSeat, onCancelJourney = cancelJourney,
+                    onWithdrawRequest = cancelRequest,
                     modifier = Modifier.padding(padding),
                 )
             }
@@ -275,6 +295,7 @@ internal fun ConnectedReadyApp(
                     busy = busy, actionsEnabled = !refreshRequired, message = message,
                     onRefresh = refresh, onCancelSeat = cancelSeat, modifier = modifier,
                     onDecideRequest = decideRequest, onCancelJourney = cancelJourney,
+                    onWithdrawRequest = cancelRequest,
                     onOpenJourney = openJourney,
                 )
                 RydeDestination.PROFILE -> ConnectedProfileScreen(

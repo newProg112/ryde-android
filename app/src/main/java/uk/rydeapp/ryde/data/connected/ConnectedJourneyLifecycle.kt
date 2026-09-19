@@ -19,6 +19,10 @@ object ConnectedJourneyLifecycle {
     fun requestJourneyOpen(request: ConnectedSeatRequest, journey: ConnectedJourney?): Boolean =
         journey != null && journey.id == request.journeyId && journey.driverUid == request.driverUid && journey.status == ConnectedJourneyStatus.OPEN
 
+    fun canCancelRequest(request: ConnectedSeatRequest, journey: ConnectedJourney?, uid: String): Boolean =
+        request.riderUid == uid && request.status == ConnectedRequestStatus.PENDING &&
+            requestJourneyOpen(request, journey)
+
     fun canCancelJourney(journey: ConnectedJourney, uid: String, nowEpochMillis: Long): Boolean =
         journey.driverUid == uid && journey.status == ConnectedJourneyStatus.OPEN && journey.departureEpochMillis > nowEpochMillis
 

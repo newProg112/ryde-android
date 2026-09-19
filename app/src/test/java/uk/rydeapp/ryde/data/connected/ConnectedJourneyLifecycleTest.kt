@@ -52,6 +52,18 @@ class ConnectedJourneyLifecycleTest {
     }
 
     @Test
+    fun `pending request cancellation requires rider ownership and a consistent open journey`() {
+        assertTrue(ConnectedJourneyLifecycle.canCancelRequest(request, journey, "rider"))
+        assertFalse(ConnectedJourneyLifecycle.canCancelRequest(request, journey, "driver"))
+        ConnectedRequestStatus.entries.filter { it != ConnectedRequestStatus.PENDING }.forEach {
+            assertFalse(ConnectedJourneyLifecycle.canCancelRequest(request.copy(status = it), journey, "rider"))
+        }
+        for (linked in listOf(null, journey.copy(id = "other"), journey.copy(driverUid = "other"), cancelled)) {
+            assertFalse(ConnectedJourneyLifecycle.canCancelRequest(request, linked, "rider"))
+        }
+    }
+
+    @Test
     fun `journey mapping supports legacy open and strict cancelled shapes`() {
         val data = FirestoreJourneyMapper.journeyData("driver", ConnectedJourneyDraft("Mansfield", "Nottingham", journey.departureEpochMillis, 2))
         assertEquals(ConnectedJourneyStatus.OPEN, FirestoreJourneyMapper.journey("j", data)?.status)

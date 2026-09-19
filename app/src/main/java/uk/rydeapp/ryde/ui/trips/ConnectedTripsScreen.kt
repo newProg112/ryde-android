@@ -29,13 +29,21 @@ internal fun ConnectedTripsScreen(
     onDecideRequest: (String, Boolean) -> Unit = { _, _ -> },
     onCancelJourney: (String) -> Unit = {},
     onOpenJourney: (String) -> Unit = {},
+    onWithdrawRequest: (String) -> Unit = {},
 ) {
     var selectedTripId by remember { mutableStateOf<String?>(null) }
+    var selectedRequestId by remember { mutableStateOf<String?>(null) }
     var selectedJourneyId by remember { mutableStateOf<String?>(null) }
     // Dialog visibility follows the same resolved eligibility as the cards.
     val selected = content.rider.firstOrNull {
         it.cancellableTripId != null && it.cancellableTripId == selectedTripId
     }.takeIf { actionsEnabled }
+    val selectedRequest = content.rider.firstOrNull {
+        it.cancellableRequestId != null && it.cancellableRequestId == selectedRequestId
+    }.takeIf { actionsEnabled }
+    LaunchedEffect(selectedRequest) {
+        if (selectedRequest == null) selectedRequestId = null
+    }
     LazyColumn(
         modifier.fillMaxSize().testTag("connected-trips-list"),
         contentPadding = PaddingValues(start = 18.dp, top = 14.dp, end = 18.dp, bottom = 24.dp),
@@ -69,7 +77,11 @@ internal fun ConnectedTripsScreen(
         }
         items(content.rider, key = { it.key }) { item ->
             Column {
-                TripCard(item, busy, actionsEnabled, onCancel = { selectedTripId = it })
+                TripCard(
+                    item, busy, actionsEnabled,
+                    onCancel = { selectedTripId = it },
+                    onWithdraw = { selectedRequestId = it },
+                )
                 item.journeyId?.takeIf(String::isNotBlank)?.let { id ->
                     TextButton(onClick = { onOpenJourney(id) }) { Text(stringResource(R.string.connected_view_trip_details)) }
                 }
@@ -80,7 +92,11 @@ internal fun ConnectedTripsScreen(
         }
         items(content.driver, key = { it.key }) { item ->
             Column {
-                TripCard(item, busy, actionsEnabled, {}, onDecideRequest) { selectedJourneyId = it }
+                TripCard(
+                    item, busy, actionsEnabled, onCancel = {},
+                    onDecide = onDecideRequest,
+                    onCancelJourney = { selectedJourneyId = it },
+                )
                 item.journeyId?.takeIf(String::isNotBlank)?.let { id ->
                     TextButton(onClick = { onOpenJourney(id) }) { Text(stringResource(R.string.connected_view_trip_details)) }
                 }
@@ -113,6 +129,23 @@ internal fun ConnectedTripsScreen(
             }
         },
     )
+    if (selectedRequest != null) AlertDialog(
+        onDismissRequest = { if (!busy) selectedRequestId = null },
+        title = { Text(stringResource(R.string.connected_withdraw_title)) },
+        text = { Text(stringResource(R.string.connected_withdraw_body)) },
+        confirmButton = {
+            TextButton(enabled = !busy, onClick = {
+                val id = selectedRequestId
+                selectedRequestId = null
+                if (id != null && !busy && actionsEnabled) onWithdrawRequest(id)
+            }) { Text(stringResource(R.string.connected_withdraw_confirm)) }
+        },
+        dismissButton = {
+            TextButton(enabled = !busy, onClick = { selectedRequestId = null }) {
+                Text(stringResource(R.string.connected_withdraw_keep))
+            }
+        },
+    )
     val selectedJourney = content.driver.firstOrNull {
         it.cancellableJourneyId != null && it.cancellableJourneyId == selectedJourneyId
     }.takeIf { actionsEnabled }
@@ -138,7 +171,8 @@ internal fun ConnectedTripsScreen(
 @Composable
 private fun TripCard(
     item: ConnectedTripsItem, busy: Boolean, actionsEnabled: Boolean, onCancel: (String) -> Unit,
-    onDecide: (String, Boolean) -> Unit = { _, _ -> }, onCancelJourney: (String) -> Unit = {},
+    onWithdraw: (String) -> Unit = {}, onDecide: (String, Boolean) -> Unit = { _, _ -> },
+    onCancelJourney: (String) -> Unit = {},
 ) {
     Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(22.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
@@ -160,6 +194,11 @@ private fun TripCard(
             item.cancellableTripId?.let { id ->
                 OutlinedButton(onClick = { onCancel(id) }, enabled = !busy && actionsEnabled) {
                     Text(stringResource(R.string.connected_trips_cancel_seat))
+                }
+            }
+            item.cancellableRequestId?.let { id ->
+                OutlinedButton(onClick = { onWithdraw(id) }, enabled = !busy && actionsEnabled) {
+                    Text(stringResource(R.string.connected_withdraw_request))
                 }
             }
             item.cancellableJourneyId?.let { id ->

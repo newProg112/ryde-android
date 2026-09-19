@@ -812,22 +812,60 @@ class RydeAppNavigationUiTest {
     }
 
     @Test
-    fun pendingRiderTripsDetailsHaveNoWithdrawalAndCommittedRequestRefreshFailureDoesNotDuplicate() {
+    fun pendingRequestWithdrawsFromTripsOnceAcrossTabsAndKeepsHistory() {
+        val offer = store.journeys.single()
+        val pending = ConnectedSeatRequest("connected-offer_rider-private-uid", offer.id, offer.driverUid,
+            "rider-private-uid", ConnectedRequestStatus.PENDING)
+        store.requests += pending
+        store.requestCancelGate = CompletableDeferred()
         launchConnected()
-        openDetails()
-        compose.runOnIdle { store.failNextLoad = true }
-        detailsText("Request one seat").performClick().assertIsNotEnabled()
-        detailsText("Refresh").performClick()
-        detailsText("Your request is pending").assertIsDisplayed()
-        compose.onAllNodesWithText("Request one seat").assertCountEquals(0)
+        tab("Trips").performClick()
+        compose.onNodeWithText("Withdraw request").performScrollTo().performClick()
+        compose.onNodeWithText("Keep request").performClick()
+        compose.runOnIdle { assertTrue(store.requestCancelCalls.isEmpty()) }
+        compose.onNodeWithText("Withdraw request").performClick()
+        compose.onNodeWithText("Confirm withdrawal").performClick()
+        compose.onNodeWithText("Withdraw request").assertIsNotEnabled().performClick()
+        tab("Find").performClick()
+        tab("Trips").performClick()
+        compose.onNodeWithText("Withdraw request").performScrollTo().assertIsNotEnabled()
+        compose.runOnIdle { store.requestCancelGate!!.complete(Unit) }
+        compose.onNodeWithText("Your request was cancelled").performScrollTo().assertIsDisplayed()
+        compose.onAllNodesWithText("Withdraw request").assertCountEquals(0)
+        compose.onNodeWithText("Sheffield → Leeds").performScrollTo().assertIsDisplayed()
+        tab("Find").performClick()
+        findText("Request one seat").performScrollTo().assertIsEnabled()
+        compose.runOnIdle {
+            assertEquals(listOf("rider-private-uid" to pending.id), store.requestCancelCalls)
+            assertEquals(ConnectedRequestStatus.CANCELLED, repository.journeyState.value.requests.single().status)
+            assertEquals(0, legacyCommands)
+        }
+    }
+
+    @Test
+    fun pendingDetailsWithdrawalCommittedRefreshFailureRequiresRefreshAndDoesNotDuplicate() {
+        val offer = store.journeys.single()
+        val pending = ConnectedSeatRequest("connected-offer_rider-private-uid", offer.id, offer.driverUid,
+            "rider-private-uid", ConnectedRequestStatus.PENDING)
+        store.requests += pending
+        launchConnected()
         tab("Trips").performClick()
         openDetails()
-        detailsText("Your request is pending").assertIsDisplayed()
-        compose.onAllNodesWithText("Cancel my seat").assertCountEquals(0)
+        compose.runOnIdle { store.failNextLoad = true }
+        detailsText("Withdraw request").performClick()
+        compose.onNodeWithText("Confirm withdrawal").performClick()
+        detailsText("Withdraw request").assertIsNotEnabled().performClick()
+        detailsText(ConnectedRydeRepository.SAFE_JOURNEY_ERROR).assertIsDisplayed()
+        detailsText("Refresh").performClick()
+        detailsText("Your request was cancelled").assertIsDisplayed()
         compose.onAllNodesWithText("Withdraw request").assertCountEquals(0)
         detailsText("Back").performClick()
         tab("Trips").assertIsSelected()
-        compose.runOnIdle { assertEquals(listOf("rider-private-uid" to "connected-offer"), store.requestCalls) }
+        compose.onNodeWithText("Your request was cancelled").performScrollTo().assertIsDisplayed()
+        compose.runOnIdle {
+            assertEquals(listOf("rider-private-uid" to pending.id), store.requestCancelCalls)
+            assertEquals(0, legacyCommands)
+        }
     }
 
     private fun assertShell() {
@@ -870,6 +908,8 @@ class RydeAppNavigationUiTest {
         val journeyCancelCalls = mutableListOf<Pair<String, String>>()
         var decisionGate: CompletableDeferred<Unit>? = null
         var journeyCancelGate: CompletableDeferred<Unit>? = null
+        val requestCancelCalls = mutableListOf<Pair<String, String>>()
+        var requestCancelGate: CompletableDeferred<Unit>? = null
         val cancelCalls = mutableListOf<Pair<String, String>>()
         var cancelGate: CompletableDeferred<Unit>? = null
         var failNextCancel = false
@@ -915,7 +955,13 @@ class RydeAppNavigationUiTest {
             requests.removeAll { it.journeyId == journeyId && it.riderUid == uid }
             requests += ConnectedSeatRequest("${journeyId}_$uid", journeyId, journey.driverUid, uid, ConnectedRequestStatus.PENDING)
         }
-        override suspend fun cancelRequest(uid: String, requestId: String) = Unit
+        override suspend fun cancelRequest(uid: String, requestId: String) {
+            requestCancelCalls += uid to requestId
+            requestCancelGate?.await()
+            val index = requests.indexOfFirst { it.id == requestId }
+            check(index >= 0 && requests[index].riderUid == uid && requests[index].status == ConnectedRequestStatus.PENDING)
+            requests[index] = requests[index].copy(status = ConnectedRequestStatus.CANCELLED)
+        }
         override suspend fun cancelConfirmedSeat(uid: String, tripId: String) {
             cancelCalls += uid to tripId
             cancelGate?.await()

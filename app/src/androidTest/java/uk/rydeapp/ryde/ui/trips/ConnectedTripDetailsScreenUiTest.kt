@@ -41,7 +41,7 @@ class ConnectedTripDetailsScreenUiTest {
         compose.runOnIdle { assertEquals(1, refreshes) }
     }
 
-    @Test fun riderStatusesPreserveHistoryWithoutPendingWithdrawalOrInvalidCancellation() {
+    @Test fun riderStatusesExposeOnlyValidPendingWithdrawalAndPreserveHistory() {
         val current = mutableStateOf(request)
         compose.setContent { RydeTheme {
             ConnectedTripDetailsScreen(content(ConnectedJourneySnapshot(listOf(journey), listOf(current.value))), false, true, null,
@@ -54,10 +54,52 @@ class ConnectedTripDetailsScreenUiTest {
             compose.runOnIdle { current.value = request.copy(status = status) }
             text(label).assertIsDisplayed()
             compose.onAllNodesWithText("Cancel my seat").assertCountEquals(0)
-            compose.onAllNodesWithText("Withdraw request").assertCountEquals(0)
+            compose.onAllNodesWithText("Withdraw request").assertCountEquals(
+                if (status == ConnectedRequestStatus.PENDING) 1 else 0,
+            )
             if (status == ConnectedRequestStatus.CANCELLED) text("Request one seat").assertIsEnabled()
             else compose.onAllNodesWithText("Request one seat").assertCountEquals(0)
         }
+    }
+
+    @Test fun pendingWithdrawalRequiresConfirmationUsesRequestIdOnceAndIsNotRestoredArmed() {
+        val restoration = StateRestorationTester(compose)
+        val busy = mutableStateOf(false)
+        val calls = mutableListOf<String>()
+        restoration.setContent { RydeTheme {
+            ConnectedTripDetailsScreen(
+                content(ConnectedJourneySnapshot(listOf(journey), listOf(request))), busy.value, true, null,
+                {}, {}, {}, { _, _ -> }, {}, {},
+                onWithdrawRequest = { calls += it; busy.value = true },
+            )
+        } }
+        text("Withdraw request").performClick()
+        compose.onNodeWithText("Keep request").performClick()
+        compose.runOnIdle { assertEquals(emptyList<String>(), calls) }
+        text("Withdraw request").performClick()
+        restoration.emulateSavedInstanceStateRestore()
+        compose.onAllNodesWithText("Confirm withdrawal").assertCountEquals(0)
+        text("Withdraw request").performClick()
+        compose.onNodeWithText("Confirm withdrawal").performClick()
+        text("Withdraw request").assertIsNotEnabled().performClick()
+        compose.runOnIdle { assertEquals(listOf(request.id), calls) }
+    }
+
+    @Test fun pendingWithdrawalConfirmationClosesWhenEligibilityChanges() {
+        val current = mutableStateOf(journey)
+        val calls = mutableListOf<String>()
+        compose.setContent { RydeTheme {
+            ConnectedTripDetailsScreen(
+                content(ConnectedJourneySnapshot(listOf(current.value), listOf(request))), false, true, null,
+                {}, {}, {}, { _, _ -> }, {}, {}, onWithdrawRequest = { calls += it },
+            )
+        } }
+        text("Withdraw request").performClick()
+        compose.onNodeWithText("Confirm withdrawal").assertIsDisplayed()
+        compose.runOnIdle { current.value = journey.copy(status = ConnectedJourneyStatus.CANCELLED) }
+        compose.onAllNodesWithText("Confirm withdrawal").assertCountEquals(0)
+        compose.onAllNodesWithText("Withdraw request").assertCountEquals(0)
+        compose.runOnIdle { assertEquals(emptyList<String>(), calls) }
     }
 
     @Test fun confirmedCancellationRequiresConfirmationUsesTripIdAndIsNotRestoredArmed() {
