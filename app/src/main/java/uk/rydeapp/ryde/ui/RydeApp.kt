@@ -61,6 +61,7 @@ internal enum class RydeDestination(@param:StringRes val labelRes: Int, val icon
 fun RydeApp(
     repository: RydeRepository? = null,
     appMode: AppMode = AppMode.LOCAL_DEMO,
+    connectedNowEpochMillis: () -> Long = System::currentTimeMillis,
 ) {
     val appRepository = remember(repository, appMode) {
         RydeAppComposition.repository(appMode, repository)
@@ -88,6 +89,7 @@ fun RydeApp(
                     repository = appRepository as ConnectedRydeRepository,
                     onSave = controller::updateConnectedProfile,
                     onSignOut = controller::signOut,
+                    currentTimeMillis = connectedNowEpochMillis,
                 )
             }
         } else {

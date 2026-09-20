@@ -37,8 +37,12 @@ class RydeAppNavigationUiTest {
     }
     private val repository = ConnectedRydeRepository(auth, TestProfiles(), legacyCapabilities = legacy, journeys = store)
 
-    private fun launchConnected() {
-        compose.setContent { RydeTheme { RydeApp(repository, AppMode.CONNECTED) } }
+    private fun launchConnected(currentTimeMillis: () -> Long = System::currentTimeMillis) {
+        compose.setContent {
+            RydeTheme {
+                RydeApp(repository, AppMode.CONNECTED, connectedNowEpochMillis = currentTimeMillis)
+            }
+        }
     }
 
     @Test
@@ -430,30 +434,71 @@ class RydeAppNavigationUiTest {
     }
 
     @Test
-    fun confirmedJourneyRefreshesFromFutureToPastAcrossTripsAndDetailsWithoutLosingShell() {
+    fun confirmedJourneyRefreshesAcrossWallClockDepartureWithUnchangedSnapshot() {
         store.confirmSeat()
-        launchConnected()
+        val departure = store.journeys.single().departureEpochMillis
+        var now = departure - 1
+        launchConnected { now }
         tab("Trips").performClick()
         compose.onNodeWithText("Your seat is confirmed").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Cancel my seat").assertIsEnabled()
+        val unchangedSnapshot = repository.journeyState.value
 
-        compose.runOnIdle {
-            store.journeys = store.journeys.map { it.copy(departureEpochMillis = 1) }
-            store.trips[0] = store.trips.single().copy(departureEpochMillis = 1)
-        }
+        compose.runOnIdle { now = departure }
+        compose.onNodeWithText("Your seat is confirmed").assertIsDisplayed()
         compose.onNodeWithText("Refresh").performScrollTo().performClick()
         compose.onNodeWithText("Departure has passed").performScrollTo().assertIsDisplayed()
         compose.onAllNodesWithText("Your seat is confirmed").assertCountEquals(0)
         compose.onAllNodesWithText("Cancel my seat").assertCountEquals(0)
         assertShell()
+        compose.runOnIdle { assertEquals(unchangedSnapshot, repository.journeyState.value) }
+    }
 
+    @Test
+    fun openDetailsRefreshesAcrossWallClockDepartureWithUnchangedSnapshot() {
+        store.confirmSeat()
+        val departure = store.journeys.single().departureEpochMillis
+        var now = departure - 1
+        launchConnected { now }
+        tab("Trips").performClick()
         openDetails()
+        detailsText("Your seat is confirmed").assertIsDisplayed()
+        detailsText("Cancel my seat").assertIsEnabled()
+        val unchangedSnapshot = repository.journeyState.value
+
+        compose.runOnIdle { now = departure }
+        detailsText("Your seat is confirmed").assertIsDisplayed()
+        detailsText("Refresh").performClick()
         detailsText("Departure has passed").assertIsDisplayed()
         detailsText("Sheffield \u2192 Leeds").assertIsDisplayed()
         compose.onAllNodesWithText("Cancel my seat").assertCountEquals(0)
-        detailsText("Back").performClick()
-        tab("Trips").assertIsSelected()
+        assertShell()
+        compose.runOnIdle { assertEquals(unchangedSnapshot, repository.journeyState.value) }
+    }
+
+    @Test
+    fun driverPendingRequestRefreshesAcrossDepartureButRetainsDeclineCleanup() {
+        pendingForDriver()
+        val departure = store.journeys.single().departureEpochMillis
+        var now = departure - 1
+        launchConnected { now }
+        tab("Trips").performClick()
+        compose.onNodeWithText("Accept").performScrollTo().assertIsEnabled()
+        compose.onNodeWithText("Decline").assertIsEnabled()
+        compose.onNodeWithText("Cancel journey").assertIsEnabled()
+        val unchangedSnapshot = repository.journeyState.value
+
+        compose.runOnIdle { now = departure }
+        compose.onNodeWithText("Accept").assertIsDisplayed()
+        compose.onNodeWithText("Refresh").performScrollTo().performClick()
         compose.onNodeWithText("Departure has passed").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Departure has passed - this request can no longer be accepted")
+            .assertIsDisplayed()
+        compose.onAllNodesWithText("Accept").assertCountEquals(0)
+        compose.onAllNodesWithText("Cancel journey").assertCountEquals(0)
+        compose.onNodeWithText("Decline").assertIsEnabled()
+        assertShell()
+        compose.runOnIdle { assertEquals(unchangedSnapshot, repository.journeyState.value) }
     }
 
     @Test

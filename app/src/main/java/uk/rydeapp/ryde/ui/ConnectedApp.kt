@@ -12,6 +12,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.listSaver
@@ -58,6 +59,7 @@ internal fun ConnectedReadyApp(
     repository: ConnectedRydeRepository,
     onSave: suspend (String, String, String) -> AccountCommandResult?,
     onSignOut: suspend () -> AccountCommandResult?,
+    currentTimeMillis: () -> Long = System::currentTimeMillis,
 ) {
     val snapshot by repository.journeyState.collectAsState()
     val resources = LocalResources.current
@@ -84,6 +86,9 @@ internal fun ConnectedReadyApp(
     var refreshRequired by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var createdVersion by rememberSaveable { mutableIntStateOf(0) }
+    var lifecycleNowEpochMillis by remember(session.accountId) {
+        mutableLongStateOf(currentTimeMillis())
+    }
     // This scope survives tab changes and opening the Lab, and is disposed on account change/sign-out.
     val scope = rememberCoroutineScope()
 
@@ -106,8 +111,12 @@ internal fun ConnectedReadyApp(
     }
 
     val refresh: () -> Unit = {
+        // Time-derived lifecycle state must advance even when a server refresh
+        // returns a structurally equal snapshot and StateFlow emits nothing.
+        lifecycleNowEpochMillis = currentTimeMillis()
         runCommand {
             repository.refresh()
+            lifecycleNowEpochMillis = currentTimeMillis()
             refreshRequired = false
             resources.getString(R.string.connected_refreshed)
         }
@@ -138,13 +147,13 @@ internal fun ConnectedReadyApp(
         return
     }
 
-    val nowEpochMillis = System.currentTimeMillis()
+    val nowEpochMillis = lifecycleNowEpochMillis
     val discoveryJourneys = connectedHomeJourneys(snapshot, session.accountId, nowEpochMillis)
     val tripsContent = connectedTripsContent(snapshot, session.accountId, nowEpochMillis)
     val requestSeat: (String) -> Unit = { journeyId ->
         // Check repository truth and time again at the shared Home/Find command boundary.
         val canRequest = connectedHomeJourneys(
-            repository.journeyState.value, session.accountId, System.currentTimeMillis(),
+            repository.journeyState.value, session.accountId, currentTimeMillis(),
         ).any { it.journey.id == journeyId && (it.canRequest || it.canRerequest) }
         if (canRequest && !refreshRequired) runCommand {
             when (val result = repository.requestConnectedSeat(journeyId)) {
@@ -162,7 +171,8 @@ internal fun ConnectedReadyApp(
         val current = repository.journeyState.value
         val trip = current.confirmedTrips.firstOrNull { it.id == tripId }
         val canCancel = trip != null && canCancelConnectedConfirmedSeat(
-            trip, session.accountId, journey = current.journeys.firstOrNull { it.id == trip.journeyId },
+            trip, session.accountId, currentTimeMillis(),
+            current.journeys.firstOrNull { it.id == trip.journeyId },
         )
         if (!busy) {
             if (canCancel && !refreshRequired) runCommand {
@@ -222,7 +232,7 @@ internal fun ConnectedReadyApp(
             val request = current.requests.firstOrNull { it.id == requestId }
             val journey = current.journeys.firstOrNull { it.id == request?.journeyId }
             if (!refreshRequired && request != null && canDecideConnectedRequest(
-                    request, journey, session.accountId, accept, System.currentTimeMillis(),
+                    request, journey, session.accountId, accept, currentTimeMillis(),
                 )) runCommand {
                 driverResult(repository.decideConnectedRequest(requestId, accept),
                     if (accept) R.string.connected_accept_success else R.string.connected_decline_success)
@@ -233,7 +243,7 @@ internal fun ConnectedReadyApp(
         if (!busy) {
             val journey = repository.journeyState.value.journeys.firstOrNull { it.id == journeyId }
             if (!refreshRequired && journey != null && ConnectedJourneyLifecycle.canCancelJourney(
-                    journey, session.accountId, System.currentTimeMillis(),
+                    journey, session.accountId, currentTimeMillis(),
                 )) runCommand {
                 driverResult(repository.cancelConnectedJourney(journeyId), R.string.connected_cancel_journey_success)
             } else message = resources.getString(R.string.connected_driver_changed)
