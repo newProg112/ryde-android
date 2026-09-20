@@ -425,9 +425,13 @@ class RydeAppNavigationUiTest {
         compose.runOnIdle { store.confirmSeat() }
         compose.onNodeWithText("Refresh").performScrollTo().performClick()
         compose.onNodeWithText("Your seat is confirmed").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Driver: Morgan").assertIsDisplayed()
         compose.onAllNodesWithText("Your request is pending").assertCountEquals(0)
         compose.onNodeWithText("Cancel my seat").assertIsEnabled()
         assertNoFictionalContent()
+        openDetails()
+        detailsText("Driver: Morgan").assertIsDisplayed()
+        detailsText("Back").performClick()
         tab("Find").performClick()
         compose.onNodeWithText("Your seat is confirmed").performScrollTo().assertIsDisplayed()
         compose.runOnIdle { assertEquals(0, legacyCommands) }
@@ -474,6 +478,43 @@ class RydeAppNavigationUiTest {
         compose.onAllNodesWithText("Cancel my seat").assertCountEquals(0)
         assertShell()
         compose.runOnIdle { assertEquals(unchangedSnapshot, repository.journeyState.value) }
+    }
+
+    @Test
+    fun unrequestedFindDetailsRefreshesAcrossDepartureWithUnchangedSnapshot() {
+        val departure = store.journeys.single().departureEpochMillis
+        var now = departure - 1
+        launchConnected { now }
+        tab("Find").performClick()
+        openDetails()
+        detailsText("Journey open").assertIsDisplayed()
+        detailsText("Request one seat").assertIsEnabled()
+        val unchangedSnapshot = repository.journeyState.value
+
+        compose.runOnIdle { now = departure }
+        detailsText("Journey open").assertIsDisplayed()
+        detailsText("Refresh").performClick()
+        detailsText("Departure has passed").assertIsDisplayed()
+        compose.onAllNodesWithText("Journey open").assertCountEquals(0)
+        compose.onAllNodesWithText("Request one seat").assertCountEquals(0)
+        assertShell()
+        detailsText("Back").performClick()
+        tab("Find").assertIsSelected()
+        compose.onAllNodesWithText("Trip details").assertCountEquals(0)
+        compose.runOnIdle { assertEquals(unchangedSnapshot, repository.journeyState.value) }
+    }
+
+    @Test
+    fun fullJourneyFindDetailsShowsFullWithoutRequestAction() {
+        store.journeys = listOf(store.journeys.single().copy(seatsRemaining = 0))
+        launchConnected()
+        tab("Find").performClick()
+        openDetails()
+        detailsText("Journey full").assertIsDisplayed()
+        detailsText("Seats remaining: 0/2").assertIsDisplayed()
+        compose.onAllNodesWithText("Journey open").assertCountEquals(0)
+        compose.onAllNodesWithText("Request one seat").assertCountEquals(0)
+        assertShell()
     }
 
     @Test
@@ -630,6 +671,7 @@ class RydeAppNavigationUiTest {
         compose.runOnIdle {
             assertEquals(listOf(Triple("driver-private-uid", "connected-offer_rider-private-uid", true)), store.decisionCalls)
             assertEquals(1, repository.journeyState.value.confirmedTrips.size)
+            assertEquals("Morgan", repository.journeyState.value.confirmedTrips.single().driverDisplayName)
             assertEquals(0, legacyCommands)
         }
         assertNoFictionalContent()
@@ -995,7 +1037,8 @@ class RydeAppNavigationUiTest {
             requests += ConnectedSeatRequest(id, journey.id, journey.driverUid, "rider-private-uid",
                 ConnectedRequestStatus.ACCEPTED, "Taylor")
             trips += ConnectedConfirmedTrip(id, journey.id, id, journey.driverUid, "rider-private-uid",
-                journey.originArea, journey.destinationArea, journey.departureEpochMillis, ConnectedTripStatus.CONFIRMED)
+                journey.originArea, journey.destinationArea, journey.departureEpochMillis,
+                ConnectedTripStatus.CONFIRMED, driverDisplayName = "Morgan")
         }
         val requestCalls = mutableListOf<Pair<String, String>>()
         var requestGate: CompletableDeferred<Unit>? = null
@@ -1064,7 +1107,9 @@ class RydeAppNavigationUiTest {
                 val journey = journeys.single { it.id == requests[index].journeyId }
                 journeys = journeys.map { if (it.id == journey.id) it.copy(seatsRemaining = it.seatsRemaining - 1) else it }
                 trips += ConnectedConfirmedTrip(requestId, journey.id, requestId, uid, requests[index].riderUid,
-                    journey.originArea, journey.destinationArea, journey.departureEpochMillis, ConnectedTripStatus.CONFIRMED)
+                    journey.originArea, journey.destinationArea, journey.departureEpochMillis,
+                    ConnectedTripStatus.CONFIRMED,
+                    driverDisplayName = if (uid == "driver-private-uid") "Morgan" else "Taylor")
             }
         }
     }

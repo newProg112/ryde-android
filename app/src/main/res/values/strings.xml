@@ -101,6 +101,7 @@
     <string name="connected_trips_driver_heading">Your offered journeys</string>
     <string name="connected_trips_rider">Rider</string>
     <string name="connected_trips_driver">Driver</string>
+    <string name="connected_trips_driver_name">Driver: %1$s</string>
     <string name="connected_trips_offer_open">Journey open</string>
     <string name="connected_trips_offer_cancelled">Journey cancelled</string>
     <string name="connected_trips_cancelled">Your seat was cancelled</string>

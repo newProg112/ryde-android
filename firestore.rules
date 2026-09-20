@@ -99,7 +99,8 @@ service cloud.firestore {
     function validConfirmedTrip(data) {
       return data.keys().hasOnly([
           'journeyId', 'acceptedRequestId', 'driverUid', 'riderUid',
-          'originArea', 'destinationArea', 'departureAt', 'status', 'cancelledAt'
+          'originArea', 'destinationArea', 'departureAt', 'status', 'cancelledAt',
+          'driverDisplayName'
         ])
         && data.journeyId is string
         && data.acceptedRequestId is string
@@ -112,6 +113,14 @@ service cloud.firestore {
         && data.departureAt is timestamp
         && ((data.status == 'CONFIRMED' && !('cancelledAt' in data))
           || (data.status == 'CANCELLED_BY_RIDER' && data.cancelledAt is timestamp));
+    }
+
+    function confirmedTripSnapshotMatchesDriverProfile(data) {
+      let driverProfile = get(userPath(data.driverUid)).data;
+      return 'driverDisplayName' in data
+        && driverProfile.uid == data.driverUid
+        && validDisplayName(driverProfile.displayName)
+        && data.driverDisplayName == driverProfile.displayName;
     }
 
     function currentGuardMatchesJourney(journeyId, driverUid) {
@@ -415,6 +424,7 @@ service cloud.firestore {
           || resource.data.riderUid == request.auth.uid);
       allow create: if signedIn()
         && validConfirmedTrip(request.resource.data)
+        && confirmedTripSnapshotMatchesDriverProfile(request.resource.data)
         && request.resource.data.status == 'CONFIRMED'
         && tripId == request.resource.data.acceptedRequestId
         && request.resource.data.driverUid == request.auth.uid

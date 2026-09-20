@@ -9,6 +9,7 @@ internal data class ConnectedTripDetailsContent(
     val summary: ConnectedTripsItem? = null,
     val journey: ConnectedJourney? = null,
     val canRequest: Boolean = false,
+    val unrequestedStatusText: Int? = null,
 )
 
 internal fun connectedTripDetailsContent(
@@ -17,6 +18,7 @@ internal fun connectedTripDetailsContent(
     journeyId: String,
     discovery: List<ConnectedHomeJourney>,
     trips: ConnectedTripsContent,
+    nowEpochMillis: Long,
 ): ConnectedTripDetailsContent {
     if (journeyId.isBlank()) return ConnectedTripDetailsContent()
     val summary = trips.driver.firstOrNull { it.journeyId == journeyId }
@@ -46,6 +48,9 @@ internal fun connectedTripDetailsContent(
         safeSummary, journey,
         journey != null && trip == null && discovery.any {
             it.journey.id == journeyId && (it.canRequest || it.canRerequest)
+        },
+        journey?.takeIf { safeSummary == null }?.let {
+            connectedOfferedJourneyStatusText(it, nowEpochMillis)
         },
     )
 }

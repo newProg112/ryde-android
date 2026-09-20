@@ -200,6 +200,10 @@ class FirestoreConnectedJourneyStore(private val firestore: FirebaseFirestore) :
                 ?: error("Journey unavailable")
             check(ConnectedJourneyLifecycle.requestJourneyOpen(request, journey))
             if (accept) {
+                val driverProfile = FirestoreProfileMapper.user(
+                    uid,
+                    transaction.get(firestore.collection(USERS).document(uid)).data.orEmpty(),
+                ) ?: error("Driver profile unavailable")
                 check(
                     journey.driverUid == uid &&
                         journey.seatsRemaining > 0 &&
@@ -219,7 +223,10 @@ class FirestoreConnectedJourneyStore(private val firestore: FirebaseFirestore) :
                         "lastAcceptedRequestId" to requestId,
                     ),
                 )
-                transaction.set(tripRef, FirestoreJourneyMapper.confirmedTripData(journey, request))
+                transaction.set(
+                    tripRef,
+                    FirestoreJourneyMapper.confirmedTripData(journey, request, driverProfile.displayName),
+                )
             }
             transaction.update(requestRef, "status", if (accept) "ACCEPTED" else "DECLINED")
         }.await()

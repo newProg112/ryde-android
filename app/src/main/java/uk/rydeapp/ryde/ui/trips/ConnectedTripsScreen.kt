@@ -183,6 +183,9 @@ private fun TripCard(
                 style = MaterialTheme.typography.titleMedium)
             item.departureEpochMillis?.let { Text(formatConnectedJourneyDeparture(it)) }
             Text(stringResource(item.roleText), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            item.driverDisplayName?.takeIf { item.roleText == R.string.connected_trips_rider }?.let {
+                Text(stringResource(R.string.connected_trips_driver_name, it))
+            }
             Text(stringResource(item.statusText), color = MaterialTheme.colorScheme.primary)
             item.journeyStatusText?.let { Text(stringResource(it), color = MaterialTheme.colorScheme.onSurfaceVariant) }
             if (item.seatsRemaining != null && item.seatCapacity != null) {

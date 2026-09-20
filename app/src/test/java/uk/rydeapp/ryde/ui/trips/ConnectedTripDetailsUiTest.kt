@@ -11,9 +11,11 @@ class ConnectedTripDetailsUiTest {
     private val request = ConnectedSeatRequest("request-id", journey.id, "driver", "rider",
         ConnectedRequestStatus.PENDING, "Riley Rider")
     private val trip = ConnectedConfirmedTrip("trip-id", journey.id, request.id, "driver", "rider",
-        "Persisted area", "Sheffield", 1000, ConnectedTripStatus.CONFIRMED)
+        "Persisted area", "Sheffield", 1000, ConnectedTripStatus.CONFIRMED,
+        driverDisplayName = "Morgan Driver")
     private fun details(snapshot: ConnectedJourneySnapshot, uid: String = "rider", id: String = journey.id, now: Long = 0) =
-        connectedTripDetailsContent(snapshot, uid, id, connectedHomeJourneys(snapshot, uid, now), connectedTripsContent(snapshot, uid, now))
+        connectedTripDetailsContent(snapshot, uid, id, connectedHomeJourneys(snapshot, uid, now),
+            connectedTripsContent(snapshot, uid, now), now)
 
     @Test fun ownerUsesExistingDriverPresentationAndDecisionFlags() {
         val snapshot = ConnectedJourneySnapshot(listOf(journey), listOf(request))
@@ -30,11 +32,24 @@ class ConnectedTripDetailsUiTest {
 
     @Test fun unrequestedRiderReusesDiscoveryEligibilityAndOtherUsersRequestsStayPrivate() {
         val snapshot = ConnectedJourneySnapshot(listOf(journey), listOf(request.copy(riderUid = "other")))
-        assertNull(details(snapshot).summary)
-        assertTrue(details(snapshot).canRequest)
-        assertFalse(details(snapshot.copy(journeys = listOf(journey.copy(seatsRemaining = 0)))).canRequest)
-        assertFalse(details(snapshot, now = 1000).canRequest)
-        assertFalse(details(snapshot.copy(journeys = listOf(journey.copy(status = ConnectedJourneyStatus.CANCELLED)))).canRequest)
+        val open = details(snapshot)
+        assertNull(open.summary)
+        assertEquals(R.string.connected_trips_offer_open, open.unrequestedStatusText)
+        assertTrue(open.canRequest)
+
+        val full = details(snapshot.copy(journeys = listOf(journey.copy(seatsRemaining = 0))))
+        assertEquals(R.string.connected_offer_full, full.unrequestedStatusText)
+        assertFalse(full.canRequest)
+
+        listOf(1000L, 1001L).forEach { now ->
+            val departed = details(snapshot, now = now)
+            assertEquals(R.string.connected_offer_departed, departed.unrequestedStatusText)
+            assertFalse(departed.canRequest)
+        }
+
+        val cancelled = details(snapshot.copy(journeys = listOf(journey.copy(status = ConnectedJourneyStatus.CANCELLED))))
+        assertEquals(R.string.connected_trips_offer_cancelled, cancelled.unrequestedStatusText)
+        assertFalse(cancelled.canRequest)
         assertEquals(ConnectedTripDetailsContent(), details(snapshot, id = "unknown"))
         assertEquals(ConnectedTripDetailsContent(), details(snapshot, id = " "))
     }
@@ -44,6 +59,7 @@ class ConnectedTripDetailsUiTest {
             val snapshot = ConnectedJourneySnapshot(listOf(journey), listOf(request.copy(status = status)))
             val result = details(snapshot)
             assertEquals(connectedTripsContent(snapshot, "rider", 0).rider.single(), result.summary)
+            assertNull(result.unrequestedStatusText)
             assertEquals(status == ConnectedRequestStatus.CANCELLED, result.canRequest)
             assertNull(result.summary!!.cancellableTripId)
             assertEquals(request.id.takeIf { status == ConnectedRequestStatus.PENDING }, result.summary.cancellableRequestId)
@@ -57,12 +73,15 @@ class ConnectedTripDetailsUiTest {
         assertEquals(R.string.connected_request_accepted, result.summary.statusText)
         assertEquals(trip.id, result.summary.cancellableTripId)
         assertEquals(journey.id, result.summary.journeyId)
+        assertEquals("Morgan Driver", result.summary.driverDisplayName)
+        assertNull(result.unrequestedStatusText)
         assertFalse(result.canRequest)
         assertNull(result.summary.cancellableRequestId)
         // A partial read without the accepted request must never re-enable a new request.
         assertFalse(details(snapshot.copy(requests = emptyList())).canRequest)
         val cancelled = details(snapshot.copy(confirmedTrips = listOf(trip.copy(status = ConnectedTripStatus.CANCELLED_BY_RIDER))))
         assertEquals(R.string.connected_trips_cancelled, cancelled.summary!!.statusText)
+        assertEquals("Morgan Driver", cancelled.summary.driverDisplayName)
         assertNull(cancelled.summary.cancellableTripId)
         assertFalse(cancelled.canRequest)
     }
@@ -78,6 +97,7 @@ class ConnectedTripDetailsUiTest {
         assertEquals("Sheffield", result.summary.destination)
         assertEquals(1000L, result.summary.departureEpochMillis)
         assertEquals(R.string.connected_trips_departure_passed, result.summary.statusText)
+        assertEquals("Morgan Driver", result.summary.driverDisplayName)
         assertNull(result.summary.cancellableTripId)
         assertFalse(result.canRequest)
     }
@@ -105,6 +125,7 @@ class ConnectedTripDetailsUiTest {
         assertFalse(pending.canRequest)
         val confirmed = details(ConnectedJourneySnapshot(listOf(closed), listOf(request), listOf(trip)))
         assertEquals(R.string.connected_trips_driver_cancelled, confirmed.summary!!.statusText)
+        assertEquals("Morgan Driver", confirmed.summary.driverDisplayName)
         assertNull(confirmed.summary.cancellableTripId)
         val declined = details(ConnectedJourneySnapshot(listOf(closed), listOf(request.copy(status = ConnectedRequestStatus.DECLINED))))
         assertEquals(R.string.connected_request_declined, declined.summary!!.statusText)

@@ -20,6 +20,7 @@ internal data class ConnectedTripsItem(
     val incoming: List<ConnectedIncomingRequest> = emptyList(),
     val journeyStatusText: Int? = null,
     val journeyId: String? = null,
+    val driverDisplayName: String? = null,
 )
 
 internal data class ConnectedIncomingRequest(
@@ -79,6 +80,16 @@ private fun List<ConnectedTripsItem>.orderedForTrips(nowEpochMillis: Long): List
         else compareValues(first.departureEpochMillis, second.departureEpochMillis)
     }
 
+internal fun connectedOfferedJourneyStatusText(
+    journey: ConnectedJourney,
+    nowEpochMillis: Long,
+): Int = when {
+    journey.status == ConnectedJourneyStatus.CANCELLED -> R.string.connected_trips_offer_cancelled
+    journey.departureEpochMillis <= nowEpochMillis -> R.string.connected_offer_departed
+    journey.seatsRemaining == 0 -> R.string.connected_offer_full
+    else -> R.string.connected_trips_offer_open
+}
+
 internal fun connectedTripsContent(
     snapshot: ConnectedJourneySnapshot,
     uid: String,
@@ -101,6 +112,7 @@ internal fun connectedTripsContent(
             R.string.connected_trips_rider,
             trip.id.takeIf { canCancelConnectedConfirmedSeat(trip, uid, nowEpochMillis, journey) },
             journeyId = trip.journeyId,
+            driverDisplayName = trip.driverDisplayName,
         )
     }
     val representedRequests = trips.map { it.acceptedRequestId }.toSet()
@@ -132,12 +144,7 @@ internal fun connectedTripsContent(
     val driver = owned.map { journey ->
         ConnectedTripsItem("journey:${journey.id}", journey.originArea, journey.destinationArea,
             journey.departureEpochMillis,
-            when {
-                journey.status == ConnectedJourneyStatus.CANCELLED -> R.string.connected_trips_offer_cancelled
-                journey.departureEpochMillis <= nowEpochMillis -> R.string.connected_offer_departed
-                journey.seatsRemaining == 0 -> R.string.connected_offer_full
-                else -> R.string.connected_trips_offer_open
-            }, R.string.connected_trips_driver,
+            connectedOfferedJourneyStatusText(journey, nowEpochMillis), R.string.connected_trips_driver,
             cancellableJourneyId = journey.id.takeIf { ConnectedJourneyLifecycle.canCancelJourney(journey, uid, nowEpochMillis) },
             seatsRemaining = journey.seatsRemaining, seatCapacity = journey.seatCapacity,
             incoming = incoming.filter { it.journeyId == journey.id }.map { incomingRequest(it, journey, uid, nowEpochMillis) },

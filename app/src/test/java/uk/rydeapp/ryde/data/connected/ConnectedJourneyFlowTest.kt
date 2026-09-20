@@ -164,9 +164,13 @@ class ConnectedJourneyFlowTest {
     fun `cancelled trip and zero allocation guard mapping preserve history and reject malformed fields`() {
         val journey = ConnectedJourney("j", "driver", "Mansfield", "Nottingham", 4_070_908_800_000L, 1, 0)
         val request = ConnectedSeatRequest("j_rider", "j", "driver", "rider", ConnectedRequestStatus.ACCEPTED)
-        val confirmed = FirestoreJourneyMapper.confirmedTripData(journey, request)
+        val confirmed = FirestoreJourneyMapper.confirmedTripData(journey, request, "Driver Name")
         val cancelled = confirmed + mapOf("status" to "CANCELLED_BY_RIDER", "cancelledAt" to Timestamp(100, 0))
-        assertEquals(100_000L, FirestoreJourneyMapper.confirmedTrip(request.id, cancelled)?.cancelledAtEpochMillis)
+        val mappedCancelled = FirestoreJourneyMapper.confirmedTrip(request.id, cancelled)
+        assertEquals(100_000L, mappedCancelled?.cancelledAtEpochMillis)
+        assertEquals("Driver Name", mappedCancelled?.driverDisplayName)
+        assertNull(FirestoreJourneyMapper.confirmedTrip(request.id, confirmed - "driverDisplayName")?.driverDisplayName)
+        assertNull(FirestoreJourneyMapper.confirmedTrip(request.id, confirmed + ("driverDisplayName" to "\u0007")))
         assertEquals(null, FirestoreJourneyMapper.confirmedTrip(request.id, cancelled - "cancelledAt"))
         assertEquals(null, FirestoreJourneyMapper.confirmedTrip(request.id, cancelled + ("cancelledAt" to "bad")))
         assertEquals(null, FirestoreJourneyMapper.confirmedTrip(request.id, confirmed + ("cancelledAt" to Timestamp(100, 0))))
@@ -252,7 +256,7 @@ class ConnectedJourneyFlowTest {
             riderUid = "rider",
             status = ConnectedRequestStatus.PENDING,
         )
-        val tripData = FirestoreJourneyMapper.confirmedTripData(journey, request)
+        val tripData = FirestoreJourneyMapper.confirmedTripData(journey, request, "Driver Name")
         assertEquals(
             ConnectedConfirmedTrip(
                 id = request.id,
@@ -264,6 +268,7 @@ class ConnectedJourneyFlowTest {
                 destinationArea = "Nottingham",
                 departureEpochMillis = journey.departureEpochMillis,
                 status = ConnectedTripStatus.CONFIRMED,
+                driverDisplayName = "Driver Name",
             ),
             FirestoreJourneyMapper.confirmedTrip(request.id, tripData),
         )
@@ -395,6 +400,7 @@ class ConnectedJourneyFlowTest {
     @Test
     fun `two accounts observe pending then accepted request and decremented seat after refresh`() = runBlocking {
         val store = MemoryJourneyStore()
+        store.driverDisplayNames["driver"] = "Driver Name"
         val driver = repository("driver", store)
         val rider = repository("rider", store)
         driver.refresh()
@@ -417,6 +423,10 @@ class ConnectedJourneyFlowTest {
         assertEquals(pending.id, driverTrip.id)
         assertEquals(driverTrip, riderTrip)
         assertEquals(ConnectedTripStatus.CONFIRMED, riderTrip.status)
+        assertEquals("Driver Name", riderTrip.driverDisplayName)
+        store.driverDisplayNames["driver"] = "Renamed Driver"
+        rider.refresh()
+        assertEquals("Driver Name", rider.journeyState.value.confirmedTrips.single().driverDisplayName)
 
         val stranger = repository("stranger", store)
         stranger.refresh()
@@ -532,6 +542,7 @@ class ConnectedJourneyFlowTest {
     }
 
     private class MemoryJourneyStore(private val nowMillis: () -> Long = System::currentTimeMillis) : ConnectedJourneyStore {
+        val driverDisplayNames = mutableMapOf<String, String>()
         val guards = linkedMapOf<String, ConnectedJourneyAcceptanceGuard>()
         private val journeys = linkedMapOf<String, ConnectedJourney>()
         private val requests = linkedMapOf<String, ConnectedSeatRequest>()
@@ -610,6 +621,7 @@ class ConnectedJourneyFlowTest {
                     destinationArea = journey.destinationArea,
                     departureEpochMillis = journey.departureEpochMillis,
                     status = ConnectedTripStatus.CONFIRMED,
+                    driverDisplayName = driverDisplayNames[uid] ?: uid,
                 )
             }
             requests[requestId] = request.copy(status = if (accept) ConnectedRequestStatus.ACCEPTED else ConnectedRequestStatus.DECLINED)

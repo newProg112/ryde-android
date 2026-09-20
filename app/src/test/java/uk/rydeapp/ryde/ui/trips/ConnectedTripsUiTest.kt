@@ -11,7 +11,7 @@ class ConnectedTripsUiTest {
         "private-rider", ConnectedRequestStatus.PENDING, "Riley Rider")
     private val trip = ConnectedConfirmedTrip(request.id, journey.id, request.id, journey.driverUid,
         request.riderUid, journey.originArea, journey.destinationArea, journey.departureEpochMillis,
-        ConnectedTripStatus.CONFIRMED)
+        ConnectedTripStatus.CONFIRMED, driverDisplayName = "Morgan Driver")
     private fun content(j: List<ConnectedJourney> = listOf(journey), r: List<ConnectedSeatRequest> = listOf(request),
         t: List<ConnectedConfirmedTrip> = emptyList(), uid: String = request.riderUid, now: Long = 0) =
         connectedTripsContent(ConnectedJourneySnapshot(j, r, t), uid, now)
@@ -48,6 +48,8 @@ class ConnectedTripsUiTest {
         assertEquals(999L, item.departureEpochMillis)
         assertEquals(R.string.connected_request_accepted, item.statusText)
         assertEquals(trip.id, item.cancellableTripId)
+        assertEquals("Morgan Driver", item.driverDisplayName)
+        assertNull(content(t = listOf(trip.copy(driverDisplayName = null))).rider.single().driverDisplayName)
     }
 
     @Test fun `past confirmed trip and accepted driver row use truthful history and retain rider name`() {
@@ -57,6 +59,7 @@ class ConnectedTripsUiTest {
         assertNull(rider.cancellableTripId)
         assertEquals("York", rider.origin)
         assertEquals(1000L, rider.departureEpochMillis)
+        assertEquals("Morgan Driver", rider.driverDisplayName)
 
         val driver = content(r = listOf(accepted), uid = journey.driverUid, now = 1000).driver.single()
         assertEquals(R.string.connected_offer_departed, driver.statusText)
@@ -99,12 +102,14 @@ class ConnectedTripsUiTest {
         val closed = journey.copy(status = ConnectedJourneyStatus.CANCELLED)
         val driverCancelled = content(j = listOf(closed), t = listOf(trip)).rider.single()
         assertEquals(R.string.connected_trips_driver_cancelled, driverCancelled.statusText)
+        assertEquals("Morgan Driver", driverCancelled.driverDisplayName)
         assertNull(driverCancelled.cancellableTripId)
         val missing = content(j = emptyList(), t = listOf(trip)).rider.single()
         assertEquals(R.string.connected_trips_unavailable, missing.statusText)
         assertNull(missing.cancellableTripId)
         val riderCancelled = content(j = listOf(closed), t = listOf(trip.copy(status = ConnectedTripStatus.CANCELLED_BY_RIDER))).rider.single()
         assertEquals(R.string.connected_trips_cancelled, riderCancelled.statusText)
+        assertEquals("Morgan Driver", riderCancelled.driverDisplayName)
         assertNull(riderCancelled.cancellableTripId)
         assertTrue(content(t = listOf(trip), uid = journey.driverUid).rider.isEmpty())
     }

@@ -16,7 +16,37 @@ class ConnectedTripsScreenUiTest {
     private val request = ConnectedSeatRequest("private-request-id", journey.id, journey.driverUid,
         "private-rider-uid", ConnectedRequestStatus.PENDING, "Riley Rider")
     private val trip = ConnectedConfirmedTrip("private-trip-id", journey.id, request.id, journey.driverUid,
-        request.riderUid, journey.originArea, journey.destinationArea, journey.departureEpochMillis, ConnectedTripStatus.CONFIRMED)
+        request.riderUid, journey.originArea, journey.destinationArea, journey.departureEpochMillis,
+        ConnectedTripStatus.CONFIRMED, driverDisplayName = "Morgan Driver")
+
+    @Test fun riderSeesPrivateDriverSnapshotThroughoutHistoryAndLegacyFallsBackSafely() {
+        val currentJourney = mutableStateOf(journey)
+        val currentTrip = mutableStateOf(trip)
+        compose.setContent { RydeTheme {
+            ConnectedTripsScreen(
+                connectedTripsContent(
+                    ConnectedJourneySnapshot(listOf(currentJourney.value), confirmedTrips = listOf(currentTrip.value)),
+                    request.riderUid,
+                    0,
+                ),
+                false, true, null, {}, {},
+            )
+        } }
+        compose.onNodeWithText("Driver: Morgan Driver").performScrollTo().assertIsDisplayed()
+        compose.runOnIdle { currentTrip.value = trip.copy(status = ConnectedTripStatus.CANCELLED_BY_RIDER) }
+        compose.onNodeWithText("Your seat was cancelled").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Driver: Morgan Driver").assertIsDisplayed()
+        compose.runOnIdle {
+            currentTrip.value = trip
+            currentJourney.value = journey.copy(status = ConnectedJourneyStatus.CANCELLED)
+        }
+        compose.onNodeWithText("Journey cancelled by driver").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Driver: Morgan Driver").assertIsDisplayed()
+        compose.runOnIdle { currentTrip.value = trip.copy(driverDisplayName = null) }
+        compose.onAllNodesWithText("Driver: Morgan Driver").assertCountEquals(0)
+        compose.onNodeWithText("Rider").assertIsDisplayed()
+        assertSafe()
+    }
 
     @Test fun driverLifecycleChangeClosesCancellationAndDecisionControls() {
         val current = mutableStateOf(journey)
@@ -153,6 +183,7 @@ class ConnectedTripsScreenUiTest {
             )
         } }
         compose.onNodeWithText("Departure has passed").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Driver: Morgan Driver").assertIsDisplayed()
         compose.onNodeWithText("${journey.originArea} \u2192 ${journey.destinationArea}")
             .performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("2099", substring = true).assertIsDisplayed()

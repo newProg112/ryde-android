@@ -258,7 +258,7 @@ internal fun ConnectedReadyApp(
             tabStateHolder.SaveableStateProvider("${session.accountId}:details:$detailJourneyId") {
                 ConnectedTripDetailsScreen(
                     content = connectedTripDetailsContent(snapshot, session.accountId, detailJourneyId,
-                        discoveryJourneys, tripsContent),
+                        discoveryJourneys, tripsContent, nowEpochMillis),
                     busy = busy, actionsEnabled = !refreshRequired, message = message,
                     onBack = closeDetails, onRefresh = refresh, onRequestSeat = requestSeat,
                     onDecideRequest = decideRequest, onCancelSeat = cancelSeat, onCancelJourney = cancelJourney,

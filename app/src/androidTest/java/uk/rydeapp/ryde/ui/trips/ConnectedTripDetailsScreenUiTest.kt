@@ -17,7 +17,25 @@ class ConnectedTripDetailsScreenUiTest {
     private val request = ConnectedSeatRequest("request-id", journey.id, journey.driverUid, "rider-uid",
         ConnectedRequestStatus.PENDING, "Riley Rider")
     private val trip = ConnectedConfirmedTrip("trip-id", journey.id, request.id, journey.driverUid, request.riderUid,
-        journey.originArea, journey.destinationArea, journey.departureEpochMillis, ConnectedTripStatus.CONFIRMED)
+        journey.originArea, journey.destinationArea, journey.departureEpochMillis,
+        ConnectedTripStatus.CONFIRMED, driverDisplayName = "Morgan Driver")
+
+    @Test fun riderSeesPrivateDriverSnapshotAndLegacyDetailsUseGenericFallback() {
+        val current = mutableStateOf(trip)
+        compose.setContent { RydeTheme {
+            ConnectedTripDetailsScreen(
+                content(ConnectedJourneySnapshot(listOf(journey), confirmedTrips = listOf(current.value))),
+                false, true, null, {}, {}, {}, { _, _ -> }, {}, {},
+            )
+        } }
+        text("Driver: Morgan Driver").assertIsDisplayed()
+        compose.runOnIdle { current.value = trip.copy(driverDisplayName = null) }
+        compose.onAllNodesWithText("Driver: Morgan Driver").assertCountEquals(0)
+        text("Rider").assertIsDisplayed()
+        listOf(journey.driverUid, request.riderUid).forEach {
+            compose.onAllNodesWithText(it, substring = true).assertCountEquals(0)
+        }
+    }
     private fun content(
         snapshot: ConnectedJourneySnapshot,
         uid: String = request.riderUid,
@@ -28,6 +46,7 @@ class ConnectedTripDetailsScreenUiTest {
         journey.id,
         connectedHomeJourneys(snapshot, uid, now),
         connectedTripsContent(snapshot, uid, now),
+        now,
     )
     private fun text(label: String): SemanticsNodeInteraction {
         compose.onNodeWithTag("connected-trip-details-list").performScrollToNode(hasText(label))
@@ -43,12 +62,41 @@ class ConnectedTripDetailsScreenUiTest {
             ConnectedTripDetailsScreen(content(ConnectedJourneySnapshot(listOf(journey))), busy.value, enabled.value, null,
                 {}, { refreshes++ }, { calls += it; busy.value = true }, { _, _ -> error("No request") }, {}, {})
         } }
+        text("Journey open").assertIsDisplayed()
         text("Request one seat").performClick().assertIsNotEnabled().performClick()
         text("Refresh").assertIsNotEnabled()
         compose.runOnIdle { assertEquals(listOf(journey.id), calls); busy.value = false; enabled.value = false }
         text("Request one seat").assertIsNotEnabled()
         text("Refresh").performClick()
         compose.runOnIdle { assertEquals(1, refreshes) }
+    }
+
+    @Test fun unrequestedAvailabilityShowsFullDepartedAndCancelledWithoutOpenOrRequestAction() {
+        val current = mutableStateOf(journey.copy(seatsRemaining = 0))
+        val now = mutableStateOf(0L)
+        compose.setContent { RydeTheme {
+            ConnectedTripDetailsScreen(
+                content(ConnectedJourneySnapshot(listOf(current.value)), now = now.value),
+                false, true, null, {}, {}, { error("Unavailable") }, { _, _ -> }, {}, {},
+            )
+        } }
+
+        text("Journey full").assertIsDisplayed()
+        compose.onAllNodesWithText("Journey open").assertCountEquals(0)
+        compose.onAllNodesWithText("Request one seat").assertCountEquals(0)
+
+        compose.runOnIdle {
+            current.value = journey
+            now.value = journey.departureEpochMillis
+        }
+        text("Departure has passed").assertIsDisplayed()
+        compose.onAllNodesWithText("Journey open").assertCountEquals(0)
+        compose.onAllNodesWithText("Request one seat").assertCountEquals(0)
+
+        compose.runOnIdle { current.value = journey.copy(status = ConnectedJourneyStatus.CANCELLED) }
+        text("Journey cancelled").assertIsDisplayed()
+        compose.onAllNodesWithText("Journey open").assertCountEquals(0)
+        compose.onAllNodesWithText("Request one seat").assertCountEquals(0)
     }
 
     @Test fun riderStatusesExposeOnlyValidPendingWithdrawalAndPreserveHistory() {
@@ -197,6 +245,7 @@ class ConnectedTripDetailsScreenUiTest {
             )
         } }
         text("Departure has passed").assertIsDisplayed()
+        text("Driver: Morgan Driver").assertIsDisplayed()
         text("${journey.originArea} \u2192 ${journey.destinationArea}").assertIsDisplayed()
         compose.onNodeWithText("2099", substring = true).assertIsDisplayed()
         compose.onAllNodesWithText("Your seat is confirmed").assertCountEquals(0)

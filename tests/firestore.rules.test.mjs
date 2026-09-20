@@ -115,8 +115,13 @@ const confirmedTrip = (requestId, requestData, journeyData, overrides = {}) => (
   destinationArea: journeyData.destinationArea,
   departureAt: journeyData.departureAt,
   status: "CONFIRMED",
+  driverDisplayName: displayNameFor(requestData.driverUid),
   ...overrides,
 });
+const legacyConfirmedTrip = (requestId, requestData, journeyData, overrides = {}) => {
+  const { driverDisplayName: ignored, ...legacy } = confirmedTrip(requestId, requestData, journeyData, overrides);
+  return legacy;
+};
 
 const createJourney = (
   db,
@@ -227,6 +232,24 @@ async function acceptedCancellationFixture(seats = 2) {
   await assertSucceeds(acceptRequest(driver, "j1", "j1_rider", seats - 1, 1));
   return { driver, rider };
 }
+
+test("legacy confirmed trips remain participant private and cancellable", async () => {
+  const { driver, rider } = await acceptedCancellationFixture();
+  await environment.withSecurityRulesDisabled(async (context) => {
+    const adminTrip = doc(context.firestore(), "confirmedTrips/j1_rider");
+    const current = (await getDoc(adminTrip)).data();
+    const { driverDisplayName: ignored, ...legacy } = current;
+    await setDoc(adminTrip, legacy);
+  });
+
+  const legacy = await assertSucceeds(getDoc(doc(rider, "confirmedTrips/j1_rider")));
+  assert.equal("driverDisplayName" in legacy.data(), false);
+  await assertSucceeds(cancelConfirmedLikeGateway(rider, "j1", "j1_rider"));
+  const cancelled = (await getDoc(doc(rider, "confirmedTrips/j1_rider"))).data();
+  assert.equal(cancelled.status, "CANCELLED_BY_RIDER");
+  assert.equal("driverDisplayName" in cancelled, false);
+  assert.deepEqual((await getDoc(doc(driver, "confirmedTrips/j1_rider"))).data(), cancelled);
+});
 
 test("rider releases exactly one allocation and both participants retain private cancelled history", async () => {
   const { driver, rider } = await acceptedCancellationFixture(1);
@@ -969,6 +992,8 @@ test("confirmed trip is created once and remains private and immutable", async (
   assert.deepEqual(driverTrip.data(), riderTrip.data());
   assert.equal(driverTrip.data().acceptedRequestId, "j1_rider");
   assert.equal(driverTrip.data().status, "CONFIRMED");
+  assert.equal(driverTrip.data().driverDisplayName, "User driver");
+  await assertFails(getDoc(doc(rider, "users/driver")));
   assert.equal(
     (await assertSucceeds(getDocs(query(
       collection(driver, "confirmedTrips"),
@@ -1036,6 +1061,9 @@ test("confirmed trip exact identifiers participants route departure status and f
     { overrides: { riderUid: "stranger" } },
     { overrides: { originArea: "Derby" } },
     { overrides: { status: "PENDING" } },
+    { overrides: { driverDisplayName: "Forged Driver" } },
+    { overrides: { driverDisplayName: "\u0007" } },
+    { legacy: true, overrides: {} },
     { overrides: { forged: true } },
   ];
 
@@ -1053,7 +1081,9 @@ test("confirmed trip exact identifiers participants route departure status and f
       sourceJourney,
     ));
     await assertSucceeds(setDoc(doc(rider, `seatRequests/${requestId}`), sourceRequest));
-    const invalidTrip = confirmedTrip(requestId, sourceRequest, sourceJourney, invalid.overrides);
+    const invalidTrip = invalid.legacy
+      ? legacyConfirmedTrip(requestId, sourceRequest, sourceJourney, invalid.overrides)
+      : confirmedTrip(requestId, sourceRequest, sourceJourney, invalid.overrides);
     await assertFails(acceptanceBatch(
       driver,
       journeyId,
@@ -1080,6 +1110,31 @@ test("confirmed trip exact identifiers participants route departure status and f
     confirmedTrip(requestId, sourceRequest, sourceJourney, {
       departureAt: Timestamp.fromMillis(sourceJourney.departureAt.toMillis() + 1_000),
     }),
+  ));
+
+  const missingProfileJourneyId = "missing-driver-profile";
+  const missingProfileRequestId = `${missingProfileJourneyId}_rider`;
+  const missingProfileJourney = journey("driver", 1);
+  const missingProfileRequest = request(missingProfileJourneyId, "driver", "rider");
+  await assertSucceeds(createJourney(
+    driver,
+    missingProfileJourneyId,
+    "driver",
+    1,
+    guard("driver"),
+    missingProfileJourney,
+  ));
+  await assertSucceeds(setDoc(doc(rider, `seatRequests/${missingProfileRequestId}`), missingProfileRequest));
+  await environment.withSecurityRulesDisabled(async (context) => {
+    await deleteDoc(doc(context.firestore(), "users/driver"));
+  });
+  await assertFails(acceptanceBatch(
+    driver,
+    missingProfileJourneyId,
+    missingProfileRequestId,
+    0,
+    1,
+    confirmedTrip(missingProfileRequestId, missingProfileRequest, missingProfileJourney),
   ));
 });
 

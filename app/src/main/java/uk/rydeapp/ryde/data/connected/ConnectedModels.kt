@@ -113,6 +113,8 @@ data class ConnectedConfirmedTrip(
     val departureEpochMillis: Long,
     val status: ConnectedTripStatus,
     val cancelledAtEpochMillis: Long? = null,
+    /** Immutable acceptance-time snapshot; null only for legacy records. */
+    val driverDisplayName: String? = null,
 )
 
 data class ConnectedJourneyAcceptanceGuard(
@@ -182,7 +184,7 @@ object FirestoreJourneyMapper {
     private val legacyRequestFields = setOf("journeyId", "driverUid", "riderUid", "status")
     private val requestFields = legacyRequestFields + "riderDisplayName"
     private val acceptanceGuardFields = setOf("driverUid", "acceptanceCount", "lastAcceptedRequestId")
-    private val confirmedTripFields = setOf(
+    private val legacyConfirmedTripFields = setOf(
         "journeyId",
         "acceptedRequestId",
         "driverUid",
@@ -192,6 +194,7 @@ object FirestoreJourneyMapper {
         "departureAt",
         "status",
     )
+    private val confirmedTripFields = legacyConfirmedTripFields + "driverDisplayName"
 
     fun journeyData(driverUid: String, draft: ConnectedJourneyDraft): Map<String, Any> = mapOf(
         "driverUid" to driverUid,
@@ -224,6 +227,7 @@ object FirestoreJourneyMapper {
     fun confirmedTripData(
         journey: ConnectedJourney,
         request: ConnectedSeatRequest,
+        driverDisplayName: String,
     ): Map<String, Any> = mapOf(
         "journeyId" to journey.id,
         "acceptedRequestId" to request.id,
@@ -233,6 +237,7 @@ object FirestoreJourneyMapper {
         "destinationArea" to journey.destinationArea,
         "departureAt" to journey.departureEpochMillis.toTimestamp(),
         "status" to ConnectedTripStatus.CONFIRMED.name,
+        "driverDisplayName" to driverDisplayName,
     )
 
     fun journey(id: String, data: Map<String, Any?>): ConnectedJourney? {
@@ -288,8 +293,12 @@ object FirestoreJourneyMapper {
         val status = runCatching {
             ConnectedTripStatus.valueOf(data["status"] as? String ?: return null)
         }.getOrNull() ?: return null
-        val expectedFields = if (status == ConnectedTripStatus.CANCELLED_BY_RIDER) confirmedTripFields + "cancelledAt" else confirmedTripFields
+        val baseFields = if ("driverDisplayName" in data) confirmedTripFields else legacyConfirmedTripFields
+        val expectedFields = if (status == ConnectedTripStatus.CANCELLED_BY_RIDER) baseFields + "cancelledAt" else baseFields
         if (data.keys != expectedFields) return null
+        val driverDisplayName = if ("driverDisplayName" in data) {
+            (data["driverDisplayName"] as? String)?.takeIf(::isSafeDisplayName) ?: return null
+        } else null
         val cancelledAt = if (status == ConnectedTripStatus.CANCELLED_BY_RIDER) {
             (data["cancelledAt"] as? Timestamp)?.toDate()?.time ?: return null
         } else null
@@ -304,6 +313,7 @@ object FirestoreJourneyMapper {
             departureEpochMillis = (data["departureAt"] as? Timestamp)?.toDate()?.time ?: return null,
             status = status,
             cancelledAtEpochMillis = cancelledAt,
+            driverDisplayName = driverDisplayName,
         ).takeIf {
             it.id == it.acceptedRequestId &&
                 it.acceptedRequestId == "${it.journeyId}_${it.riderUid}" &&

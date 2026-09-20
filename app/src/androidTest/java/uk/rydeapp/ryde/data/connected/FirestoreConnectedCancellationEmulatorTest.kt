@@ -55,6 +55,16 @@ class FirestoreConnectedCancellationEmulatorTest {
                 driverDb.collection("users").document(riderUid).get(Source.SERVER).await()
             }.isSuccess)
             driver.decide(driverUid, requestId, true)
+            val accepted = rider.load(riderUid).confirmedTrips.single()
+            assertEquals("Driver Label", accepted.driverDisplayName)
+            assertFalse(runCatching {
+                riderDb.collection("users").document(driverUid).get(Source.SERVER).await()
+            }.isSuccess)
+            FirestoreConnectedProfileStore(driverDb).save(
+                driverUid,
+                ConnectedProfileDraft("Renamed Driver", "Mansfield", "Nottingham"),
+            )
+            assertEquals("Driver Label", rider.load(riderUid).confirmedTrips.single().driverDisplayName)
             val guardRef = riderDb.collection("journeyAcceptanceGuards").document(journey.id)
             val denied = runCatching { guardRef.get(Source.SERVER).await() }.exceptionOrNull()
             assertTrue(denied is FirebaseFirestoreException)
@@ -64,6 +74,7 @@ class FirestoreConnectedCancellationEmulatorTest {
             val cancelled = rider.load(riderUid)
             val trip = cancelled.confirmedTrips.single()
             assertEquals(ConnectedTripStatus.CANCELLED_BY_RIDER, trip.status)
+            assertEquals("Driver Label", trip.driverDisplayName)
             assertTrue(trip.cancelledAtEpochMillis != null)
             assertEquals(ConnectedRequestStatus.CANCELLED_AFTER_ACCEPTANCE, cancelled.requests.single().status)
             assertEquals(1, cancelled.journeys.single { it.id == journey.id }.seatsRemaining)
@@ -97,6 +108,7 @@ class FirestoreConnectedCancellationEmulatorTest {
             assertEquals(trip, rider.load(riderUid).confirmedTrips.single())
             assertEquals(ConnectedTripLifecycle.CANCELLED_BY_RIDER, ConnectedJourneyLifecycle.trip(trip, closed))
             val otherConfirmed = other.load(otherUid).confirmedTrips.single()
+            assertEquals("Renamed Driver", otherConfirmed.driverDisplayName)
             assertEquals(ConnectedTripStatus.CONFIRMED, otherConfirmed.status)
             assertEquals(ConnectedTripLifecycle.CANCELLED_BY_DRIVER, ConnectedJourneyLifecycle.trip(otherConfirmed, closed))
             assertFalse(runCatching { other.cancelConfirmedSeat(otherUid, otherConfirmed.id) }.isSuccess)

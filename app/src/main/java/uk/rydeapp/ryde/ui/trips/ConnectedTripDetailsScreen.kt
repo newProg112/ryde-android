@@ -10,7 +10,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.dp
 import uk.rydeapp.ryde.R
-import uk.rydeapp.ryde.data.connected.ConnectedJourneyStatus
 import uk.rydeapp.ryde.ui.components.formatConnectedJourneyDeparture
 
 /** Displays shared repository presentation and forwards commands; owns only transient confirmations. */
@@ -72,12 +71,14 @@ internal fun ConnectedTripDetailsScreen(
             departure?.let { Text(formatConnectedJourneyDeparture(it)) }
             if (summary != null) {
                 Text(stringResource(summary.roleText))
+                summary.driverDisplayName?.takeIf { summary.roleText == R.string.connected_trips_rider }?.let {
+                    Text(stringResource(R.string.connected_trips_driver_name, it))
+                }
                 Text(stringResource(summary.statusText), color = MaterialTheme.colorScheme.primary)
                 summary.journeyStatusText?.let { Text(stringResource(it)) }
             } else if (journey != null) {
                 Text(stringResource(R.string.connected_trips_rider))
-                Text(stringResource(if (journey.status == ConnectedJourneyStatus.CANCELLED)
-                    R.string.connected_trips_offer_cancelled else R.string.connected_trips_offer_open))
+                content.unrequestedStatusText?.let { Text(stringResource(it)) }
                 Text(stringResource(R.string.connected_trip_details_no_request))
             }
             journey?.let { Text(stringResource(R.string.connected_seats, it.seatsRemaining, it.seatCapacity)) }
