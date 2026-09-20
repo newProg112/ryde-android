@@ -7,7 +7,7 @@ import {
   initializeTestEnvironment,
 } from "@firebase/rules-unit-testing";
 import {
-  Timestamp, collection, deleteDoc, doc, getDoc, getDocs, increment, query, runTransaction, serverTimestamp, setDoc, updateDoc, where, writeBatch,
+  Timestamp, collection, deleteDoc, doc, getDoc, getDocs, increment, limitToLast, orderBy, query, runTransaction, serverTimestamp, setDoc, updateDoc, where, writeBatch,
 } from "firebase/firestore";
 import { deleteApp, initializeApp } from "firebase/app";
 import {
@@ -122,6 +122,25 @@ const legacyConfirmedTrip = (requestId, requestData, journeyData, overrides = {}
   const { driverDisplayName: ignored, ...legacy } = confirmedTrip(requestId, requestData, journeyData, overrides);
   return legacy;
 };
+
+const seedConversation = async (tripOverrides = {}, journeyOverrides = {}) => {
+  await environment.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    const sourceJourney = { ...journey("driver", 2), ...journeyOverrides };
+    const sourceRequest = request("messages", "driver", "rider", "ACCEPTED");
+    await setDoc(doc(db, "journeys/messages"), sourceJourney);
+    await setDoc(
+      doc(db, "confirmedTrips/messages_rider"),
+      confirmedTrip("messages_rider", sourceRequest, sourceJourney, tripOverrides),
+    );
+  });
+};
+
+const message = (senderUid, body = "I'm outside the station.") => ({
+  senderUid,
+  body,
+  sentAt: serverTimestamp(),
+});
 
 const createJourney = (
   db,
@@ -1299,4 +1318,177 @@ test("the expected successful reads return documents", async () => {
   await assertSucceeds(setDoc(doc(db, "users/alex"), profile("alex")));
   const result = await assertSucceeds(getDoc(doc(db, "users/alex")));
   assert.equal(result.data().displayName, "Alex");
+});
+
+test("confirmed-trip participants can create and read bounded message history", async () => {
+  await seedConversation();
+  const driver = environment.authenticatedContext("driver").firestore();
+  const rider = environment.authenticatedContext("rider").firestore();
+  await assertSucceeds(setDoc(
+    doc(driver, "confirmedTrips/messages_rider/messages/driver-message"),
+    message("driver"),
+  ));
+  await assertSucceeds(setDoc(
+    doc(rider, "confirmedTrips/messages_rider/messages/rider-message"),
+    message("rider", "I'm here."),
+  ));
+  const history = query(
+    collection(rider, "confirmedTrips/messages_rider/messages"),
+    orderBy("sentAt"),
+    limitToLast(100),
+  );
+  assert.equal((await assertSucceeds(getDocs(history))).size, 2);
+  await assertSucceeds(getDoc(doc(driver, "confirmedTrips/messages_rider/messages/rider-message")));
+});
+
+test("message history and creation deny strangers and unauthenticated callers", async () => {
+  await seedConversation();
+  const driver = environment.authenticatedContext("driver").firestore();
+  const stranger = environment.authenticatedContext("stranger").firestore();
+  const anonymous = environment.unauthenticatedContext().firestore();
+  await assertSucceeds(setDoc(
+    doc(driver, "confirmedTrips/messages_rider/messages/seed"),
+    message("driver"),
+  ));
+  for (const db of [stranger, anonymous]) {
+    await assertFails(getDoc(doc(db, "confirmedTrips/messages_rider/messages/seed")));
+    await assertFails(getDocs(collection(db, "confirmedTrips/messages_rider/messages")));
+    await assertFails(setDoc(
+      doc(db, "confirmedTrips/messages_rider/messages/forged"),
+      message(db === stranger ? "stranger" : "anonymous"),
+    ));
+  }
+});
+
+test("message create enforces sender exact fields body timestamp and opaque id", async () => {
+  await seedConversation();
+  const rider = environment.authenticatedContext("rider").firestore();
+  const basePath = "confirmedTrips/messages_rider/messages";
+  const invalid = [
+    ["spoof", message("driver")],
+    ["missing", { senderUid: "rider", body: "Hello" }],
+    ["extra", { ...message("rider"), extra: true }],
+    ["blank", message("rider", "   ")],
+    ["oversized", message("rider", "x".repeat(501))],
+    ["control", message("rider", "hello\u0007")],
+    ["timestamp", { senderUid: "rider", body: "Hello", sentAt: Timestamp.fromMillis(1) }],
+  ];
+  for (const [id, data] of invalid) {
+    await assertFails(setDoc(doc(rider, `${basePath}/${id}`), data));
+  }
+  await assertFails(setDoc(doc(rider, `${basePath}/invalid.id`), message("rider")));
+  await assertSucceeds(setDoc(doc(rider, `${basePath}/valid_id-1`), message("rider", "Five minutes late.")));
+});
+
+test("messages are immutable and cannot be replayed across another trip", async () => {
+  await seedConversation();
+  const rider = environment.authenticatedContext("rider").firestore();
+  const other = environment.authenticatedContext("other").firestore();
+  await assertSucceeds(setDoc(
+    doc(rider, "confirmedTrips/messages_rider/messages/immutable"),
+    message("rider"),
+  ));
+  await assertFails(updateDoc(
+    doc(rider, "confirmedTrips/messages_rider/messages/immutable"),
+    { body: "Changed" },
+  ));
+  await assertFails(deleteDoc(doc(rider, "confirmedTrips/messages_rider/messages/immutable")));
+
+  await environment.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    const sourceJourney = journey("driver", 1);
+    await setDoc(doc(db, "journeys/other-trip"), sourceJourney);
+    await setDoc(
+      doc(db, "confirmedTrips/other-trip_other"),
+      confirmedTrip(
+        "other-trip_other",
+        request("other-trip", "driver", "other", "ACCEPTED"),
+        sourceJourney,
+      ),
+    );
+  });
+  await assertFails(setDoc(
+    doc(rider, "confirmedTrips/other-trip_other/messages/cross-trip"),
+    message("rider"),
+  ));
+  await assertSucceeds(setDoc(
+    doc(other, "confirmedTrips/other-trip_other/messages/own-trip"),
+    message("other"),
+  ));
+});
+
+test("cancellation blocks creates while preserving participant history", async () => {
+  await seedConversation();
+  const driver = environment.authenticatedContext("driver").firestore();
+  const rider = environment.authenticatedContext("rider").firestore();
+  const path = "confirmedTrips/messages_rider/messages";
+  await assertSucceeds(setDoc(doc(driver, `${path}/before`), message("driver")));
+
+  await environment.withSecurityRulesDisabled(async (context) => {
+    await updateDoc(doc(context.firestore(), "confirmedTrips/messages_rider"), {
+      status: "CANCELLED_BY_RIDER",
+      cancelledAt: Timestamp.now(),
+    });
+  });
+  await assertFails(setDoc(doc(rider, `${path}/after-rider-cancel`), message("rider")));
+  await assertSucceeds(getDoc(doc(rider, `${path}/before`)));
+
+  await environment.clearFirestore();
+  await seedConversation();
+  await environment.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), `${path}/before`), {
+      senderUid: "rider", body: "Earlier", sentAt: Timestamp.now(),
+    });
+  });
+  await environment.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await updateDoc(doc(db, "journeys/messages"), {
+      status: "CANCELLED",
+      cancelledAt: Timestamp.now(),
+    });
+  });
+  await assertFails(setDoc(doc(driver, `${path}/after-driver-cancel`), message("driver")));
+  await assertSucceeds(getDoc(doc(driver, `${path}/before`)));
+});
+
+test("missing mismatched and malformed linkage fail closed for send but valid history remains readable", async () => {
+  const rider = environment.authenticatedContext("rider").firestore();
+  const path = "confirmedTrips/messages_rider/messages";
+  for (const [name, mutate] of [
+    ["missing", async (db) => deleteDoc(doc(db, "journeys/messages"))],
+    ["mismatch", async (db) => updateDoc(doc(db, "journeys/messages"), { originArea: "Derby" })],
+  ]) {
+    await seedConversation();
+    await environment.withSecurityRulesDisabled(async (context) => {
+      const db = context.firestore();
+      await setDoc(doc(db, `${path}/history-${name}`), {
+        senderUid: "driver", body: "Earlier", sentAt: Timestamp.now(),
+      });
+      await mutate(db);
+    });
+    await assertSucceeds(getDoc(doc(rider, `${path}/history-${name}`)));
+    await assertFails(setDoc(doc(rider, `${path}/send-${name}`), message("rider")));
+    await environment.clearFirestore();
+  }
+
+  await seedConversation({ acceptedRequestId: "wrong" });
+  await environment.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), `${path}/malformed-history`), {
+      senderUid: "driver", body: "Earlier", sentAt: Timestamp.now(),
+    });
+  });
+  await assertFails(getDoc(doc(rider, `${path}/malformed-history`)));
+  await assertFails(setDoc(doc(rider, `${path}/malformed-send`), message("rider")));
+});
+
+test("an OPEN journey permits coordination at and after departure", async () => {
+  const rider = environment.authenticatedContext("rider").firestore();
+  for (const departureAt of [Timestamp.now(), Timestamp.fromMillis(Date.now() - 60_000)]) {
+    await seedConversation({}, { departureAt });
+    await assertSucceeds(setDoc(
+      doc(rider, `confirmedTrips/messages_rider/messages/departure-${departureAt.toMillis()}`),
+      message("rider"),
+    ));
+    await environment.clearFirestore();
+  }
 });

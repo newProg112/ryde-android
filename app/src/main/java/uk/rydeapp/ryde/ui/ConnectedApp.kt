@@ -39,6 +39,8 @@ import uk.rydeapp.ryde.ui.find.ConnectedFindScreen
 import uk.rydeapp.ryde.ui.home.ConnectedHomeScreen
 import uk.rydeapp.ryde.ui.home.connectedHomeJourneys
 import uk.rydeapp.ryde.ui.trips.ConnectedTripsScreen
+import uk.rydeapp.ryde.ui.trips.ConnectedConversationRoute
+import uk.rydeapp.ryde.ui.trips.ConnectedMessageTarget
 import uk.rydeapp.ryde.ui.trips.ConnectedTripDetailsScreen
 import uk.rydeapp.ryde.ui.trips.connectedTripDetailsContent
 import uk.rydeapp.ryde.ui.trips.connectedTripsContent
@@ -49,6 +51,8 @@ private data class ConnectedNavigation(
     val destination: RydeDestination = RydeDestination.HOME,
     val labSection: ConnectedJourneySection? = null,
     val detailJourneyId: String? = null,
+    val conversationTripId: String? = null,
+    val conversationName: String? = null,
 )
 
 /** The only new connected repository observation/command boundary; tabs receive data and callbacks. */
@@ -66,14 +70,19 @@ internal fun ConnectedReadyApp(
     // Include the owner in saved values: rememberSaveable inputs alone do not validate restored state.
     val navigationSaver = remember(session.accountId) {
         listSaver<ConnectedNavigation, String>(
-            save = { listOf(session.accountId, it.destination.name, it.labSection?.name.orEmpty(), it.detailJourneyId.orEmpty()) },
+            save = { listOf(session.accountId, it.destination.name, it.labSection?.name.orEmpty(), it.detailJourneyId.orEmpty(), it.conversationTripId.orEmpty(), it.conversationName.orEmpty()) },
             restore = {
                 if (it[0] != session.accountId) ConnectedNavigation()
-                else ConnectedNavigation(
-                    RydeDestination.valueOf(it[1]),
-                    it[2].takeIf(String::isNotEmpty)?.let(ConnectedJourneySection::valueOf),
-                    it.getOrNull(3)?.takeIf { id -> id.isNotBlank() && it[2].isEmpty() },
-                )
+                else {
+                    val detail = it.getOrNull(3)?.takeIf { id -> id.isNotBlank() && it[2].isEmpty() }
+                    ConnectedNavigation(
+                        RydeDestination.valueOf(it[1]),
+                        it[2].takeIf(String::isNotEmpty)?.let(ConnectedJourneySection::valueOf),
+                        detail,
+                        it.getOrNull(4)?.takeIf { id -> id.isNotBlank() && detail != null },
+                        it.getOrNull(5)?.takeIf(String::isNotBlank),
+                    )
+                }
             },
         )
     }
@@ -122,15 +131,17 @@ internal fun ConnectedReadyApp(
         }
     }
     val openLab: (ConnectedJourneySection) -> Unit = { section ->
-        if (!busy) navigation = navigation.copy(labSection = section, detailJourneyId = null)
+        if (!busy) navigation = navigation.copy(labSection = section, detailJourneyId = null, conversationTripId = null, conversationName = null)
     }
     val closeLab: () -> Unit = {
         if (!busy && !labBusy) navigation = navigation.copy(labSection = null)
     }
     val labSection = navigation.labSection
     BackHandler(enabled = labSection != null, onBack = closeLab)
-    val closeDetails: () -> Unit = { navigation = navigation.copy(detailJourneyId = null) }
-    BackHandler(enabled = labSection == null && navigation.detailJourneyId != null, onBack = closeDetails)
+    val closeDetails: () -> Unit = { navigation = navigation.copy(detailJourneyId = null, conversationTripId = null, conversationName = null) }
+    val closeConversation: () -> Unit = { navigation = navigation.copy(conversationTripId = null, conversationName = null) }
+    BackHandler(enabled = labSection == null && navigation.conversationTripId != null, onBack = closeConversation)
+    BackHandler(enabled = labSection == null && navigation.detailJourneyId != null && navigation.conversationTripId == null, onBack = closeDetails)
     if (labSection != null) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
             TextButton(onClick = closeLab, enabled = !busy && !labBusy) {
@@ -250,10 +261,30 @@ internal fun ConnectedReadyApp(
         }
     }
     val openJourney: (String) -> Unit = { id ->
-        if (id.isNotBlank()) navigation = navigation.copy(detailJourneyId = id, labSection = null)
+        if (id.isNotBlank()) navigation = navigation.copy(detailJourneyId = id, labSection = null, conversationTripId = null, conversationName = null)
     }
-    RydeShell(navigation.destination, { navigation = navigation.copy(destination = it, detailJourneyId = null) }) { padding ->
+    val openMessages: (ConnectedMessageTarget) -> Unit = { target ->
+        if (target.tripId.isNotBlank() && navigation.detailJourneyId != null) {
+            navigation = navigation.copy(conversationTripId = target.tripId, conversationName = target.otherDisplayName)
+        }
+    }
+    RydeShell(navigation.destination, {
+        navigation = navigation.copy(destination = it, detailJourneyId = null, conversationTripId = null, conversationName = null)
+    }) { padding ->
         val detailJourneyId = navigation.detailJourneyId
+        val conversationTripId = navigation.conversationTripId
+        if (detailJourneyId != null && conversationTripId != null) {
+            androidx.compose.runtime.key("${session.accountId}:messages:$conversationTripId") {
+                ConnectedConversationRoute(
+                    accountId = session.accountId,
+                    target = ConnectedMessageTarget(conversationTripId, navigation.conversationName),
+                    repository = repository,
+                    onBack = closeConversation,
+                    modifier = Modifier.padding(padding),
+                )
+            }
+            return@RydeShell
+        }
         if (detailJourneyId != null) {
             tabStateHolder.SaveableStateProvider("${session.accountId}:details:$detailJourneyId") {
                 ConnectedTripDetailsScreen(
@@ -263,6 +294,7 @@ internal fun ConnectedReadyApp(
                     onBack = closeDetails, onRefresh = refresh, onRequestSeat = requestSeat,
                     onDecideRequest = decideRequest, onCancelSeat = cancelSeat, onCancelJourney = cancelJourney,
                     onWithdrawRequest = cancelRequest,
+                    onOpenMessages = openMessages,
                     modifier = Modifier.padding(padding),
                 )
             }

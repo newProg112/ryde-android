@@ -71,4 +71,30 @@ object ConnectedJourneyLifecycle {
 
     fun discoverable(journey: ConnectedJourney, uid: String, nowEpochMillis: Long): Boolean =
         journey.driverUid != uid && journey.status == ConnectedJourneyStatus.OPEN && journey.departureEpochMillis > nowEpochMillis
+
+    fun canReadMessages(trip: ConnectedConfirmedTrip, uid: String): Boolean =
+        validConfirmedTripIdentity(trip) && (trip.driverUid == uid || trip.riderUid == uid)
+
+    fun validConfirmedTripIdentity(trip: ConnectedConfirmedTrip): Boolean =
+        trip.id.isNotBlank() && trip.id == trip.acceptedRequestId &&
+            trip.acceptedRequestId == "${trip.journeyId}_${trip.riderUid}" &&
+            trip.driverUid.isNotBlank() && trip.riderUid.isNotBlank() && trip.driverUid != trip.riderUid &&
+            ConnectedJourneyValidator.isBroadArea(trip.originArea) &&
+            ConnectedJourneyValidator.isBroadArea(trip.destinationArea) &&
+            !trip.originArea.equals(trip.destinationArea, ignoreCase = true)
+
+    /** Departure passing is presentation truth, not proof that real-world coordination has ended. */
+    fun canSendMessages(
+        trip: ConnectedConfirmedTrip,
+        journey: ConnectedJourney?,
+        uid: String,
+    ): Boolean = canReadMessages(trip, uid) &&
+        trip.status == ConnectedTripStatus.CONFIRMED &&
+        coordinationJourneyMatches(trip, journey) &&
+        journey?.status == ConnectedJourneyStatus.OPEN
+
+    fun coordinationJourneyMatches(trip: ConnectedConfirmedTrip, journey: ConnectedJourney?): Boolean =
+        journey != null && journey.id == trip.journeyId && journey.driverUid == trip.driverUid &&
+            journey.originArea == trip.originArea && journey.destinationArea == trip.destinationArea &&
+            journey.departureEpochMillis == trip.departureEpochMillis
 }

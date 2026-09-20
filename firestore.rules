@@ -18,7 +18,8 @@ service cloud.firestore {
       return value is string
         && value.size() > 0
         && value.size() <= 60
-        && !value.matches('.*[0-9,].*');
+        && !value.matches('.*[0-9,].*')
+        && !value.matches('.*[\\x00-\\x1F\\x7F-\\x9F].*');
     }
 
     function signedIn() {
@@ -43,6 +44,18 @@ service cloud.firestore {
 
     function confirmedTripPath(tripId) {
       return /databases/$(database)/documents/confirmedTrips/$(tripId);
+    }
+
+    function validMessage(data) {
+      return data.keys().hasOnly(['senderUid', 'body', 'sentAt'])
+        && data.keys().hasAll(['senderUid', 'body', 'sentAt'])
+        && data.senderUid is string
+        && data.body is string
+        && data.body.size() > 0
+        && data.body.size() <= 500
+        && data.body.matches('.*[^\\s].*')
+        && !data.body.matches('.*[\\x00-\\x1F\\x7F-\\x9F].*')
+        && data.sentAt is timestamp;
     }
 
     function validJourney(data) {
@@ -113,6 +126,37 @@ service cloud.firestore {
         && data.departureAt is timestamp
         && ((data.status == 'CONFIRMED' && !('cancelledAt' in data))
           || (data.status == 'CANCELLED_BY_RIDER' && data.cancelledAt is timestamp));
+    }
+
+    function validConfirmedTripIdentity(tripId, trip) {
+      return validConfirmedTrip(trip)
+        && tripId.size() > 0
+        && trip.journeyId.size() > 0
+        && trip.acceptedRequestId.size() > 0
+        && trip.driverUid.size() > 0
+        && trip.riderUid.size() > 0
+        && tripId == trip.acceptedRequestId
+        && trip.acceptedRequestId == trip.journeyId + '_' + trip.riderUid;
+    }
+
+    function messageParticipant(tripId) {
+      let trip = get(confirmedTripPath(tripId)).data;
+      return signedIn()
+        && validConfirmedTripIdentity(tripId, trip)
+        && (trip.driverUid == request.auth.uid || trip.riderUid == request.auth.uid);
+    }
+
+    function coordinationIsActive(tripId) {
+      let trip = get(confirmedTripPath(tripId)).data;
+      let journey = get(journeyPath(trip.journeyId)).data;
+      return validConfirmedTripIdentity(tripId, trip)
+        && trip.status == 'CONFIRMED'
+        && validJourney(journey)
+        && journey.status == 'OPEN'
+        && journey.driverUid == trip.driverUid
+        && journey.originArea == trip.originArea
+        && journey.destinationArea == trip.destinationArea
+        && journey.departureAt == trip.departureAt;
     }
 
     function confirmedTripSnapshotMatchesDriverProfile(data) {
@@ -445,6 +489,19 @@ service cloud.firestore {
         && request.resource.data.status == 'CANCELLED_BY_RIDER'
         && riderCancelsConfirmedSeat(tripId);
       allow delete: if false;
+
+      match /messages/{messageId} {
+        // History remains available to the immutable trip participants even when
+        // the linked journey is cancelled, missing, or no longer coherent.
+        allow read: if messageParticipant(tripId);
+        allow create: if messageParticipant(tripId)
+          && messageId.matches('[A-Za-z0-9_-]{1,128}')
+          && validMessage(request.resource.data)
+          && request.resource.data.senderUid == request.auth.uid
+          && request.resource.data.sentAt == request.time
+          && coordinationIsActive(tripId);
+        allow update, delete: if false;
+      }
     }
 
     // Explicit default deny: all unmigrated capabilities remain inaccessible.

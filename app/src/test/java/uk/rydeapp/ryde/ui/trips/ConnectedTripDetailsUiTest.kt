@@ -8,9 +8,9 @@ import uk.rydeapp.ryde.ui.home.connectedHomeJourneys
 
 class ConnectedTripDetailsUiTest {
     private val journey = ConnectedJourney("journey", "driver", "Mansfield", "Sheffield", 1000, 3, 2)
-    private val request = ConnectedSeatRequest("request-id", journey.id, "driver", "rider",
+    private val request = ConnectedSeatRequest("journey_rider", journey.id, "driver", "rider",
         ConnectedRequestStatus.PENDING, "Riley Rider")
-    private val trip = ConnectedConfirmedTrip("trip-id", journey.id, request.id, "driver", "rider",
+    private val trip = ConnectedConfirmedTrip(request.id, journey.id, request.id, "driver", "rider",
         "Persisted area", "Sheffield", 1000, ConnectedTripStatus.CONFIRMED,
         driverDisplayName = "Morgan Driver")
     private fun details(snapshot: ConnectedJourneySnapshot, uid: String = "rider", id: String = journey.id, now: Long = 0) =
@@ -84,6 +84,17 @@ class ConnectedTripDetailsUiTest {
         assertEquals("Morgan Driver", cancelled.summary.driverDisplayName)
         assertNull(cancelled.summary.cancellableTripId)
         assertFalse(cancelled.canRequest)
+    }
+
+    @Test fun messageTargetsSurviveJourneyLossButMalformedTripIdentityFailsClosed() {
+        val snapshot = ConnectedJourneySnapshot(
+            emptyList(),
+            listOf(request.copy(status = ConnectedRequestStatus.ACCEPTED)),
+            listOf(trip),
+        )
+        assertEquals(trip.id, details(snapshot).summary?.messageTarget?.tripId)
+        assertNull(details(snapshot.copy(confirmedTrips = listOf(trip.copy(acceptedRequestId = "wrong"))))
+            .summary?.messageTarget)
     }
 
     @Test fun pastConfirmedDetailsRetainRouteAndHistoryWithoutCancellation() {

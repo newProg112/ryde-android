@@ -4,8 +4,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flow
 import uk.rydeapp.ryde.data.AccountCommandResult
 import uk.rydeapp.ryde.data.AccountSession
 import uk.rydeapp.ryde.data.AsyncState
@@ -23,6 +25,7 @@ class ConnectedRydeRepository(
     private val legacyCapabilities: RydeRepository = FakeRydeRepository(),
     private val firebaseOperationTimeoutMillis: Long = FIREBASE_OPERATION_TIMEOUT_MILLIS,
     private val journeys: ConnectedJourneyStore? = null,
+    private val coordination: ConnectedCoordinationStore? = null,
 ) : RydeRepository by legacyCapabilities {
     private val mutableSessionState = MutableStateFlow<AccountSession>(
         if (auth.currentUserId == null) AccountSession.SignedOut else AccountSession.Checking,
@@ -141,6 +144,66 @@ class ConnectedRydeRepository(
 
     suspend fun decideConnectedRequest(requestId: String, accept: Boolean): ConnectedJourneyCommandResult =
         journeyCommand { store, uid -> store.decide(uid, requestId, accept) }
+
+    fun observeConnectedConversation(tripId: String): Flow<ConnectedConversationState> = flow {
+        val store = coordination
+        val uid = auth.currentUserId
+        if (store == null || uid == null || !ConnectedMessagePolicy.validMessageId(tripId)) {
+            emit(ConnectedConversationState.Error(SAFE_COORDINATION_LOAD_ERROR))
+            return@flow
+        }
+        var previous: ConnectedConversation? = null
+        emit(ConnectedConversationState.Loading)
+        try {
+            store.observeConversation(uid, tripId).collect { snapshot ->
+                if (auth.currentUserId != uid) throw ConnectedCoordinationUnavailableException()
+                val canSend = ConnectedJourneyLifecycle.canSendMessages(snapshot.trip, snapshot.journey, uid)
+                val conversation = ConnectedConversation(
+                    trip = snapshot.trip,
+                    journey = snapshot.journey,
+                    messages = snapshot.messages,
+                    canSendMessages = canSend,
+                    readOnlyReason = if (canSend) null else snapshot.readOnlyReason(),
+                )
+                previous = conversation
+                emit(ConnectedConversationState.Data(conversation))
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Throwable) {
+            emit(ConnectedConversationState.Error(SAFE_COORDINATION_LOAD_ERROR, previous))
+        }
+    }
+
+    suspend fun sendConnectedMessage(
+        tripId: String,
+        messageId: String,
+        body: String,
+    ): ConnectedMessageCommandResult {
+        val validated = when (val result = ConnectedMessagePolicy.validate(body)) {
+            is ConnectedMessageValidationResult.Invalid -> return ConnectedMessageCommandResult.InvalidInput(result.userMessage)
+            is ConnectedMessageValidationResult.Valid -> result.body
+        }
+        if (!ConnectedMessagePolicy.validMessageId(messageId)) {
+            return ConnectedMessageCommandResult.Failure(SAFE_COORDINATION_SEND_ERROR)
+        }
+        val store = coordination ?: return ConnectedMessageCommandResult.Failure(SAFE_COORDINATION_SEND_ERROR)
+        val uid = auth.currentUserId ?: return ConnectedMessageCommandResult.ReadOnly(SAFE_COORDINATION_READ_ONLY)
+        return try {
+            firebaseCall { store.sendMessage(uid, tripId, messageId, validated) }
+            if (auth.currentUserId != uid) {
+                ConnectedMessageCommandResult.ReadOnly(SAFE_COORDINATION_READ_ONLY)
+            } else {
+                ConnectedMessageCommandResult.Success(messageId)
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: ConnectedCoordinationUnavailableException) {
+            ConnectedMessageCommandResult.ReadOnly(SAFE_COORDINATION_READ_ONLY)
+        } catch (_: Throwable) {
+            ConnectedMessageCommandResult.Failure(SAFE_COORDINATION_SEND_ERROR)
+        }
+    }
 
     override suspend fun refresh() {
         val uid = auth.currentUserId
@@ -269,7 +332,16 @@ class ConnectedRydeRepository(
         const val FIREBASE_OPERATION_TIMEOUT_MILLIS = 15_000L
         const val SAFE_ACCOUNT_ERROR = "Ryde couldn't complete that account request. Check the local emulators and try again."
         const val SAFE_JOURNEY_ERROR = "Ryde couldn't complete that journey request. Refresh and check the local emulators."
+        const val SAFE_COORDINATION_LOAD_ERROR = "Messages are unavailable right now. Try again."
+        const val SAFE_COORDINATION_SEND_ERROR = "Ryde couldn't send that message. Try again."
+        const val SAFE_COORDINATION_READ_ONLY = "This conversation is now read-only."
     }
+}
+
+private fun ConnectedConversationSnapshot.readOnlyReason(): ConnectedConversationReadOnlyReason = when {
+    trip.status == ConnectedTripStatus.CANCELLED_BY_RIDER -> ConnectedConversationReadOnlyReason.CANCELLED_BY_RIDER
+    journey?.status == ConnectedJourneyStatus.CANCELLED -> ConnectedConversationReadOnlyReason.CANCELLED_BY_DRIVER
+    else -> ConnectedConversationReadOnlyReason.UNAVAILABLE
 }
 
 private class FirebaseOperationTimedOutException : Exception()

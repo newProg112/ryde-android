@@ -5,6 +5,7 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.Source
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.flow.Flow
 import uk.rydeapp.ryde.domain.model.SavedPlace
 
 interface ConnectedAuthGateway {
@@ -28,6 +29,11 @@ interface ConnectedJourneyStore {
     suspend fun cancelConfirmedSeat(uid: String, tripId: String)
     suspend fun cancelJourney(uid: String, journeyId: String)
     suspend fun decide(uid: String, requestId: String, accept: Boolean)
+}
+
+interface ConnectedCoordinationStore {
+    fun observeConversation(uid: String, tripId: String): Flow<ConnectedConversationSnapshot>
+    suspend fun sendMessage(uid: String, tripId: String, messageId: String, body: String)
 }
 
 class FirebaseAuthGateway(private val auth: FirebaseAuth) : ConnectedAuthGateway {

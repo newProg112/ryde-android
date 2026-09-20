@@ -26,6 +26,7 @@ object FirebaseConnectedRepositoryFactory {
             auth = FirebaseAuthGateway(auth),
             profiles = FirestoreConnectedProfileStore(firestore),
             journeys = FirestoreConnectedJourneyStore(firestore),
+            coordination = FirestoreConnectedCoordinationStore(firestore),
         )
     }
 }

@@ -52,6 +52,50 @@ class ConnectedTripsUiTest {
         assertNull(content(t = listOf(trip.copy(driverDisplayName = null))).rider.single().driverDisplayName)
     }
 
+    @Test fun `rider messaging target exists only for a structurally valid confirmed trip`() {
+        val item = content(r = listOf(request.copy(status = ConnectedRequestStatus.ACCEPTED)), t = listOf(trip)).rider.single()
+        assertEquals(trip.id, item.messageTarget?.tripId)
+        assertEquals("Morgan Driver", item.messageTarget?.otherDisplayName)
+        assertNull(content(t = listOf(trip.copy(acceptedRequestId = "wrong"))).rider
+            .single { it.key == "trip:${trip.id}" }.messageTarget)
+        assertNull(content().rider.single().messageTarget)
+    }
+
+    @Test fun `driver gets one distinct conversation target per accepted rider only`() {
+        val second = ConnectedSeatRequest("offer_second-rider", journey.id, journey.driverUid,
+            "second-rider", ConnectedRequestStatus.ACCEPTED, "Second Rider")
+        val secondTrip = trip.copy(
+            id = second.id, acceptedRequestId = second.id, riderUid = second.riderUid,
+        )
+        val result = content(
+            r = listOf(request.copy(status = ConnectedRequestStatus.ACCEPTED), second),
+            t = listOf(trip, secondTrip),
+            uid = journey.driverUid,
+        ).driver.single().incoming
+        assertEquals(setOf(trip.id, secondTrip.id), result.mapNotNull { it.messageTarget?.tripId }.toSet())
+        assertEquals(setOf("Riley Rider", "Second Rider"), result.mapNotNull { it.messageTarget?.otherDisplayName }.toSet())
+
+        val ineligible = listOf(ConnectedRequestStatus.PENDING, ConnectedRequestStatus.DECLINED, ConnectedRequestStatus.CANCELLED)
+        ineligible.forEach { status ->
+            assertNull(content(r = listOf(request.copy(status = status)), uid = journey.driverUid)
+                .driver.single().incoming.single().messageTarget)
+        }
+    }
+
+    @Test fun `driver retains accepted conversation entry when linked journey disappears`() {
+        val result = content(
+            j = emptyList(),
+            r = listOf(request.copy(status = ConnectedRequestStatus.ACCEPTED)),
+            t = listOf(trip),
+            uid = journey.driverUid,
+        )
+        val historical = result.driver.single()
+        assertEquals(R.string.connected_trips_unavailable, historical.statusText)
+        assertEquals(journey.id, historical.journeyId)
+        assertEquals(trip.id, historical.incoming.single().messageTarget?.tripId)
+        assertTrue(result.unavailableIncoming.isEmpty())
+    }
+
     @Test fun `past confirmed trip and accepted driver row use truthful history and retain rider name`() {
         val accepted = request.copy(status = ConnectedRequestStatus.ACCEPTED)
         val rider = content(r = listOf(accepted), t = listOf(trip), now = 1000).rider.single()

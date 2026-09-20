@@ -6,6 +6,9 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.test.espresso.Espresso
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -25,6 +28,14 @@ class RydeAppNavigationUiTest {
     @get:Rule val compose = createComposeRule()
     private val auth = TestAuth()
     private val store = TestJourneys()
+    private val coordination = TestCoordination { tripId, messages ->
+        val trip = store.trips.single { it.id == tripId }
+        ConnectedConversationSnapshot(
+            trip,
+            store.journeys.firstOrNull { it.id == trip.journeyId },
+            messages,
+        )
+    }
     private var legacyCommands = 0
     private val legacy = object : RydeRepository by FakeRydeRepository() {
         override fun findRides(criteria: FindRideCriteria): Nothing = legacyCalled()
@@ -35,7 +46,9 @@ class RydeAppNavigationUiTest {
             error("Connected UI invoked a legacy command")
         }
     }
-    private val repository = ConnectedRydeRepository(auth, TestProfiles(), legacyCapabilities = legacy, journeys = store)
+    private val repository = ConnectedRydeRepository(
+        auth, TestProfiles(), legacyCapabilities = legacy, journeys = store, coordination = coordination,
+    )
 
     private fun launchConnected(currentTimeMillis: () -> Long = System::currentTimeMillis) {
         compose.setContent {
@@ -841,13 +854,19 @@ class RydeAppNavigationUiTest {
     }
 
     @Test
-    fun signOutClearsDetailsAndSigningBackIntoSameAccountStartsAtHome() {
+    fun signOutClearsConversationListenerAndSigningBackIntoSameAccountStartsAtHome() {
+        store.confirmSeat()
         launchConnected()
-        tab("Find").performClick()
+        tab("Trips").performClick()
         openDetails()
+        detailsText("Messages").performClick()
+        compose.onNodeWithTag("connected-conversation").assertIsDisplayed()
+        compose.runOnIdle { assertEquals(1, coordination.activeObservers) }
         compose.runOnIdle { runBlocking { repository.signOut() } }
         compose.onAllNodesWithText("Trip details").assertCountEquals(0)
+        compose.onAllNodesWithTag("connected-conversation").assertCountEquals(0)
         compose.onAllNodes(isSelectable()).assertCountEquals(0)
+        compose.runOnIdle { assertEquals(0, coordination.activeObservers) }
         compose.runOnIdle { runBlocking { auth.uid = "rider-private-uid"; repository.refresh() } }
         tab("Home").assertIsSelected()
         compose.onAllNodesWithText("Trip details").assertCountEquals(0)
@@ -874,6 +893,34 @@ class RydeAppNavigationUiTest {
             assertEquals(listOf("rider-private-uid" to "connected-offer_rider-private-uid"), store.cancelCalls)
             assertEquals(0, legacyCommands)
         }
+    }
+
+    @Test
+    fun messagesBackReturnsToSameDetailsAndTabChangeStopsScopedListener() {
+        store.confirmSeat()
+        launchConnected()
+        tab("Trips").performClick()
+        openDetails()
+        detailsText("Messages").performClick()
+        compose.onNodeWithText("Messages with Morgan").assertIsDisplayed()
+        compose.onNodeWithText("No messages yet. Send a short update to coordinate this trip.").assertIsDisplayed()
+        compose.runOnIdle { assertEquals(1, coordination.activeObservers) }
+
+        compose.onNodeWithText("Back").performClick()
+        compose.onNodeWithText("Trip details").assertIsDisplayed()
+        detailsText("Your seat is confirmed").assertIsDisplayed()
+        compose.runOnIdle { assertEquals(0, coordination.activeObservers) }
+
+        detailsText("Messages").performClick()
+        compose.runOnIdle {
+            coordination.messages += ConnectedMessage("remote", "driver-private-uid", "I'm outside.", 10)
+            coordination.notifyChanged()
+        }
+        compose.onNodeWithText("I'm outside.").assertIsDisplayed()
+        tab("Home").performClick()
+        compose.onNodeWithText("Hello, Taylor").assertIsDisplayed()
+        compose.onAllNodesWithTag("connected-conversation").assertCountEquals(0)
+        compose.runOnIdle { assertEquals(0, coordination.activeObservers) }
     }
 
     @Test
@@ -1016,6 +1063,38 @@ class RydeAppNavigationUiTest {
             listOf(SavedPlace("Home", "York"), SavedPlace("Work", "Wakefield")),
         )
         override suspend fun save(uid: String, draft: ConnectedProfileDraft) = Unit
+    }
+
+    private class TestCoordination(
+        private val snapshot: (String, List<ConnectedMessage>) -> ConnectedConversationSnapshot,
+    ) : ConnectedCoordinationStore {
+        val messages = mutableListOf<ConnectedMessage>()
+        private val changes = MutableSharedFlow<Unit>(extraBufferCapacity = 4)
+        var activeObservers = 0
+        private val sent = linkedMapOf<String, Pair<String, String>>()
+
+        fun notifyChanged() { changes.tryEmit(Unit) }
+
+        override fun observeConversation(uid: String, tripId: String): Flow<ConnectedConversationSnapshot> = flow {
+            activeObservers++
+            try {
+                emit(snapshot(tripId, messages.toList()))
+                changes.collect { emit(snapshot(tripId, messages.toList())) }
+            } finally {
+                activeObservers--
+            }
+        }
+
+        override suspend fun sendMessage(uid: String, tripId: String, messageId: String, body: String) {
+            val existing = sent[messageId]
+            if (existing != null) {
+                if (existing != uid to body) error("Message id conflict")
+                return
+            }
+            sent[messageId] = uid to body
+            messages += ConnectedMessage(messageId, uid, body, messages.size.toLong() + 1)
+            notifyChanged()
+        }
     }
 
     private class TestJourneys : ConnectedJourneyStore {

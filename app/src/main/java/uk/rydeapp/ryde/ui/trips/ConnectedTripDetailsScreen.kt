@@ -27,6 +27,7 @@ internal fun ConnectedTripDetailsScreen(
     onCancelJourney: (String) -> Unit,
     modifier: Modifier = Modifier,
     onWithdrawRequest: (String) -> Unit = {},
+    onOpenMessages: (ConnectedMessageTarget) -> Unit = {},
 ) {
     val summary = content.summary
     val journey = content.journey
@@ -82,6 +83,13 @@ internal fun ConnectedTripDetailsScreen(
                 Text(stringResource(R.string.connected_trip_details_no_request))
             }
             journey?.let { Text(stringResource(R.string.connected_seats, it.seatsRemaining, it.seatCapacity)) }
+            summary?.messageTarget?.let { target ->
+                Button(
+                    onClick = { onOpenMessages(target) },
+                    enabled = !busy,
+                    modifier = Modifier.testTag("details-messages:${target.tripId}"),
+                ) { Text(stringResource(R.string.connected_messages_action)) }
+            }
         }
         if (content.canRequest && journey != null) item {
             Button(enabled = !busy && actionsEnabled, onClick = { onRequestSeat(journey.id) }) {
@@ -104,6 +112,13 @@ internal fun ConnectedTripDetailsScreen(
                             onClick = { onDecideRequest(request.id, true) }) { Text(stringResource(R.string.connected_accept)) }
                         if (request.canDecline) OutlinedButton(enabled = !busy && actionsEnabled,
                             onClick = { onDecideRequest(request.id, false) }) { Text(stringResource(R.string.connected_decline)) }
+                    }
+                    request.messageTarget?.let { target ->
+                        OutlinedButton(
+                            onClick = { onOpenMessages(target) },
+                            enabled = !busy,
+                            modifier = Modifier.testTag("details-messages:${target.tripId}"),
+                        ) { Text(stringResource(R.string.connected_messages_action)) }
                     }
                 }
             } }

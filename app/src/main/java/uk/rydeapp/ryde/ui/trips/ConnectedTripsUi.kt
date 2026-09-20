@@ -21,6 +21,12 @@ internal data class ConnectedTripsItem(
     val journeyStatusText: Int? = null,
     val journeyId: String? = null,
     val driverDisplayName: String? = null,
+    val messageTarget: ConnectedMessageTarget? = null,
+)
+
+internal data class ConnectedMessageTarget(
+    val tripId: String,
+    val otherDisplayName: String?,
 )
 
 internal data class ConnectedIncomingRequest(
@@ -29,6 +35,7 @@ internal data class ConnectedIncomingRequest(
     val statusText: Int,
     val canAccept: Boolean,
     val canDecline: Boolean,
+    val messageTarget: ConnectedMessageTarget? = null,
 )
 
 internal data class ConnectedTripsContent(
@@ -47,7 +54,7 @@ internal fun canDecideConnectedRequest(
     (!accept || (journey!!.seatsRemaining > 0 && journey.departureEpochMillis > nowEpochMillis))
 
 private fun incomingRequest(
-    request: ConnectedSeatRequest, journey: ConnectedJourney?, uid: String, now: Long,
+    request: ConnectedSeatRequest, journey: ConnectedJourney?, trip: ConnectedConfirmedTrip?, uid: String, now: Long,
 ): ConnectedIncomingRequest = ConnectedIncomingRequest(
     request.id,
     request.riderDisplayName,
@@ -64,6 +71,12 @@ private fun incomingRequest(
     },
     canDecideConnectedRequest(request, journey, uid, true, now),
     canDecideConnectedRequest(request, journey, uid, false, now),
+    trip?.takeIf {
+        request.status in setOf(ConnectedRequestStatus.ACCEPTED, ConnectedRequestStatus.CANCELLED_AFTER_ACCEPTANCE) &&
+        it.id == request.id && it.acceptedRequestId == request.id &&
+            it.journeyId == request.journeyId && it.driverUid == request.driverUid &&
+            it.riderUid == request.riderUid && it.driverUid == uid
+    }?.let { ConnectedMessageTarget(it.id, request.riderDisplayName) },
 )
 
 private fun List<ConnectedTripsItem>.orderedForTrips(nowEpochMillis: Long): List<ConnectedTripsItem> =
@@ -113,6 +126,8 @@ internal fun connectedTripsContent(
             trip.id.takeIf { canCancelConnectedConfirmedSeat(trip, uid, nowEpochMillis, journey) },
             journeyId = trip.journeyId,
             driverDisplayName = trip.driverDisplayName,
+            messageTarget = ConnectedMessageTarget(trip.id, trip.driverDisplayName)
+                .takeIf { ConnectedJourneyLifecycle.canReadMessages(trip, uid) },
         )
     }
     val representedRequests = trips.map { it.acceptedRequestId }.toSet()
@@ -141,19 +156,42 @@ internal fun connectedTripsContent(
     }
     val owned = snapshot.journeys.filter { it.driverUid == uid }
     val incoming = snapshot.requests.filter { it.driverUid == uid && it.riderUid != uid }
+    val confirmedById = snapshot.confirmedTrips.associateBy { it.id }
     val driver = owned.map { journey ->
         ConnectedTripsItem("journey:${journey.id}", journey.originArea, journey.destinationArea,
             journey.departureEpochMillis,
             connectedOfferedJourneyStatusText(journey, nowEpochMillis), R.string.connected_trips_driver,
             cancellableJourneyId = journey.id.takeIf { ConnectedJourneyLifecycle.canCancelJourney(journey, uid, nowEpochMillis) },
             seatsRemaining = journey.seatsRemaining, seatCapacity = journey.seatCapacity,
-            incoming = incoming.filter { it.journeyId == journey.id }.map { incomingRequest(it, journey, uid, nowEpochMillis) },
+            incoming = incoming.filter { it.journeyId == journey.id }.map {
+                incomingRequest(it, journey, confirmedById[it.id], uid, nowEpochMillis)
+            },
             journeyId = journey.id)
     }
+    val missingDriverHistory = incoming
+        .filter { request -> owned.none { it.id == request.journeyId } && confirmedById[request.id] != null }
+        .groupBy(ConnectedSeatRequest::journeyId)
+        .map { (journeyId, requestsForJourney) ->
+            val confirmed = requestsForJourney.mapNotNull { confirmedById[it.id] }.firstOrNull()
+            ConnectedTripsItem(
+                key = "missing-journey:$journeyId",
+                origin = confirmed?.originArea,
+                destination = confirmed?.destinationArea,
+                departureEpochMillis = confirmed?.departureEpochMillis,
+                statusText = R.string.connected_trips_unavailable,
+                roleText = R.string.connected_trips_driver,
+                incoming = requestsForJourney.map {
+                    incomingRequest(it, null, confirmedById[it.id], uid, nowEpochMillis)
+                },
+                journeyId = journeyId,
+            )
+        }
     return ConnectedTripsContent(
         (riderTrips + requests).orderedForTrips(nowEpochMillis),
-        driver.orderedForTrips(nowEpochMillis),
-        incoming.filter { request -> owned.none { it.id == request.journeyId } }
-            .map { incomingRequest(it, null, uid, nowEpochMillis) },
+        (driver + missingDriverHistory).orderedForTrips(nowEpochMillis),
+        incoming.filter { request ->
+            owned.none { it.id == request.journeyId } && confirmedById[request.id] == null
+        }
+            .map { incomingRequest(it, null, confirmedById[it.id], uid, nowEpochMillis) },
     )
 }

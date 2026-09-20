@@ -1,6 +1,7 @@
 package uk.rydeapp.ryde.ui.trips
 
 import uk.rydeapp.ryde.data.connected.ConnectedJourney
+import uk.rydeapp.ryde.data.connected.ConnectedJourneyLifecycle
 import uk.rydeapp.ryde.data.connected.ConnectedJourneySnapshot
 import uk.rydeapp.ryde.ui.home.ConnectedHomeJourney
 
@@ -40,8 +41,19 @@ internal fun connectedTripDetailsContent(
             journey != null && it.isNotBlank() && request?.id == it
         },
         cancellableJourneyId = summary.cancellableJourneyId?.takeIf { journey?.driverUid == uid && it.isNotBlank() && journey.id == it },
+        messageTarget = summary.messageTarget?.takeIf { target ->
+            val confirmed = snapshot.confirmedTrips.firstOrNull { it.id == target.tripId }
+            confirmed != null && ConnectedJourneyLifecycle.canReadMessages(confirmed, uid)
+        },
         incoming = summary.incoming.map {
-            if (it.id.isBlank() || journey?.driverUid != uid) it.copy(canAccept = false, canDecline = false) else it
+            val target = it.messageTarget?.takeIf { target ->
+                val confirmed = snapshot.confirmedTrips.firstOrNull { trip -> trip.id == target.tripId }
+                confirmed != null && confirmed.acceptedRequestId == it.id &&
+                    ConnectedJourneyLifecycle.canReadMessages(confirmed, uid)
+            }
+            if (it.id.isBlank() || summary.roleText != uk.rydeapp.ryde.R.string.connected_trips_driver) {
+                it.copy(canAccept = false, canDecline = false, messageTarget = null)
+            } else it.copy(messageTarget = target)
         },
     )
     return ConnectedTripDetailsContent(

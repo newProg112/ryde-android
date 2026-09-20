@@ -297,4 +297,53 @@ class ConnectedTripDetailsScreenUiTest {
             compose.onAllNodesWithText(it, substring = true).assertCountEquals(0)
         }
     }
+
+    @Test fun riderMessageActionForwardsSpecificConfirmedTripId() {
+        val riderRequest = request.copy(id = "${journey.id}_${request.riderUid}", status = ConnectedRequestStatus.ACCEPTED)
+        val riderTrip = trip.copy(id = riderRequest.id, acceptedRequestId = riderRequest.id)
+        val riderTargets = mutableListOf<ConnectedMessageTarget>()
+        compose.setContent { RydeTheme {
+            ConnectedTripDetailsScreen(
+                content(ConnectedJourneySnapshot(listOf(journey), listOf(riderRequest), listOf(riderTrip))),
+                false, true, null, {}, {}, {}, { _, _ -> }, {}, {},
+                onOpenMessages = { riderTargets += it },
+            )
+        } }
+        text("Messages").performClick()
+        compose.runOnIdle { assertEquals(listOf(riderTrip.id), riderTargets.map { it.tripId }) }
+    }
+
+    @Test fun driverMessageActionsForwardEachAcceptedRidersConfirmedTripId() {
+        val riderRequest = request.copy(id = "${journey.id}_${request.riderUid}", status = ConnectedRequestStatus.ACCEPTED)
+        val riderTrip = trip.copy(id = riderRequest.id, acceptedRequestId = riderRequest.id)
+        val secondRequest = ConnectedSeatRequest(
+            "${journey.id}_second-rider", journey.id, journey.driverUid, "second-rider",
+            ConnectedRequestStatus.CANCELLED_AFTER_ACCEPTANCE, "Second Rider",
+        )
+        val secondTrip = riderTrip.copy(
+            id = secondRequest.id,
+            acceptedRequestId = secondRequest.id,
+            riderUid = secondRequest.riderUid,
+            status = ConnectedTripStatus.CANCELLED_BY_RIDER,
+            cancelledAtEpochMillis = 2,
+        )
+        val driverTargets = mutableListOf<ConnectedMessageTarget>()
+        compose.setContent { RydeTheme {
+            ConnectedTripDetailsScreen(
+                content(
+                    ConnectedJourneySnapshot(
+                        listOf(journey), listOf(riderRequest, secondRequest), listOf(riderTrip, secondTrip),
+                    ),
+                    journey.driverUid,
+                ),
+                false, true, null, {}, {}, {}, { _, _ -> }, {}, {},
+                onOpenMessages = { driverTargets += it },
+            )
+        } }
+        compose.onNodeWithTag("details-messages:${riderTrip.id}").performScrollTo().performClick()
+        compose.onNodeWithTag("details-messages:${secondTrip.id}").performScrollTo().performClick()
+        compose.runOnIdle {
+            assertEquals(setOf(riderTrip.id, secondTrip.id), driverTargets.map { it.tripId }.toSet())
+        }
+    }
 }

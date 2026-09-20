@@ -8,7 +8,9 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.Source
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -43,7 +45,7 @@ class FirestoreConnectedCancellationEmulatorTest {
             }
             val (driverUid, driverDb, driver) = account("Driver Label")
             val (riderUid, riderDb, rider) = account("Shared Rider Label")
-            val (otherUid, _, other) = account("Shared Rider Label")
+            val (otherUid, otherDb, other) = account("Shared Rider Label")
             driver.create(driverUid, ConnectedJourneyDraft("Mansfield", "Nottingham", System.currentTimeMillis() + 86_400_000, 1))
             val journey = driver.load(driverUid).journeys.single { it.driverUid == driverUid }
             rider.requestSeat(riderUid, journey.id)
@@ -57,6 +59,27 @@ class FirestoreConnectedCancellationEmulatorTest {
             driver.decide(driverUid, requestId, true)
             val accepted = rider.load(riderUid).confirmedTrips.single()
             assertEquals("Driver Label", accepted.driverDisplayName)
+            val driverCoordination = FirestoreConnectedCoordinationStore(driverDb)
+            val riderCoordination = FirestoreConnectedCoordinationStore(riderDb)
+            driverCoordination.sendMessage(
+                driverUid, accepted.id, "driver-message", "I'm outside the station.",
+            )
+            val riderConversation = withTimeout(10_000) {
+                riderCoordination.observeConversation(riderUid, accepted.id)
+                    .first { it.messages.any { message -> message.id == "driver-message" } }
+            }
+            assertEquals("I'm outside the station.", riderConversation.messages.single().body)
+            riderCoordination.sendMessage(riderUid, accepted.id, "rider-message", "I'm here.")
+            val driverConversation = withTimeout(10_000) {
+                driverCoordination.observeConversation(driverUid, accepted.id).first { it.messages.size == 2 }
+            }
+            assertEquals(listOf("driver-message", "rider-message"), driverConversation.messages.map { it.id })
+            assertFalse(runCatching {
+                withTimeout(5_000) {
+                    FirestoreConnectedCoordinationStore(otherDb)
+                        .observeConversation(otherUid, accepted.id).first()
+                }
+            }.isSuccess)
             assertFalse(runCatching {
                 riderDb.collection("users").document(driverUid).get(Source.SERVER).await()
             }.isSuccess)
@@ -77,6 +100,18 @@ class FirestoreConnectedCancellationEmulatorTest {
             assertEquals("Driver Label", trip.driverDisplayName)
             assertTrue(trip.cancelledAtEpochMillis != null)
             assertEquals(ConnectedRequestStatus.CANCELLED_AFTER_ACCEPTANCE, cancelled.requests.single().status)
+            val retainedConversation = withTimeout(10_000) {
+                riderCoordination.observeConversation(riderUid, trip.id).first { snapshot ->
+                    snapshot.trip.status == ConnectedTripStatus.CANCELLED_BY_RIDER && snapshot.messages.size == 2
+                }
+            }
+            assertTrue(ConnectedJourneyLifecycle.canReadMessages(retainedConversation.trip, riderUid))
+            assertFalse(ConnectedJourneyLifecycle.canSendMessages(
+                retainedConversation.trip, retainedConversation.journey, riderUid,
+            ))
+            assertFalse(runCatching {
+                riderCoordination.sendMessage(riderUid, trip.id, "after-cancel", "Still here")
+            }.isSuccess)
             assertEquals(1, cancelled.journeys.single { it.id == journey.id }.seatsRemaining)
             assertEquals(trip, driver.load(driverUid).confirmedTrips.single())
             val driverGuard = driverDb.collection("journeyAcceptanceGuards").document(journey.id)

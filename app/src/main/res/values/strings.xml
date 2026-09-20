@@ -1,4 +1,16 @@
 <resources>
+    <string name="connected_messages_action">Messages</string>
+    <string name="connected_messages_title">Messages</string>
+    <string name="connected_messages_with">Messages with %1$s</string>
+    <string name="connected_messages_privacy">Use public pickup places. Do not share a home address, phone number, or live location.</string>
+    <string name="connected_messages_empty">No messages yet. Send a short update to coordinate this trip.</string>
+    <string name="connected_messages_compose">Message</string>
+    <string name="connected_messages_send">Send</string>
+    <string name="connected_messages_retry">Retry</string>
+    <string name="connected_messages_unavailable">This conversation is unavailable. Go back or try again.</string>
+    <string name="connected_messages_read_only_rider">This conversation is read-only because the rider cancelled the confirmed seat.</string>
+    <string name="connected_messages_read_only_driver">This conversation is read-only because the driver cancelled the journey.</string>
+    <string name="connected_messages_read_only_unavailable">Message history is available, but new messages cannot be sent because the linked journey is unavailable or has changed.</string>
     <string name="connected_view_trip_details">View trip details</string>
     <string name="connected_trip_details_title">Trip details</string>
     <string name="connected_trip_details_back">Back</string>

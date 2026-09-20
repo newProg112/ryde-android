@@ -110,11 +110,12 @@ backend-to-domain conversion.
 ## Migration sequence
 
 - **9B:** Firebase-emulator session/Auth, profile and saved places.
-- **9C-1 (this slice):** broad-area discovery, offers and one-seat request decisions.
-- **Later 9C:** migrate Circles and trip lifecycle while the
-  local fake remains available for demos and tests.
-- **9D:** replace conversation/activity snapshots with realtime messaging and coordination
-  streams.
+- **9C-1:** broad-area discovery, offers and one-seat request decisions.
+- **9C lifecycle:** private confirmed trips plus rider/driver cancellation and retained history.
+- **Messaging Phase 1:** participant-private confirmed-trip text coordination with an
+  open-screen realtime stream.
+- **Later:** migrate only the remaining explicitly selected capabilities while the local fake
+  remains available for demos and tests.
 
 Pricing, eligibility, broad-area privacy, trust/safety overrides, message content limits,
 participant access and journey lifecycle transitions remain Compose-, Context- and
@@ -159,6 +160,11 @@ The first 9C slice adds only these emulator-owned documents:
   departureAt: timestamp     # copied from the journey; immutable
   status: "CONFIRMED" | "CANCELLED_BY_RIDER"
   cancelledAt: timestamp     # required only for CANCELLED_BY_RIDER; server time
+
+/confirmedTrips/{acceptedRequestId}/messages/{opaqueMessageId}
+  senderUid: string          # exactly the authenticated driver or rider
+  body: string               # nonblank, <= 500 chars, no prohibited control chars
+  sentAt: timestamp          # server timestamp; immutable
 ```
 
 Any authenticated emulator user may read the intentionally small journey document so that
@@ -223,8 +229,35 @@ confirmed trip:  absent -> CONFIRMED only with the matching request acceptance
 Rider-owned pending-request cancellation and safe re-requesting remain supported. An upcoming
 confirmed booking also supports the rider cancellation described below. Driver journey cancellation
 is supported as described below. There is no private pickup/drop-off, exact/live
-location, pricing/payment, messaging, notification, Circle, trust, rating, Function or Storage
-data in connected mode.
+location, pricing/payment, notification, Circle, trust, rating, Function or Storage data in
+connected mode.
+
+### Confirmed-trip messaging Phase 1
+
+Messaging is a dedicated connected coordination capability; it does not use the local-demo
+coordination records and does not make the whole connected repository realtime. The open
+conversation observes its parent confirmed trip, linked journey and the latest 100 messages.
+The message query is ordered by server `sentAt`, with document ID as the deterministic client
+tie-break. Pending local timestamp writes are not rendered as optimistic messages. Cancelling,
+switching tabs or accounts, signing out, navigating back, or opening another conversation
+cancels the flow and removes every Firestore registration.
+
+The structurally valid confirmed trip is the sole participant authorization anchor. Its driver
+and rider retain read/list access to history after rider cancellation, driver cancellation, or a
+missing/inconsistent linked journey. Create is stricter: the trip must remain `CONFIRMED`; the
+linked journey must exist, be structurally valid and `OPEN`; and driver, route and departure must
+exactly match the immutable trip snapshot. Departure passing alone does not close coordination,
+because no real completion/progress state exists yet. Malformed parent identity fails closed.
+Messages are create-only; update/delete, sender spoofing, extra fields, client timestamps,
+strangers and unauthenticated callers are denied.
+
+The UI opens messaging only from normal Trip Details. A rider has one action for their confirmed
+trip. A driver has a distinct action for every accepted rider, keyed by that rider's confirmed-trip
+ID rather than the journey ID. Cancellation or invalidation changes an already-open thread to
+read-only while retaining history. Content checks enforce structure, not safety guarantees; the
+client explicitly advises using public pickup places and not sharing a home address, phone number
+or live location. Phase 1 has no inbox, unread state, push, attachments, read receipts, typing,
+editing/deleting, moderation or location sharing.
 
 ## Manual two-emulator test
 
@@ -248,9 +281,14 @@ data in connected mode.
    appropriate `You're driving` or `You're riding` role. A third account must not see the trip.
 8. For the acceptance path, repeat with a one-seat offer and two rider accounts; only one pending
    request can be accepted and the other acceptance must fail without a negative seat count.
+9. From rider Trip Details and each accepted rider row in driver Trip Details, open **Messages**.
+   Send in both directions and confirm the other open screen updates without Refresh.
+10. Confirm two accepted riders on one offer open different histories. A third account must be
+    unable to read or write either nested message collection.
+11. Cancel the rider seat or driver journey while the other conversation remains open. Existing
+    history must remain visible, the composer must disappear, and a new send must fail safely.
 
-Remaining 9C work includes later confirmed-trip/journey lifecycle,
-richer discovery/query design, Circles, and any trusted backend operation needed for stronger
+Remaining work includes richer discovery/query design, Circles, and any trusted backend operation needed for stronger
 multi-document invariants. None of those capabilities are silently delegated to the fictional
 local-demo repository in connected mode.
 
