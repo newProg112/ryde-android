@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -66,6 +67,9 @@ internal fun ConnectedReadyApp(
     currentTimeMillis: () -> Long = System::currentTimeMillis,
 ) {
     val snapshot by repository.journeyState.collectAsState()
+    LaunchedEffect(session.accountId, repository) {
+        repository.synchronizeConnectedJourneyLifecycles()
+    }
     val resources = LocalResources.current
     // Include the owner in saved values: rememberSaveable inputs alone do not validate restored state.
     val navigationSaver = remember(session.accountId) {

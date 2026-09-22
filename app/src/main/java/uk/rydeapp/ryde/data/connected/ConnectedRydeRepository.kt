@@ -7,7 +7,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.takeWhile
+import kotlinx.coroutines.flow.update
 import uk.rydeapp.ryde.data.AccountCommandResult
 import uk.rydeapp.ryde.data.AccountSession
 import uk.rydeapp.ryde.data.AsyncState
@@ -144,6 +147,29 @@ class ConnectedRydeRepository(
 
     suspend fun decideConnectedRequest(requestId: String, accept: Boolean): ConnectedJourneyCommandResult =
         journeyCommand { store, uid -> store.decide(uid, requestId, accept) }
+
+    /** Keeps only remote journey closure authoritative between explicit full refreshes. */
+    suspend fun synchronizeConnectedJourneyLifecycles() {
+        val store = journeys ?: return
+        val uid = auth.currentUserId ?: return
+        try {
+            combine(store.observeJourneys(uid), sessionState) { observed, session -> observed to session }
+                .takeWhile { (_, session) ->
+                    auth.currentUserId == uid &&
+                        session is AccountSession.Authenticated && session.accountId == uid
+                }
+                .collect { (observed, _) ->
+                    if (auth.currentUserId != uid) return@collect
+                    mutableJourneyState.update { current ->
+                        current.reconcileRemoteJourneyClosures(observed)
+                    }
+                }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Throwable) {
+            // Explicit Refresh remains the safe fallback if the scoped listener fails.
+        }
+    }
 
     fun observeConnectedConversation(tripId: String): Flow<ConnectedConversationState> = flow {
         val store = coordination
@@ -343,5 +369,25 @@ private fun ConnectedConversationSnapshot.readOnlyReason(): ConnectedConversatio
     journey?.status == ConnectedJourneyStatus.CANCELLED -> ConnectedConversationReadOnlyReason.CANCELLED_BY_DRIVER
     else -> ConnectedConversationReadOnlyReason.UNAVAILABLE
 }
+
+internal fun ConnectedJourneySnapshot.reconcileRemoteJourneyClosures(
+    observed: List<ConnectedJourney>,
+): ConnectedJourneySnapshot {
+    val observedById = observed.associateBy(ConnectedJourney::id)
+    val reconciled = journeys.map { current ->
+        val remote = observedById[current.id]
+        if (
+            current.status == ConnectedJourneyStatus.OPEN &&
+            remote?.status == ConnectedJourneyStatus.CANCELLED &&
+            current.sameImmutableJourney(remote)
+        ) remote else current
+    }
+    return if (reconciled == journeys) this else copy(journeys = reconciled)
+}
+
+private fun ConnectedJourney.sameImmutableJourney(other: ConnectedJourney): Boolean =
+    id == other.id && driverUid == other.driverUid &&
+        originArea == other.originArea && destinationArea == other.destinationArea &&
+        departureEpochMillis == other.departureEpochMillis && seatCapacity == other.seatCapacity
 
 private class FirebaseOperationTimedOutException : Exception()

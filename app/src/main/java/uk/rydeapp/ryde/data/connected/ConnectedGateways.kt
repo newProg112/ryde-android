@@ -3,9 +3,13 @@ package uk.rydeapp.ryde.data.connected
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.MetadataChanges
 import com.google.firebase.firestore.Source
+import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.emptyFlow
 import uk.rydeapp.ryde.domain.model.SavedPlace
 
 interface ConnectedAuthGateway {
@@ -23,6 +27,7 @@ interface ConnectedProfileStore {
 
 interface ConnectedJourneyStore {
     suspend fun load(uid: String): ConnectedJourneySnapshot
+    fun observeJourneys(uid: String): Flow<List<ConnectedJourney>> = emptyFlow()
     suspend fun create(uid: String, draft: ConnectedJourneyDraft)
     suspend fun requestSeat(uid: String, journeyId: String)
     suspend fun cancelRequest(uid: String, requestId: String)
@@ -103,6 +108,27 @@ class FirestoreConnectedJourneyStore(private val firestore: FirebaseFirestore) :
             .mapNotNull { FirestoreJourneyMapper.journey(it.id, it.data.orEmpty()) }
             .sortedBy { it.departureEpochMillis }
         return ConnectedJourneySnapshot(journeys, requests, confirmedTrips)
+    }
+
+    override fun observeJourneys(uid: String): Flow<List<ConnectedJourney>> = callbackFlow {
+        if (uid.isBlank()) {
+            close(IllegalArgumentException("Authenticated account required"))
+            return@callbackFlow
+        }
+        val registration = firestore.collection(JOURNEYS)
+            .addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error ->
+                if (error != null) {
+                    close(error)
+                    return@addSnapshotListener
+                }
+                if (snapshot == null || snapshot.metadata.hasPendingWrites()) return@addSnapshotListener
+                trySend(
+                    snapshot.documents
+                        .mapNotNull { FirestoreJourneyMapper.journey(it.id, it.data.orEmpty()) }
+                        .sortedBy { it.departureEpochMillis },
+                )
+            }
+        awaitClose { registration.remove() }
     }
 
     override suspend fun create(uid: String, draft: ConnectedJourneyDraft) {

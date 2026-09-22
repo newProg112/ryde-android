@@ -846,9 +846,11 @@ class RydeAppNavigationUiTest {
         detailsText("Back").performClick()
         findField("connected-find-origin").assert(hasText("Sheffield"))
         openDetails()
+        compose.waitUntil { store.activeLifecycleObservers == 1 }
         compose.runOnIdle { runBlocking { auth.uid = "second-private-uid"; repository.refresh() } }
         tab("Home").assertIsSelected()
         compose.onAllNodesWithText("Trip details").assertCountEquals(0)
+        compose.waitUntil { store.activeLifecycleObservers == 1 && store.lifecycleObserverUids.lastOrNull() == "second-private-uid" }
         tab("Find").performClick()
         findField("connected-find-origin").assert(hasText("Sheffield").not())
     }
@@ -861,12 +863,13 @@ class RydeAppNavigationUiTest {
         openDetails()
         detailsText("Messages").performClick()
         compose.onNodeWithTag("connected-conversation").assertIsDisplayed()
-        compose.runOnIdle { assertEquals(1, coordination.activeObservers) }
+        compose.waitUntil { coordination.activeObservers == 1 && store.activeLifecycleObservers == 1 }
         compose.runOnIdle { runBlocking { repository.signOut() } }
         compose.onAllNodesWithText("Trip details").assertCountEquals(0)
         compose.onAllNodesWithTag("connected-conversation").assertCountEquals(0)
         compose.onAllNodes(isSelectable()).assertCountEquals(0)
         compose.runOnIdle { assertEquals(0, coordination.activeObservers) }
+        compose.runOnIdle { assertEquals(0, store.activeLifecycleObservers) }
         compose.runOnIdle { runBlocking { auth.uid = "rider-private-uid"; repository.refresh() } }
         tab("Home").assertIsSelected()
         compose.onAllNodesWithText("Trip details").assertCountEquals(0)
@@ -921,6 +924,34 @@ class RydeAppNavigationUiTest {
         compose.onNodeWithText("Hello, Taylor").assertIsDisplayed()
         compose.onAllNodesWithTag("connected-conversation").assertCountEquals(0)
         compose.runOnIdle { assertEquals(0, coordination.activeObservers) }
+    }
+
+    @Test
+    fun remoteDriverCancellationStaysCurrentWhenReturningFromConversation() {
+        store.confirmSeat()
+        launchConnected()
+        tab("Trips").performClick()
+        openDetails()
+        detailsText("Messages").performClick()
+        compose.waitUntil { coordination.activeObservers == 1 && store.activeLifecycleObservers == 1 }
+
+        compose.runOnIdle {
+            store.cancelRemotely()
+            coordination.notifyChanged()
+        }
+        compose.onNodeWithTag("messages-read-only").assertIsDisplayed()
+        compose.onNodeWithText("This conversation is read-only because the driver cancelled the journey.")
+            .assertIsDisplayed()
+        compose.onNodeWithText("Back").performClick()
+
+        detailsText("Journey cancelled by driver").assertIsDisplayed()
+        compose.onAllNodesWithText("Cancel my seat").assertCountEquals(0)
+        detailsText("Messages").assertIsDisplayed()
+        compose.runOnIdle {
+            assertEquals(ConnectedRequestStatus.ACCEPTED, repository.journeyState.value.requests.single().status)
+            assertEquals(ConnectedTripStatus.CONFIRMED, repository.journeyState.value.confirmedTrips.single().status)
+            assertEquals(ConnectedJourneyStatus.CANCELLED, repository.journeyState.value.journeys.single().status)
+        }
     }
 
     @Test
@@ -1098,6 +1129,9 @@ class RydeAppNavigationUiTest {
     }
 
     private class TestJourneys : ConnectedJourneyStore {
+        private val lifecycleChanges = MutableSharedFlow<Unit>(replay = 1, extraBufferCapacity = 4)
+        var activeLifecycleObservers = 0
+        val lifecycleObserverUids = mutableListOf<String>()
         val createCalls = mutableListOf<Pair<String, ConnectedJourneyDraft>>()
         val decisionCalls = mutableListOf<Triple<String, String, Boolean>>()
         val journeyCancelCalls = mutableListOf<Pair<String, String>>()
@@ -1127,6 +1161,22 @@ class RydeAppNavigationUiTest {
         var loadCalls = 0
         var journeys = listOf(ConnectedJourney("connected-offer", "driver-private-uid", "Sheffield", "Leeds", 4_070_908_800_000L, 2, 1))
         val requests = mutableListOf<ConnectedSeatRequest>()
+        fun cancelRemotely() {
+            journeys = journeys.map {
+                it.copy(status = ConnectedJourneyStatus.CANCELLED, cancelledAtEpochMillis = 100)
+            }
+            lifecycleChanges.tryEmit(Unit)
+        }
+        override fun observeJourneys(uid: String): Flow<List<ConnectedJourney>> = flow {
+            activeLifecycleObservers++
+            lifecycleObserverUids += uid
+            try {
+                emit(journeys)
+                lifecycleChanges.collect { emit(journeys) }
+            } finally {
+                activeLifecycleObservers--
+            }
+        }
         override suspend fun load(uid: String): ConnectedJourneySnapshot {
             loadCalls++
             if (failNextLoad) {

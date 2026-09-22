@@ -112,6 +112,9 @@ backend-to-domain conversion.
 - **9B:** Firebase-emulator session/Auth, profile and saved places.
 - **9C-1:** broad-area discovery, offers and one-seat request decisions.
 - **9C lifecycle:** private confirmed trips plus rider/driver cancellation and retained history.
+- **Remote journey lifecycle sync:** authenticated normal-app sessions reconcile committed
+  `OPEN -> CANCELLED` changes into already loaded journey records without making requests or
+  confirmed trips realtime.
 - **Messaging Phase 1:** participant-private confirmed-trip text coordination with an
   open-screen realtime stream.
 - **Later:** migrate only the remaining explicitly selected capabilities while the local fake
@@ -231,6 +234,16 @@ confirmed booking also supports the rider cancellation described below. Driver j
 is supported as described below. There is no private pickup/drop-off, exact/live
 location, pricing/payment, notification, Circle, trust, rating, Function or Storage data in
 connected mode.
+
+### Remote journey lifecycle synchronization
+
+While the normal connected app is authenticated, one scoped listener observes committed journey
+documents. Repository reconciliation accepts only an existing structurally matching journey's
+`OPEN -> CANCELLED` transition. It does not add or remove journeys, reopen cancellations, or
+realtime-update requests and confirmed trips. Those private records remain historical, and
+`CANCELLED_BY_DRIVER` continues to be derived from the linked journey. Sign-out, account change,
+or leaving the connected ready app removes the listener; explicit Refresh remains available if
+the listener fails.
 
 ### Confirmed-trip messaging Phase 1
 
@@ -366,7 +379,8 @@ private sources before journeys so it resolves cancellation against the latest l
 read in that refresh; separate server queries still do not form one atomic read snapshot.
 
 Manual verification: cancel an empty offer, an offer with a pending request and an offer with
-confirmed riders. Refresh both accounts: the driver retains an unavailable cancelled offer,
-pending requests have no actions, and confirmed riders see Journey cancelled by driver without
-Cancel my seat. Repeat with an earlier rider-cancelled booking: it remains Cancelled by rider.
-Other offers remain independent. Automated tests use only the dedicated demo namespace/ports.
+confirmed riders. Without refreshing the other signed-in account, confirm pending requests lose
+their actions and confirmed riders see Journey cancelled by driver without Cancel my seat. The
+driver retains an unavailable cancelled offer after its command refresh. Repeat with an earlier
+rider-cancelled booking: it remains Cancelled by rider. Other offers remain independent. Automated
+tests use only the dedicated demo namespace/ports.
