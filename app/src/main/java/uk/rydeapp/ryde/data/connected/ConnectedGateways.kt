@@ -33,6 +33,7 @@ interface ConnectedJourneyStore {
     suspend fun cancelRequest(uid: String, requestId: String)
     suspend fun cancelConfirmedSeat(uid: String, tripId: String)
     suspend fun cancelJourney(uid: String, journeyId: String)
+    suspend fun completeJourney(uid: String, journeyId: String)
     suspend fun decide(uid: String, requestId: String, accept: Boolean)
 }
 
@@ -217,6 +218,23 @@ class FirestoreConnectedJourneyStore(private val firestore: FirebaseFirestore) :
             transaction.update(journeyRef, mapOf(
                 "status" to ConnectedJourneyStatus.CANCELLED.name,
                 "cancelledAt" to FieldValue.serverTimestamp(),
+            ))
+        }.await()
+    }
+
+    override suspend fun completeJourney(uid: String, journeyId: String) {
+        val journeyRef = firestore.collection(JOURNEYS).document(journeyId)
+        firestore.runTransaction { transaction ->
+            val journey = FirestoreJourneyMapper.journey(journeyId, transaction.get(journeyRef).data.orEmpty())
+                ?: error("Journey unavailable")
+            check(ConnectedJourneyLifecycle.canCompleteJourney(journey, uid, System.currentTimeMillis()))
+            val guardRef = firestore.collection(ACCEPTANCE_GUARDS).document(journeyId)
+            val guard = FirestoreJourneyMapper.acceptanceGuard(transaction.get(guardRef).data.orEmpty())
+                ?: error("Journey acceptance guard unavailable")
+            check(guard.driverUid == uid && guard.acceptanceCount == journey.seatCapacity - journey.seatsRemaining)
+            transaction.update(journeyRef, mapOf(
+                "status" to ConnectedJourneyStatus.COMPLETED.name,
+                "completedAt" to FieldValue.serverTimestamp(),
             ))
         }.await()
     }

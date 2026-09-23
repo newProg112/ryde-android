@@ -556,6 +556,24 @@ class RydeAppNavigationUiTest {
     }
 
     @Test
+    fun driverCompletesDepartedJourneyThroughConnectedRepository() {
+        pendingForDriver()
+        val departure = store.journeys.single().departureEpochMillis
+        launchConnected { departure }
+        tab("Trips").performClick()
+        compose.onNodeWithText("Mark journey complete").performScrollTo().performClick()
+        compose.onNodeWithText("Confirm journey completion").performClick()
+        compose.onNodeWithText("Journey completed").performScrollTo().assertIsDisplayed()
+        compose.onAllNodesWithText("Mark journey complete").assertCountEquals(0)
+        compose.onAllNodesWithText("Decline").assertCountEquals(0)
+        compose.runOnIdle {
+            assertEquals(listOf("driver-private-uid" to "connected-offer"), store.journeyCompleteCalls)
+            assertEquals(ConnectedJourneyStatus.COMPLETED, repository.journeyState.value.journeys.single().status)
+            assertEquals(0, legacyCommands)
+        }
+    }
+
+    @Test
     fun tripsCancellationIsSingleInFlightCommandAcrossTabsAndRetainsRealHistory() {
         store.confirmSeat()
         store.cancelGate = CompletableDeferred()
@@ -1135,6 +1153,7 @@ class RydeAppNavigationUiTest {
         val createCalls = mutableListOf<Pair<String, ConnectedJourneyDraft>>()
         val decisionCalls = mutableListOf<Triple<String, String, Boolean>>()
         val journeyCancelCalls = mutableListOf<Pair<String, String>>()
+        val journeyCompleteCalls = mutableListOf<Pair<String, String>>()
         var decisionGate: CompletableDeferred<Unit>? = null
         var journeyCancelGate: CompletableDeferred<Unit>? = null
         val requestCancelCalls = mutableListOf<Pair<String, String>>()
@@ -1226,6 +1245,13 @@ class RydeAppNavigationUiTest {
             journeyCancelCalls += uid to journeyId
             journeyCancelGate?.await()
             journeys = journeys.map { if (it.id == journeyId) it.copy(status = ConnectedJourneyStatus.CANCELLED) else it }
+        }
+        override suspend fun completeJourney(uid: String, journeyId: String) {
+            journeyCompleteCalls += uid to journeyId
+            journeys = journeys.map {
+                if (it.id == journeyId) it.copy(status = ConnectedJourneyStatus.COMPLETED, completedAtEpochMillis = 1)
+                else it
+            }
         }
         override suspend fun decide(uid: String, requestId: String, accept: Boolean) {
             decisionCalls += Triple(uid, requestId, accept)

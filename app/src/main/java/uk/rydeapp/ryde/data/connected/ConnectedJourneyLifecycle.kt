@@ -1,9 +1,10 @@
 package uk.rydeapp.ryde.data.connected
 
-/** Resolved lifecycle; driver cancellation is persisted once on the linked journey. */
+/** Resolved lifecycle; driver closure is persisted once on the linked journey. */
 enum class ConnectedTripLifecycle {
     CONFIRMED,
     DEPARTURE_PASSED,
+    COMPLETED,
     CANCELLED_BY_RIDER,
     CANCELLED_BY_DRIVER,
     UNAVAILABLE,
@@ -18,6 +19,7 @@ enum class ConnectedRequestLifecycle {
     CANCELLED_AFTER_ACCEPTANCE,
     DEPARTURE_PASSED_PENDING,
     DEPARTURE_PASSED_ACCEPTED,
+    COMPLETED,
     CANCELLED_BY_DRIVER,
     UNAVAILABLE,
 }
@@ -31,6 +33,7 @@ object ConnectedJourneyLifecycle {
         trip.status == ConnectedTripStatus.CANCELLED_BY_RIDER -> ConnectedTripLifecycle.CANCELLED_BY_RIDER
         journey == null || journey.id != trip.journeyId || journey.driverUid != trip.driverUid -> ConnectedTripLifecycle.UNAVAILABLE
         journey.status == ConnectedJourneyStatus.CANCELLED -> ConnectedTripLifecycle.CANCELLED_BY_DRIVER
+        journey.status == ConnectedJourneyStatus.COMPLETED -> ConnectedTripLifecycle.COMPLETED
         trip.departureEpochMillis <= nowEpochMillis -> ConnectedTripLifecycle.DEPARTURE_PASSED
         else -> ConnectedTripLifecycle.CONFIRMED
     }
@@ -45,6 +48,10 @@ object ConnectedJourneyLifecycle {
         request.status == ConnectedRequestStatus.CANCELLED -> ConnectedRequestLifecycle.CANCELLED
         request.status == ConnectedRequestStatus.DECLINED -> ConnectedRequestLifecycle.DECLINED
         requestCancelledByDriver(request, journey) -> ConnectedRequestLifecycle.CANCELLED_BY_DRIVER
+        requestCompleted(request, journey) && request.status == ConnectedRequestStatus.ACCEPTED ->
+            ConnectedRequestLifecycle.COMPLETED
+        requestCompleted(request, journey) && request.status == ConnectedRequestStatus.PENDING ->
+            ConnectedRequestLifecycle.DEPARTURE_PASSED_PENDING
         !requestJourneyOpen(request, journey) -> ConnectedRequestLifecycle.UNAVAILABLE
         journey != null && journey.departureEpochMillis <= nowEpochMillis && request.status == ConnectedRequestStatus.PENDING ->
             ConnectedRequestLifecycle.DEPARTURE_PASSED_PENDING
@@ -59,6 +66,10 @@ object ConnectedJourneyLifecycle {
             journey != null && journey.id == request.journeyId && journey.driverUid == request.driverUid &&
             journey.status == ConnectedJourneyStatus.CANCELLED
 
+    private fun requestCompleted(request: ConnectedSeatRequest, journey: ConnectedJourney?): Boolean =
+        journey != null && journey.id == request.journeyId && journey.driverUid == request.driverUid &&
+            journey.status == ConnectedJourneyStatus.COMPLETED
+
     fun requestJourneyOpen(request: ConnectedSeatRequest, journey: ConnectedJourney?): Boolean =
         journey != null && journey.id == request.journeyId && journey.driverUid == request.driverUid && journey.status == ConnectedJourneyStatus.OPEN
 
@@ -68,6 +79,9 @@ object ConnectedJourneyLifecycle {
 
     fun canCancelJourney(journey: ConnectedJourney, uid: String, nowEpochMillis: Long): Boolean =
         journey.driverUid == uid && journey.status == ConnectedJourneyStatus.OPEN && journey.departureEpochMillis > nowEpochMillis
+
+    fun canCompleteJourney(journey: ConnectedJourney, uid: String, nowEpochMillis: Long): Boolean =
+        journey.driverUid == uid && journey.status == ConnectedJourneyStatus.OPEN && journey.departureEpochMillis <= nowEpochMillis
 
     fun discoverable(journey: ConnectedJourney, uid: String, nowEpochMillis: Long): Boolean =
         journey.driverUid != uid && journey.status == ConnectedJourneyStatus.OPEN && journey.departureEpochMillis > nowEpochMillis

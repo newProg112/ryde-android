@@ -15,6 +15,7 @@ internal data class ConnectedTripsItem(
     val cancellableTripId: String? = null,
     val cancellableRequestId: String? = null,
     val cancellableJourneyId: String? = null,
+    val completableJourneyId: String? = null,
     val seatsRemaining: Int? = null,
     val seatCapacity: Int? = null,
     val incoming: List<ConnectedIncomingRequest> = emptyList(),
@@ -66,6 +67,7 @@ private fun incomingRequest(
         ConnectedRequestLifecycle.CANCELLED_AFTER_ACCEPTANCE -> R.string.connected_incoming_seat_cancelled
         ConnectedRequestLifecycle.DEPARTURE_PASSED_PENDING -> R.string.connected_incoming_pending_departed
         ConnectedRequestLifecycle.DEPARTURE_PASSED_ACCEPTED -> R.string.connected_incoming_accepted_departed
+        ConnectedRequestLifecycle.COMPLETED -> R.string.connected_trips_completed
         ConnectedRequestLifecycle.CANCELLED_BY_DRIVER -> R.string.connected_trips_offer_cancelled
         ConnectedRequestLifecycle.UNAVAILABLE -> R.string.connected_trips_unavailable
     },
@@ -98,6 +100,7 @@ internal fun connectedOfferedJourneyStatusText(
     nowEpochMillis: Long,
 ): Int = when {
     journey.status == ConnectedJourneyStatus.CANCELLED -> R.string.connected_trips_offer_cancelled
+    journey.status == ConnectedJourneyStatus.COMPLETED -> R.string.connected_trips_completed
     journey.departureEpochMillis <= nowEpochMillis -> R.string.connected_offer_departed
     journey.seatsRemaining == 0 -> R.string.connected_offer_full
     else -> R.string.connected_trips_offer_open
@@ -118,6 +121,7 @@ internal fun connectedTripsContent(
             when (lifecycle) {
                 ConnectedTripLifecycle.CONFIRMED -> R.string.connected_request_accepted
                 ConnectedTripLifecycle.DEPARTURE_PASSED -> R.string.connected_trips_departure_passed
+                ConnectedTripLifecycle.COMPLETED -> R.string.connected_trips_completed
                 ConnectedTripLifecycle.CANCELLED_BY_RIDER -> R.string.connected_trips_cancelled
                 ConnectedTripLifecycle.CANCELLED_BY_DRIVER -> R.string.connected_trips_driver_cancelled
                 ConnectedTripLifecycle.UNAVAILABLE -> R.string.connected_trips_unavailable
@@ -141,6 +145,7 @@ internal fun connectedTripsContent(
             ConnectedRequestLifecycle.CANCELLED_AFTER_ACCEPTANCE -> R.string.connected_seat_cancelled
             ConnectedRequestLifecycle.DEPARTURE_PASSED_PENDING -> R.string.connected_request_pending_departed
             ConnectedRequestLifecycle.DEPARTURE_PASSED_ACCEPTED -> R.string.connected_trips_departure_passed
+            ConnectedRequestLifecycle.COMPLETED -> R.string.connected_trips_completed
             ConnectedRequestLifecycle.CANCELLED_BY_DRIVER -> R.string.connected_trips_driver_cancelled
             ConnectedRequestLifecycle.UNAVAILABLE -> R.string.connected_trips_unavailable
         }
@@ -162,6 +167,7 @@ internal fun connectedTripsContent(
             journey.departureEpochMillis,
             connectedOfferedJourneyStatusText(journey, nowEpochMillis), R.string.connected_trips_driver,
             cancellableJourneyId = journey.id.takeIf { ConnectedJourneyLifecycle.canCancelJourney(journey, uid, nowEpochMillis) },
+            completableJourneyId = journey.id.takeIf { ConnectedJourneyLifecycle.canCompleteJourney(journey, uid, nowEpochMillis) },
             seatsRemaining = journey.seatsRemaining, seatCapacity = journey.seatCapacity,
             incoming = incoming.filter { it.journeyId == journey.id }.map {
                 incomingRequest(it, journey, confirmedById[it.id], uid, nowEpochMillis)

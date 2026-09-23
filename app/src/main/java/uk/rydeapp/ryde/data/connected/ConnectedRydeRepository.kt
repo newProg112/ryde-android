@@ -145,6 +145,9 @@ class ConnectedRydeRepository(
     suspend fun cancelConnectedJourney(journeyId: String): ConnectedJourneyCommandResult =
         journeyCommand { store, uid -> store.cancelJourney(uid, journeyId) }
 
+    suspend fun completeConnectedJourney(journeyId: String): ConnectedJourneyCommandResult =
+        journeyCommand { store, uid -> store.completeJourney(uid, journeyId) }
+
     suspend fun decideConnectedRequest(requestId: String, accept: Boolean): ConnectedJourneyCommandResult =
         journeyCommand { store, uid -> store.decide(uid, requestId, accept) }
 
@@ -367,6 +370,7 @@ class ConnectedRydeRepository(
 private fun ConnectedConversationSnapshot.readOnlyReason(): ConnectedConversationReadOnlyReason = when {
     trip.status == ConnectedTripStatus.CANCELLED_BY_RIDER -> ConnectedConversationReadOnlyReason.CANCELLED_BY_RIDER
     journey?.status == ConnectedJourneyStatus.CANCELLED -> ConnectedConversationReadOnlyReason.CANCELLED_BY_DRIVER
+    journey?.status == ConnectedJourneyStatus.COMPLETED -> ConnectedConversationReadOnlyReason.COMPLETED
     else -> ConnectedConversationReadOnlyReason.UNAVAILABLE
 }
 
@@ -378,7 +382,8 @@ internal fun ConnectedJourneySnapshot.reconcileRemoteJourneyClosures(
         val remote = observedById[current.id]
         if (
             current.status == ConnectedJourneyStatus.OPEN &&
-            remote?.status == ConnectedJourneyStatus.CANCELLED &&
+            remote != null &&
+            remote.status in setOf(ConnectedJourneyStatus.CANCELLED, ConnectedJourneyStatus.COMPLETED) &&
             current.sameImmutableJourney(remote)
         ) remote else current
     }

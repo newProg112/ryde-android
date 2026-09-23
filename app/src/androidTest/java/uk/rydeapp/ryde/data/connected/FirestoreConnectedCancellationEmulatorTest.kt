@@ -8,6 +8,7 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.Source
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withTimeout
@@ -164,6 +165,31 @@ class FirestoreConnectedCancellationEmulatorTest {
             assertFalse(runCatching { rider.cancelRequest(riderUid, pendingId) }.isSuccess)
             assertFalse(runCatching { other.requestSeat(otherUid, pendingJourney.id) }.isSuccess)
             assertEquals(2, pendingClosed.seatsRemaining)
+
+            val departure = System.currentTimeMillis() + 3_000
+            driver.create(driverUid, ConnectedJourneyDraft("Derby", "Leicester", departure, 1))
+            val completing = driver.load(driverUid).journeys.single {
+                it.driverUid == driverUid && it.status == ConnectedJourneyStatus.OPEN
+            }
+            rider.requestSeat(riderUid, completing.id)
+            val completingRequestId = "${completing.id}_$riderUid"
+            driver.decide(driverUid, completingRequestId, true)
+            assertFalse(runCatching { rider.completeJourney(riderUid, completing.id) }.isSuccess)
+            delay(3_500)
+            driver.completeJourney(driverUid, completing.id)
+            val completed = driver.load(driverUid).journeys.single { it.id == completing.id }
+            assertEquals(ConnectedJourneyStatus.COMPLETED, completed.status)
+            assertTrue(completed.completedAtEpochMillis != null)
+            assertEquals(0, completed.seatsRemaining)
+            val riderCompleted = rider.load(riderUid)
+            val riderCompletedJourney = riderCompleted.journeys.single { it.id == completing.id }
+            val riderCompletedTrip = riderCompleted.confirmedTrips.single { it.id == completingRequestId }
+            assertEquals(ConnectedJourneyStatus.COMPLETED, riderCompletedJourney.status)
+            assertEquals(
+                ConnectedTripLifecycle.COMPLETED,
+                ConnectedJourneyLifecycle.trip(riderCompletedTrip, riderCompletedJourney),
+            )
+            assertFalse(runCatching { driver.completeJourney(driverUid, completing.id) }.isSuccess)
         } finally {
             apps.forEach { it.delete() }
         }

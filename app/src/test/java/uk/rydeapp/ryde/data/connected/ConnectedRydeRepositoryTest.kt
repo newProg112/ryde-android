@@ -88,6 +88,8 @@ class ConnectedRydeRepositoryTest {
         )))
         val closed = open.copy(status = ConnectedJourneyStatus.CANCELLED, cancelledAtEpochMillis = 1)
         assertEquals(snapshot.copy(journeys = listOf(closed)), snapshot.reconcileRemoteJourneyClosures(listOf(closed)))
+        val completed = open.copy(status = ConnectedJourneyStatus.COMPLETED, completedAtEpochMillis = 2)
+        assertEquals(snapshot.copy(journeys = listOf(completed)), snapshot.reconcileRemoteJourneyClosures(listOf(completed)))
         val declined = snapshot.copy(requests = listOf(request.copy(status = ConnectedRequestStatus.DECLINED)))
         assertEquals(
             declined.copy(journeys = listOf(closed)),
@@ -301,6 +303,7 @@ class ConnectedRydeRepositoryTest {
         override suspend fun cancelRequest(uid: String, requestId: String) = Unit
         override suspend fun cancelConfirmedSeat(uid: String, tripId: String) = Unit
         override suspend fun cancelJourney(uid: String, journeyId: String) = Unit
+        override suspend fun completeJourney(uid: String, journeyId: String) = Unit
         override suspend fun decide(uid: String, requestId: String, accept: Boolean) = Unit
     }
 }

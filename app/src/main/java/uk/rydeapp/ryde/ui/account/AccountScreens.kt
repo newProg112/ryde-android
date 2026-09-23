@@ -246,6 +246,7 @@ internal fun connectedRequestStatusLabel(request: ConnectedSeatRequest, journey:
             "Status: PENDING · Departure has passed; this request can no longer be accepted"
         ConnectedRequestLifecycle.DEPARTURE_PASSED_ACCEPTED ->
             "Status: ACCEPTED · Departure has passed"
+        ConnectedRequestLifecycle.COMPLETED -> "Status: COMPLETED"
         ConnectedRequestLifecycle.CANCELLED_BY_DRIVER ->
             "Status: CANCELLED_BY_DRIVER · Journey cancelled by driver"
         ConnectedRequestLifecycle.UNAVAILABLE -> "Status: UNAVAILABLE"
@@ -258,6 +259,7 @@ internal fun connectedTripRouteLabel(trip: ConnectedConfirmedTrip): String =
 internal fun connectedTripStatusLabel(trip: ConnectedConfirmedTrip, journey: ConnectedJourney? = null): String = when (ConnectedJourneyLifecycle.trip(trip, journey)) {
     ConnectedTripLifecycle.CONFIRMED -> "Status: CONFIRMED"
     ConnectedTripLifecycle.DEPARTURE_PASSED -> "Status: DEPARTURE_PASSED · Scheduled departure has passed"
+    ConnectedTripLifecycle.COMPLETED -> "Status: COMPLETED"
     ConnectedTripLifecycle.CANCELLED_BY_RIDER -> "Status: CANCELLED_BY_RIDER · Cancelled by rider"
     ConnectedTripLifecycle.CANCELLED_BY_DRIVER -> "Status: CANCELLED_BY_DRIVER · Journey cancelled by driver"
     ConnectedTripLifecycle.UNAVAILABLE -> "Status: UNAVAILABLE"

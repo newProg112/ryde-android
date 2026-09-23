@@ -45,6 +45,20 @@ class ConnectedCoordinationRepositoryTest {
     }
 
     @Test
+    fun `completed journey retains conversation history as read only`() = runBlocking {
+        val completed = journey.copy(status = ConnectedJourneyStatus.COMPLETED, completedAtEpochMillis = 2)
+        val states = repository(FakeAuth("rider"), object : FakeCoordinationStore() {
+            override fun observeConversation(uid: String, tripId: String) = flow {
+                emit(ConnectedConversationSnapshot(trip, completed, listOf(ConnectedMessage("m", "driver", "Thanks", 1))))
+            }
+        }).observeConnectedConversation(trip.id).toList()
+        val conversation = (states.last() as ConnectedConversationState.Data).conversation
+        assertFalse(conversation.canSendMessages)
+        assertEquals(ConnectedConversationReadOnlyReason.COMPLETED, conversation.readOnlyReason)
+        assertEquals("Thanks", conversation.messages.single().body)
+    }
+
+    @Test
     fun `later listener failure retains only this streams rendered history and disables send`() = runBlocking {
         val message = ConnectedMessage("m", "driver", "Earlier", 10)
         val store = object : FakeCoordinationStore() {

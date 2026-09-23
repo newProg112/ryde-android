@@ -5,6 +5,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -65,6 +66,38 @@ class ConnectedJourneyFlowTest {
         now = store.load("driver").journeys.single { it.id == "journey-2" }.departureEpochMillis
         assertTrue(driver.cancelConnectedJourney("journey-2") is ConnectedJourneyCommandResult.Failure)
         assertEquals(ConnectedJourneyStatus.OPEN, store.load("driver").journeys.single { it.id == "journey-2" }.status)
+    }
+
+    @Test
+    fun `driver completion closes departed journey once and preserves linked history`() = runBlocking {
+        var now = 0L
+        val store = MemoryJourneyStore { now }
+        val driver = repository("driver", store)
+        val rider = repository("rider", store)
+        val pending = repository("pending", store)
+        driver.createConnectedJourney("Mansfield", "Nottingham", "2099-01-01 10:00", "2")
+        rider.requestConnectedSeat("journey-1")
+        pending.requestConnectedSeat("journey-1")
+        driver.decideConnectedRequest("journey-1_rider", true)
+        val before = store.load("driver")
+        now = before.journeys.single().departureEpochMillis
+
+        assertTrue(rider.completeConnectedJourney("journey-1") is ConnectedJourneyCommandResult.Failure)
+        assertEquals(ConnectedJourneyCommandResult.Success, driver.completeConnectedJourney("journey-1"))
+        val completed = driver.journeyState.value.journeys.single()
+        assertEquals(ConnectedJourneyStatus.COMPLETED, completed.status)
+        assertEquals(now, completed.completedAtEpochMillis)
+        assertEquals(before.journeys.single().seatsRemaining, completed.seatsRemaining)
+        assertEquals(before.requests, driver.journeyState.value.requests)
+        assertEquals(before.confirmedTrips, driver.journeyState.value.confirmedTrips)
+        assertEquals(ConnectedTripLifecycle.COMPLETED,
+            ConnectedJourneyLifecycle.trip(before.confirmedTrips.single(), completed, now))
+        assertEquals(ConnectedRequestLifecycle.DEPARTURE_PASSED_PENDING,
+            ConnectedJourneyLifecycle.request(before.requests.single { it.riderUid == "pending" }, completed, now))
+        assertFalse(ConnectedJourneyLifecycle.canSendMessages(before.confirmedTrips.single(), completed, "rider"))
+        assertTrue(driver.completeConnectedJourney("journey-1") is ConnectedJourneyCommandResult.Failure)
+        assertTrue(driver.cancelConnectedJourney("journey-1") is ConnectedJourneyCommandResult.Failure)
+        assertTrue(repository("other", store).requestConnectedSeat("journey-1") is ConnectedJourneyCommandResult.Failure)
     }
 
     @Test
@@ -498,6 +531,7 @@ class ConnectedJourneyFlowTest {
             override suspend fun cancelRequest(uid: String, requestId: String) = Unit
             override suspend fun cancelConfirmedSeat(uid: String, tripId: String) { throw CancellationException("cancel") }
             override suspend fun cancelJourney(uid: String, journeyId: String) { throw CancellationException("cancel") }
+            override suspend fun completeJourney(uid: String, journeyId: String) { throw CancellationException("cancel") }
             override suspend fun decide(uid: String, requestId: String, accept: Boolean) = Unit
         }
         val repository = repository("driver", cancellingStore)
@@ -515,6 +549,12 @@ class ConnectedJourneyFlowTest {
         }
         try {
             repository.cancelConnectedJourney("journey")
+            fail("Cancellation should propagate")
+        } catch (_: CancellationException) {
+            assertTrue(true)
+        }
+        try {
+            repository.completeConnectedJourney("journey")
             fail("Cancellation should propagate")
         } catch (_: CancellationException) {
             assertTrue(true)
@@ -599,6 +639,17 @@ class ConnectedJourneyFlowTest {
             val guard = guards.getValue(journeyId)
             check(guard.driverUid == uid && guard.acceptanceCount == journey.seatCapacity - journey.seatsRemaining)
             journeys[journeyId] = journey.copy(status = ConnectedJourneyStatus.CANCELLED, cancelledAtEpochMillis = nowMillis())
+        }
+
+        override suspend fun completeJourney(uid: String, journeyId: String) {
+            val journey = checkNotNull(journeys[journeyId])
+            check(ConnectedJourneyLifecycle.canCompleteJourney(journey, uid, nowMillis()))
+            val guard = guards.getValue(journeyId)
+            check(guard.driverUid == uid && guard.acceptanceCount == journey.seatCapacity - journey.seatsRemaining)
+            journeys[journeyId] = journey.copy(
+                status = ConnectedJourneyStatus.COMPLETED,
+                completedAtEpochMillis = nowMillis(),
+            )
         }
 
         override suspend fun decide(uid: String, requestId: String, accept: Boolean) {

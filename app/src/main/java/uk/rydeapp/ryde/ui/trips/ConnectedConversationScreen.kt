@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -161,7 +162,7 @@ internal fun ConnectedConversationScreen(
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
     }
 
-    Column(modifier.fillMaxSize().testTag("connected-conversation")) {
+    Column(modifier.fillMaxSize().imePadding().testTag("connected-conversation")) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = onBack) { Text(stringResource(R.string.connected_trip_details_back)) }
             Text(
@@ -276,5 +277,6 @@ private fun MessageBubble(message: ConnectedMessage, own: Boolean) {
 private fun ConnectedConversation.readOnlyText(): Int = when (readOnlyReason) {
     ConnectedConversationReadOnlyReason.CANCELLED_BY_RIDER -> R.string.connected_messages_read_only_rider
     ConnectedConversationReadOnlyReason.CANCELLED_BY_DRIVER -> R.string.connected_messages_read_only_driver
+    ConnectedConversationReadOnlyReason.COMPLETED -> R.string.connected_messages_read_only_completed
     ConnectedConversationReadOnlyReason.UNAVAILABLE, null -> R.string.connected_messages_read_only_unavailable
 }

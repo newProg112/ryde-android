@@ -41,6 +41,7 @@ internal fun connectedTripDetailsContent(
             journey != null && it.isNotBlank() && request?.id == it
         },
         cancellableJourneyId = summary.cancellableJourneyId?.takeIf { journey?.driverUid == uid && it.isNotBlank() && journey.id == it },
+        completableJourneyId = summary.completableJourneyId?.takeIf { journey?.driverUid == uid && it.isNotBlank() && journey.id == it },
         messageTarget = summary.messageTarget?.takeIf { target ->
             val confirmed = snapshot.confirmedTrips.firstOrNull { it.id == target.tripId }
             confirmed != null && ConnectedJourneyLifecycle.canReadMessages(confirmed, uid)

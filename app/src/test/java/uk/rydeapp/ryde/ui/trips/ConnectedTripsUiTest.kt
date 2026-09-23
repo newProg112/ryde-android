@@ -115,6 +115,24 @@ class ConnectedTripsUiTest {
         assertFalse(incoming.canDecline)
     }
 
+    @Test fun `driver can complete only a departed open journey and completion reaches rider history`() {
+        val accepted = request.copy(status = ConnectedRequestStatus.ACCEPTED)
+        val departedDriver = content(r = listOf(accepted), uid = journey.driverUid, now = journey.departureEpochMillis)
+            .driver.single()
+        assertEquals(journey.id, departedDriver.completableJourneyId)
+        assertNull(departedDriver.cancellableJourneyId)
+
+        val completed = journey.copy(status = ConnectedJourneyStatus.COMPLETED, completedAtEpochMillis = 1_001)
+        val driver = content(j = listOf(completed), r = listOf(accepted), uid = journey.driverUid, now = 2_000).driver.single()
+        assertEquals(R.string.connected_trips_completed, driver.statusText)
+        assertNull(driver.completableJourneyId)
+        assertEquals(R.string.connected_trips_completed, driver.incoming.single().statusText)
+        val rider = content(j = listOf(completed), r = listOf(accepted), t = listOf(trip), now = 2_000).rider.single()
+        assertEquals(R.string.connected_trips_completed, rider.statusText)
+        assertNull(rider.cancellableTripId)
+        assertNotNull(rider.messageTarget)
+    }
+
     @Test fun `past pending request is historical while authorised cleanup remains routed by request id`() {
         val rider = content(now = 1000).rider.single()
         assertEquals(R.string.connected_request_pending_departed, rider.statusText)

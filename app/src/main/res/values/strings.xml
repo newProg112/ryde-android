@@ -10,6 +10,7 @@
     <string name="connected_messages_unavailable">This conversation is unavailable. Go back or try again.</string>
     <string name="connected_messages_read_only_rider">This conversation is read-only because the rider cancelled the confirmed seat.</string>
     <string name="connected_messages_read_only_driver">This conversation is read-only because the driver cancelled the journey.</string>
+    <string name="connected_messages_read_only_completed">This conversation is read-only because the journey is complete.</string>
     <string name="connected_messages_read_only_unavailable">Message history is available, but new messages cannot be sent because the linked journey is unavailable or has changed.</string>
     <string name="connected_view_trip_details">View trip details</string>
     <string name="connected_trip_details_title">Trip details</string>
@@ -105,6 +106,12 @@
     <string name="connected_cancel_journey_confirm">Confirm journey cancellation</string>
     <string name="connected_keep_journey">Keep journey</string>
     <string name="connected_cancel_journey_success">Journey cancelled for all riders and requests.</string>
+    <string name="connected_complete_journey">Mark journey complete</string>
+    <string name="connected_complete_journey_title">Complete this journey?</string>
+    <string name="connected_complete_journey_body">This ends the journey for every rider and makes trip messages read-only. It cannot be undone.</string>
+    <string name="connected_complete_journey_confirm">Confirm journey completion</string>
+    <string name="connected_keep_journey_active">Keep journey active</string>
+    <string name="connected_complete_journey_success">Journey completed for all riders.</string>
     <string name="connected_trips_title">Your trips</string>
     <string name="connected_trips_intro">Your seat requests, shared trips and offered journeys.</string>
     <string name="connected_trips_empty">No trips yet</string>
@@ -120,6 +127,7 @@
     <string name="connected_trips_cancel_success">Seat cancelled. Your trips are up to date.</string>
     <string name="connected_trips_driver_cancelled">Journey cancelled by driver</string>
     <string name="connected_trips_departure_passed">Departure has passed</string>
+    <string name="connected_trips_completed">Journey completed</string>
     <string name="connected_trips_unavailable">Journey unavailable</string>
     <string name="connected_trips_details_unavailable">Journey details unavailable</string>
     <string name="connected_trips_cancel_seat">Cancel my seat</string>

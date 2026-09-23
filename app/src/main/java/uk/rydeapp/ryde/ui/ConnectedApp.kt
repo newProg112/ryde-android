@@ -2,6 +2,7 @@ package uk.rydeapp.ryde.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -264,6 +265,16 @@ internal fun ConnectedReadyApp(
             } else message = resources.getString(R.string.connected_driver_changed)
         }
     }
+    val completeJourney: (String) -> Unit = { journeyId ->
+        if (!busy) {
+            val journey = repository.journeyState.value.journeys.firstOrNull { it.id == journeyId }
+            if (!refreshRequired && journey != null && ConnectedJourneyLifecycle.canCompleteJourney(
+                    journey, session.accountId, currentTimeMillis(),
+                )) runCommand {
+                driverResult(repository.completeConnectedJourney(journeyId), R.string.connected_complete_journey_success)
+            } else message = resources.getString(R.string.connected_driver_changed)
+        }
+    }
     val openJourney: (String) -> Unit = { id ->
         if (id.isNotBlank()) navigation = navigation.copy(detailJourneyId = id, labSection = null, conversationTripId = null, conversationName = null)
     }
@@ -284,7 +295,7 @@ internal fun ConnectedReadyApp(
                     target = ConnectedMessageTarget(conversationTripId, navigation.conversationName),
                     repository = repository,
                     onBack = closeConversation,
-                    modifier = Modifier.padding(padding),
+                    modifier = Modifier.padding(padding).consumeWindowInsets(padding),
                 )
             }
             return@RydeShell
@@ -299,6 +310,7 @@ internal fun ConnectedReadyApp(
                     onDecideRequest = decideRequest, onCancelSeat = cancelSeat, onCancelJourney = cancelJourney,
                     onWithdrawRequest = cancelRequest,
                     onOpenMessages = openMessages,
+                    onCompleteJourney = completeJourney,
                     modifier = Modifier.padding(padding),
                 )
             }
@@ -345,6 +357,7 @@ internal fun ConnectedReadyApp(
                     onDecideRequest = decideRequest, onCancelJourney = cancelJourney,
                     onWithdrawRequest = cancelRequest,
                     onOpenJourney = openJourney,
+                    onCompleteJourney = completeJourney,
                 )
                 RydeDestination.PROFILE -> ConnectedProfileScreen(
                     session, profile, onSave, onSignOut, modifier,

@@ -18,6 +18,7 @@ data class ConnectedConversationSnapshot(
 enum class ConnectedConversationReadOnlyReason {
     CANCELLED_BY_RIDER,
     CANCELLED_BY_DRIVER,
+    COMPLETED,
     UNAVAILABLE,
 }
 

@@ -9,6 +9,7 @@ class ConnectedJourneyLifecycleTest {
     private val request = ConnectedSeatRequest("j_rider", "j", "driver", "rider", ConnectedRequestStatus.PENDING)
     private val trip = ConnectedConfirmedTrip("j_rider", "j", "j_rider", "driver", "rider", "Mansfield", "Nottingham", journey.departureEpochMillis, ConnectedTripStatus.CONFIRMED)
     private val cancelled = journey.copy(status = ConnectedJourneyStatus.CANCELLED, cancelledAtEpochMillis = 100_000)
+    private val completed = journey.copy(status = ConnectedJourneyStatus.COMPLETED, completedAtEpochMillis = 100_000)
 
     @Test
     fun `confirmed trip becomes departure passed exactly at departure without mutating persisted truth`() {
@@ -58,6 +59,25 @@ class ConnectedJourneyLifecycleTest {
         for (status in listOf(ConnectedRequestStatus.DECLINED, ConnectedRequestStatus.CANCELLED, ConnectedRequestStatus.CANCELLED_AFTER_ACCEPTANCE)) {
             assertFalse(ConnectedJourneyLifecycle.requestCancelledByDriver(request.copy(status = status), cancelled))
         }
+    }
+
+    @Test
+    fun `completion is canonical for confirmed trips and accepted requests`() {
+        assertEquals(ConnectedTripLifecycle.COMPLETED, ConnectedJourneyLifecycle.trip(trip, completed, Long.MAX_VALUE))
+        assertEquals(
+            ConnectedRequestLifecycle.COMPLETED,
+            ConnectedJourneyLifecycle.request(request.copy(status = ConnectedRequestStatus.ACCEPTED), completed, Long.MAX_VALUE),
+        )
+        assertEquals(
+            ConnectedRequestLifecycle.DEPARTURE_PASSED_PENDING,
+            ConnectedJourneyLifecycle.request(request, completed, Long.MAX_VALUE),
+        )
+        assertFalse(ConnectedJourneyLifecycle.canSendMessages(trip, completed, "rider"))
+        assertFalse(ConnectedJourneyLifecycle.discoverable(completed, "rider", 0))
+        assertFalse(ConnectedJourneyLifecycle.canCompleteJourney(journey, "rider", journey.departureEpochMillis))
+        assertFalse(ConnectedJourneyLifecycle.canCompleteJourney(journey, "driver", journey.departureEpochMillis - 1))
+        assertTrue(ConnectedJourneyLifecycle.canCompleteJourney(journey, "driver", journey.departureEpochMillis))
+        assertFalse(ConnectedJourneyLifecycle.canCompleteJourney(completed, "driver", Long.MAX_VALUE))
     }
 
     @Test
@@ -125,13 +145,16 @@ class ConnectedJourneyLifecycleTest {
     }
 
     @Test
-    fun `journey mapping supports legacy open and strict cancelled shapes`() {
+    fun `journey mapping supports open cancellation and completion exact shapes`() {
         val data = FirestoreJourneyMapper.journeyData("driver", ConnectedJourneyDraft("Mansfield", "Nottingham", journey.departureEpochMillis, 2))
         assertEquals(ConnectedJourneyStatus.OPEN, FirestoreJourneyMapper.journey("j", data)?.status)
         val closed = data + mapOf("status" to "CANCELLED", "cancelledAt" to Timestamp(100, 0))
         assertEquals(ConnectedJourneyStatus.CANCELLED, FirestoreJourneyMapper.journey("j", closed)?.status)
         assertEquals(100_000L, FirestoreJourneyMapper.journey("j", closed)?.cancelledAtEpochMillis)
-        for (invalid in listOf(closed - "cancelledAt", closed + ("cancelledAt" to "bad"), data + ("cancelledAt" to Timestamp(100, 0)), closed + ("extra" to true), data + ("status" to "CONFIRMED"))) {
+        val complete = data + mapOf("status" to "COMPLETED", "completedAt" to Timestamp(200, 0))
+        assertEquals(ConnectedJourneyStatus.COMPLETED, FirestoreJourneyMapper.journey("j", complete)?.status)
+        assertEquals(200_000L, FirestoreJourneyMapper.journey("j", complete)?.completedAtEpochMillis)
+        for (invalid in listOf(closed - "cancelledAt", closed + ("cancelledAt" to "bad"), data + ("cancelledAt" to Timestamp(100, 0)), closed + ("extra" to true), data + ("status" to "CONFIRMED"), complete - "completedAt", complete + ("completedAt" to "bad"), complete + ("cancelledAt" to Timestamp(100, 0)))) {
             assertNull(FirestoreJourneyMapper.journey("j", invalid))
         }
     }

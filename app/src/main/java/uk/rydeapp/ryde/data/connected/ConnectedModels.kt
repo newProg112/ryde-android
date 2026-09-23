@@ -78,7 +78,7 @@ enum class ConnectedRequestStatus { PENDING, ACCEPTED, DECLINED, CANCELLED, CANC
 
 enum class ConnectedTripStatus { CONFIRMED, CANCELLED_BY_RIDER }
 
-enum class ConnectedJourneyStatus { OPEN, CANCELLED }
+enum class ConnectedJourneyStatus { OPEN, CANCELLED, COMPLETED }
 
 data class ConnectedJourney(
     val id: String,
@@ -90,6 +90,7 @@ data class ConnectedJourney(
     val seatsRemaining: Int,
     val status: ConnectedJourneyStatus = ConnectedJourneyStatus.OPEN,
     val cancelledAtEpochMillis: Long? = null,
+    val completedAtEpochMillis: Long? = null,
 )
 
 data class ConnectedSeatRequest(
@@ -242,10 +243,17 @@ object FirestoreJourneyMapper {
 
     fun journey(id: String, data: Map<String, Any?>): ConnectedJourney? {
         val status = runCatching { ConnectedJourneyStatus.valueOf(data["status"] as? String ?: return null) }.getOrNull() ?: return null
-        val expectedFields = if (status == ConnectedJourneyStatus.CANCELLED) journeyFields + "cancelledAt" else journeyFields
+        val expectedFields = when (status) {
+            ConnectedJourneyStatus.OPEN -> journeyFields
+            ConnectedJourneyStatus.CANCELLED -> journeyFields + "cancelledAt"
+            ConnectedJourneyStatus.COMPLETED -> journeyFields + "completedAt"
+        }
         if (data.keys != expectedFields) return null
         val cancelledAt = if (status == ConnectedJourneyStatus.CANCELLED) {
             (data["cancelledAt"] as? Timestamp)?.toDate()?.time ?: return null
+        } else null
+        val completedAt = if (status == ConnectedJourneyStatus.COMPLETED) {
+            (data["completedAt"] as? Timestamp)?.toDate()?.time ?: return null
         } else null
         val capacity = (data["seatCapacity"] as? Number)?.toInt() ?: return null
         val remaining = (data["seatsRemaining"] as? Number)?.toInt() ?: return null
@@ -254,7 +262,7 @@ object FirestoreJourneyMapper {
             data["originArea"] as? String ?: return null,
             data["destinationArea"] as? String ?: return null,
             (data["departureAt"] as? Timestamp)?.toDate()?.time ?: return null,
-            capacity, remaining, status, cancelledAt,
+            capacity, remaining, status, cancelledAt, completedAt,
         ).takeIf { isValidJourney(it) }
     }
 

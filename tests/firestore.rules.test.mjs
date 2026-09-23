@@ -463,6 +463,70 @@ const cancelJourneyLikeGateway = (db, journeyId) => runTransaction(db, async (tr
   transaction.update(journeyRef, { status: "CANCELLED", cancelledAt: serverTimestamp() });
 });
 
+const completeJourneyLikeGateway = (db, journeyId) => runTransaction(db, async (transaction) => {
+  const journeyRef = doc(db, `journeys/${journeyId}`);
+  const source = (await transaction.get(journeyRef)).data();
+  const sourceGuard = (await transaction.get(doc(db, `journeyAcceptanceGuards/${journeyId}`))).data();
+  if (source.status !== "OPEN") throw new Error("Journey is terminal");
+  assert.equal(sourceGuard.acceptanceCount, source.seatCapacity - source.seatsRemaining);
+  transaction.update(journeyRef, { status: "COMPLETED", completedAt: serverTimestamp() });
+});
+
+test("only the driver completes a departed journey once with frozen allocation truth", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  const rider = environment.authenticatedContext("rider").firestore();
+  const stranger = environment.authenticatedContext("stranger").firestore();
+  const past = { ...journey("driver", 2), departureAt: Timestamp.fromMillis(Date.now() - 60_000) };
+  await environment.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await setDoc(doc(db, "journeys/past"), past);
+    await setDoc(doc(db, "journeyAcceptanceGuards/past"), guard("driver"));
+  });
+  await assertSucceeds(createJourney(driver, "future", "driver", 2));
+  await assertFails(completeJourneyLikeGateway(rider, "past"));
+  await assertFails(completeJourneyLikeGateway(stranger, "past"));
+  await assertFails(completeJourneyLikeGateway(driver, "future"));
+
+  const guardBefore = (await getDoc(doc(driver, "journeyAcceptanceGuards/past"))).data();
+  await assertSucceeds(completeJourneyLikeGateway(driver, "past"));
+  const completed = (await getDoc(doc(driver, "journeys/past"))).data();
+  assert.ok(completed.completedAt instanceof Timestamp);
+  assert.deepEqual(completed, { ...past, status: "COMPLETED", completedAt: completed.completedAt });
+  assert.deepEqual((await getDoc(doc(driver, "journeyAcceptanceGuards/past"))).data(), guardBefore);
+  await assert.rejects(completeJourneyLikeGateway(driver, "past"), /terminal/);
+  await assertFails(updateDoc(doc(driver, "journeys/past"), { status: "OPEN" }));
+  await assertFails(updateDoc(doc(driver, "journeys/past"), { status: "CANCELLED", cancelledAt: serverTimestamp() }));
+});
+
+test("completion requires exact server-authored fields and a consistent private guard", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  const past = { ...journey("driver", 2), departureAt: Timestamp.fromMillis(Date.now() - 60_000) };
+  await environment.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    for (const id of ["valid", "unguarded", "inconsistent"]) {
+      await setDoc(doc(db, `journeys/${id}`), past);
+    }
+    await setDoc(doc(db, "journeyAcceptanceGuards/valid"), guard("driver"));
+    await setDoc(doc(db, "journeyAcceptanceGuards/inconsistent"), guard("driver", 1, "other"));
+  });
+  for (const invalid of [
+    { status: "COMPLETED" },
+    { completedAt: serverTimestamp() },
+    { status: "COMPLETED", completedAt: "bad" },
+    { status: "COMPLETED", completedAt: Timestamp.fromMillis(0) },
+    { status: "COMPLETED", completedAt: serverTimestamp(), cancelledAt: serverTimestamp() },
+    { status: "COMPLETED", completedAt: serverTimestamp(), seatsRemaining: 1 },
+    { status: "COMPLETED", completedAt: serverTimestamp(), extra: true },
+  ]) await assertFails(updateDoc(doc(driver, "journeys/valid"), invalid));
+  await assertFails(updateDoc(doc(driver, "journeys/unguarded"), {
+    status: "COMPLETED", completedAt: serverTimestamp(),
+  }));
+  await assertFails(updateDoc(doc(driver, "journeys/inconsistent"), {
+    status: "COMPLETED", completedAt: serverTimestamp(),
+  }));
+  assert.equal((await getDoc(doc(driver, "journeys/valid"))).data().status, "OPEN");
+});
+
 test("driver cancels an empty offer once with server time and frozen capacity and guard", async () => {
   const driver = environment.authenticatedContext("driver").firestore();
   await assertSucceeds(createJourney(driver, "j1", "driver", 2));
@@ -1417,7 +1481,7 @@ test("messages are immutable and cannot be replayed across another trip", async 
   ));
 });
 
-test("cancellation blocks creates while preserving participant history", async () => {
+test("terminal lifecycle blocks creates while preserving participant history", async () => {
   await seedConversation();
   const driver = environment.authenticatedContext("driver").firestore();
   const rider = environment.authenticatedContext("rider").firestore();
@@ -1449,6 +1513,21 @@ test("cancellation blocks creates while preserving participant history", async (
   });
   await assertFails(setDoc(doc(driver, `${path}/after-driver-cancel`), message("driver")));
   await assertSucceeds(getDoc(doc(driver, `${path}/before`)));
+
+  await environment.clearFirestore();
+  await seedConversation();
+  await environment.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await setDoc(doc(db, `${path}/before`), {
+      senderUid: "driver", body: "Earlier", sentAt: Timestamp.now(),
+    });
+    await updateDoc(doc(db, "journeys/messages"), {
+      status: "COMPLETED",
+      completedAt: Timestamp.now(),
+    });
+  });
+  await assertFails(setDoc(doc(rider, `${path}/after-completion`), message("rider")));
+  await assertSucceeds(getDoc(doc(rider, `${path}/before`)));
 });
 
 test("missing mismatched and malformed linkage fail closed for send but valid history remains readable", async () => {

@@ -30,10 +30,12 @@ internal fun ConnectedTripsScreen(
     onCancelJourney: (String) -> Unit = {},
     onOpenJourney: (String) -> Unit = {},
     onWithdrawRequest: (String) -> Unit = {},
+    onCompleteJourney: (String) -> Unit = {},
 ) {
     var selectedTripId by remember { mutableStateOf<String?>(null) }
     var selectedRequestId by remember { mutableStateOf<String?>(null) }
     var selectedJourneyId by remember { mutableStateOf<String?>(null) }
+    var selectedCompletionId by remember { mutableStateOf<String?>(null) }
     // Dialog visibility follows the same resolved eligibility as the cards.
     val selected = content.rider.firstOrNull {
         it.cancellableTripId != null && it.cancellableTripId == selectedTripId
@@ -96,6 +98,7 @@ internal fun ConnectedTripsScreen(
                     item, busy, actionsEnabled, onCancel = {},
                     onDecide = onDecideRequest,
                     onCancelJourney = { selectedJourneyId = it },
+                    onCompleteJourney = { selectedCompletionId = it },
                 )
                 item.journeyId?.takeIf(String::isNotBlank)?.let { id ->
                     TextButton(onClick = { onOpenJourney(id) }) { Text(stringResource(R.string.connected_view_trip_details)) }
@@ -166,6 +169,26 @@ internal fun ConnectedTripsScreen(
             }
         },
     )
+    val selectedCompletion = content.driver.firstOrNull {
+        it.completableJourneyId != null && it.completableJourneyId == selectedCompletionId
+    }.takeIf { actionsEnabled }
+    if (selectedCompletion != null) AlertDialog(
+        onDismissRequest = { if (!busy) selectedCompletionId = null },
+        title = { Text(stringResource(R.string.connected_complete_journey_title)) },
+        text = { Text(stringResource(R.string.connected_complete_journey_body)) },
+        confirmButton = {
+            TextButton(enabled = !busy, onClick = {
+                val id = selectedCompletionId
+                selectedCompletionId = null
+                if (id != null && !busy && actionsEnabled) onCompleteJourney(id)
+            }) { Text(stringResource(R.string.connected_complete_journey_confirm)) }
+        },
+        dismissButton = {
+            TextButton(enabled = !busy, onClick = { selectedCompletionId = null }) {
+                Text(stringResource(R.string.connected_keep_journey_active))
+            }
+        },
+    )
 }
 
 @Composable
@@ -173,6 +196,7 @@ private fun TripCard(
     item: ConnectedTripsItem, busy: Boolean, actionsEnabled: Boolean, onCancel: (String) -> Unit,
     onWithdraw: (String) -> Unit = {}, onDecide: (String, Boolean) -> Unit = { _, _ -> },
     onCancelJourney: (String) -> Unit = {},
+    onCompleteJourney: (String) -> Unit = {},
 ) {
     Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(22.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
@@ -207,6 +231,11 @@ private fun TripCard(
             item.cancellableJourneyId?.let { id ->
                 OutlinedButton(onClick = { onCancelJourney(id) }, enabled = !busy && actionsEnabled) {
                     Text(stringResource(R.string.connected_cancel_journey))
+                }
+            }
+            item.completableJourneyId?.let { id ->
+                Button(onClick = { onCompleteJourney(id) }, enabled = !busy && actionsEnabled) {
+                    Text(stringResource(R.string.connected_complete_journey))
                 }
             }
         }

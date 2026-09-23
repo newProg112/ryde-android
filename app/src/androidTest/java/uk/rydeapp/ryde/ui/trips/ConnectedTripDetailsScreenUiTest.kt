@@ -275,6 +275,29 @@ class ConnectedTripDetailsScreenUiTest {
         compose.runOnIdle { assertEquals(listOf(request.id to false), decisions) }
     }
 
+    @Test fun driverCompletesDepartedJourneyThroughConfirmationOnce() {
+        val completions = mutableListOf<String>()
+        val busy = mutableStateOf(false)
+        compose.setContent { RydeTheme {
+            ConnectedTripDetailsScreen(
+                content(
+                    ConnectedJourneySnapshot(listOf(journey), listOf(request)),
+                    uid = journey.driverUid,
+                    now = journey.departureEpochMillis,
+                ),
+                busy.value, true, null, {}, {}, {}, { _, _ -> }, {}, {},
+                onCompleteJourney = { completions += it; busy.value = true },
+            )
+        } }
+        text("Mark journey complete").performClick()
+        compose.onNodeWithText("Keep journey active").performClick()
+        compose.runOnIdle { assertEquals(emptyList<String>(), completions) }
+        text("Mark journey complete").performClick()
+        compose.onNodeWithText("Confirm journey completion").performClick()
+        compose.onAllNodesWithText("Confirm journey completion").assertCountEquals(0)
+        compose.runOnIdle { assertEquals(listOf(journey.id), completions) }
+    }
+
     @Test fun unavailableAndMismatchedSelectionHasNoActionsButKeepsPersistedBookingHistory() {
         val snapshot = mutableStateOf(ConnectedJourneySnapshot())
         var backs = 0

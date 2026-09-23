@@ -14,6 +14,7 @@ import uk.rydeapp.ryde.data.connected.ConnectedConversation
 import uk.rydeapp.ryde.data.connected.ConnectedConversationReadOnlyReason
 import uk.rydeapp.ryde.data.connected.ConnectedConversationState
 import uk.rydeapp.ryde.data.connected.ConnectedMessage
+import uk.rydeapp.ryde.data.connected.ConnectedMessagePolicy
 import uk.rydeapp.ryde.data.connected.ConnectedTripStatus
 
 class ConnectedConversationScreenUiTest {
@@ -52,6 +53,9 @@ class ConnectedConversationScreenUiTest {
         compose.onNodeWithText("Use public pickup places. Do not share a home address, phone number, or live location.")
             .assertExists()
         compose.onNodeWithTag("message-compose").performTextInput("I'm here.")
+        compose.onNodeWithTag("message-compose").assertIsDisplayed()
+        compose.onNodeWithText("9/${ConnectedMessagePolicy.MAX_BODY_LENGTH}").assertIsDisplayed()
+        compose.onNodeWithTag("message-send").assertIsDisplayed()
         compose.onNodeWithTag("message-send").performClick()
         compose.onNodeWithTag("message-send").assertIsNotEnabled()
         assertEquals(1, sends)

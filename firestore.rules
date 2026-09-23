@@ -61,7 +61,7 @@ service cloud.firestore {
     function validJourney(data) {
       return data.keys().hasOnly([
           'driverUid', 'originArea', 'destinationArea', 'departureAt',
-          'seatCapacity', 'seatsRemaining', 'status', 'cancelledAt'
+          'seatCapacity', 'seatsRemaining', 'status', 'cancelledAt', 'completedAt'
         ])
         && data.driverUid is string
         && validBroadArea(data.originArea)
@@ -72,8 +72,12 @@ service cloud.firestore {
         && data.seatCapacity >= 1 && data.seatCapacity <= 8
         && data.seatsRemaining is int
         && data.seatsRemaining >= 0 && data.seatsRemaining <= data.seatCapacity
-        && ((data.status == 'OPEN' && !('cancelledAt' in data))
-          || (data.status == 'CANCELLED' && data.cancelledAt is timestamp));
+        && ((data.status == 'OPEN' && !('cancelledAt' in data)
+              && !('completedAt' in data))
+          || (data.status == 'CANCELLED' && data.cancelledAt is timestamp
+              && !('completedAt' in data))
+          || (data.status == 'COMPLETED' && data.completedAt is timestamp
+              && !('cancelledAt' in data)));
     }
 
     function validSeatRequest(data) {
@@ -367,6 +371,19 @@ service cloud.firestore {
         && request.resource.data.cancelledAt == request.time
         && request.resource.data.seatCapacity is int && request.resource.data.seatsRemaining is int
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'cancelledAt'])
+        && currentGuardMatchesJourney(journeyId, request.auth.uid)
+        && getAfter(acceptanceGuardPath(journeyId)).data == get(acceptanceGuardPath(journeyId)).data;
+      // Completion is the driver's one-way post-departure closure. Linked private
+      // records and allocation truth remain immutable history.
+      allow update: if signedIn()
+        && resource.data.driverUid == request.auth.uid
+        && resource.data.status == 'OPEN'
+        && resource.data.departureAt <= request.time
+        && validJourney(resource.data)
+        && request.resource.data.status == 'COMPLETED'
+        && request.resource.data.completedAt == request.time
+        && request.resource.data.seatCapacity is int && request.resource.data.seatsRemaining is int
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'completedAt'])
         && currentGuardMatchesJourney(journeyId, request.auth.uid)
         && getAfter(acceptanceGuardPath(journeyId)).data == get(acceptanceGuardPath(journeyId)).data;
       allow delete: if false;

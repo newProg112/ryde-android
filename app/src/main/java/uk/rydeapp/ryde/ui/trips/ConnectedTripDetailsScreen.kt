@@ -28,6 +28,7 @@ internal fun ConnectedTripDetailsScreen(
     modifier: Modifier = Modifier,
     onWithdrawRequest: (String) -> Unit = {},
     onOpenMessages: (ConnectedMessageTarget) -> Unit = {},
+    onCompleteJourney: (String) -> Unit = {},
 ) {
     val summary = content.summary
     val journey = content.journey
@@ -35,6 +36,7 @@ internal fun ConnectedTripDetailsScreen(
     var selectedTripId by remember { mutableStateOf<String?>(null) }
     var selectedRequestId by remember { mutableStateOf<String?>(null) }
     var selectedJourneyId by remember { mutableStateOf<String?>(null) }
+    var selectedCompletionId by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(summary?.cancellableTripId, actionsEnabled) {
         if (!actionsEnabled || selectedTripId != summary?.cancellableTripId) selectedTripId = null
     }
@@ -43,6 +45,9 @@ internal fun ConnectedTripDetailsScreen(
     }
     LaunchedEffect(summary?.cancellableRequestId, actionsEnabled) {
         if (!actionsEnabled || selectedRequestId != summary?.cancellableRequestId) selectedRequestId = null
+    }
+    LaunchedEffect(summary?.completableJourneyId, actionsEnabled) {
+        if (!actionsEnabled || selectedCompletionId != summary?.completableJourneyId) selectedCompletionId = null
     }
     LazyColumn(
         modifier.fillMaxSize().testTag("connected-trip-details-list"),
@@ -138,6 +143,11 @@ internal fun ConnectedTripDetailsScreen(
                 Text(stringResource(R.string.connected_cancel_journey))
             }
         } }
+        summary?.completableJourneyId?.let { id -> item {
+            Button(enabled = !busy && actionsEnabled, onClick = { selectedCompletionId = id }) {
+                Text(stringResource(R.string.connected_complete_journey))
+            }
+        } }
         item {
             Text(stringResource(R.string.connected_find_privacy), style = MaterialTheme.typography.bodySmall)
             Text(stringResource(R.string.connected_refresh_hint), style = MaterialTheme.typography.bodySmall)
@@ -180,6 +190,19 @@ internal fun ConnectedTripDetailsScreen(
         }) { Text(stringResource(R.string.connected_cancel_journey_confirm)) } },
         dismissButton = { TextButton(enabled = !busy, onClick = { selectedJourneyId = null }) {
             Text(stringResource(R.string.connected_keep_journey))
+        } },
+    )
+    if (selectedCompletionId != null && selectedCompletionId == summary?.completableJourneyId && actionsEnabled) AlertDialog(
+        onDismissRequest = { if (!busy) selectedCompletionId = null },
+        title = { Text(stringResource(R.string.connected_complete_journey_title)) },
+        text = { Text(stringResource(R.string.connected_complete_journey_body)) },
+        confirmButton = { TextButton(enabled = !busy, onClick = {
+            val id = selectedCompletionId
+            selectedCompletionId = null
+            if (id != null && !busy && actionsEnabled) onCompleteJourney(id)
+        }) { Text(stringResource(R.string.connected_complete_journey_confirm)) } },
+        dismissButton = { TextButton(enabled = !busy, onClick = { selectedCompletionId = null }) {
+            Text(stringResource(R.string.connected_keep_journey_active))
         } },
     )
 }

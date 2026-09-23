@@ -80,7 +80,7 @@ checks `BuildConfig.DEBUG`.
 
 Nothing in Phase 9C-1 has been deployed. The commands above create only disposable emulator
 users/documents and load rules locally. Production Firestore retains its existing deny-all
-rules. Later Phase 9C slices still need Circles and trip lifecycle;
+rules. Later connected slices still need Circles and richer in-progress journey states;
 messaging, notifications, maps/GPS, payments, Functions, Storage and other excluded services
 also remain out of this slice.
 
@@ -113,10 +113,12 @@ backend-to-domain conversion.
 - **9C-1:** broad-area discovery, offers and one-seat request decisions.
 - **9C lifecycle:** private confirmed trips plus rider/driver cancellation and retained history.
 - **Remote journey lifecycle sync:** authenticated normal-app sessions reconcile committed
-  `OPEN -> CANCELLED` changes into already loaded journey records without making requests or
+  `OPEN -> CANCELLED|COMPLETED` changes into already loaded journey records without making requests or
   confirmed trips realtime.
 - **Messaging Phase 1:** participant-private confirmed-trip text coordination with an
   open-screen realtime stream.
+- **Journey completion:** after departure, the driver closes the canonical journey once; linked
+  booking history remains immutable and coordination becomes read-only.
 - **Later:** migrate only the remaining explicitly selected capabilities while the local fake
   remains available for demos and tests.
 
@@ -138,8 +140,9 @@ The first 9C slice adds only these emulator-owned documents:
   departureAt: timestamp
   seatCapacity: int          # 1..8; immutable
   seatsRemaining: int        # initially capacity; 0..capacity
-  status: "OPEN" | "CANCELLED"
+  status: "OPEN" | "CANCELLED" | "COMPLETED"
   cancelledAt: timestamp     # required only for CANCELLED; server time
+  completedAt: timestamp     # required only for COMPLETED; server time
 
 /seatRequests/{journeyId}_{riderUid}
   journeyId: string          # immutable
@@ -221,6 +224,7 @@ journey + guard:  create OPEN(capacity) + count 0
                   -> OPEN(remaining - 1) + count + 1 per linked acceptance
                   -> OPEN(remaining + 1) + count - 1 per linked rider cancellation
                   -> CANCELLED + frozen remaining/count on driver cancellation
+                  -> COMPLETED + frozen remaining/count after departure
 request:          create PENDING -> ACCEPTED -> CANCELLED_AFTER_ACCEPTANCE
                                  -> DECLINED
                                  -> CANCELLED -> PENDING while the journey is
@@ -239,7 +243,7 @@ connected mode.
 
 While the normal connected app is authenticated, one scoped listener observes committed journey
 documents. Repository reconciliation accepts only an existing structurally matching journey's
-`OPEN -> CANCELLED` transition. It does not add or remove journeys, reopen cancellations, or
+`OPEN -> CANCELLED|COMPLETED` transition. It does not add or remove journeys, reopen terminal states, or
 realtime-update requests and confirmed trips. Those private records remain historical, and
 `CANCELLED_BY_DRIVER` continues to be derived from the linked journey. Sign-out, account change,
 or leaving the connected ready app removes the listener; explicit Refresh remains available if
@@ -257,10 +261,10 @@ cancels the flow and removes every Firestore registration.
 
 The structurally valid confirmed trip is the sole participant authorization anchor. Its driver
 and rider retain read/list access to history after rider cancellation, driver cancellation, or a
-missing/inconsistent linked journey. Create is stricter: the trip must remain `CONFIRMED`; the
+missing/inconsistent/completed linked journey. Create is stricter: the trip must remain `CONFIRMED`; the
 linked journey must exist, be structurally valid and `OPEN`; and driver, route and departure must
-exactly match the immutable trip snapshot. Departure passing alone does not close coordination,
-because no real completion/progress state exists yet. Malformed parent identity fails closed.
+exactly match the immutable trip snapshot. Departure passing alone does not close coordination;
+the driver's persisted completion does. Malformed parent identity fails closed.
 Messages are create-only; update/delete, sender spoofing, extra fields, client timestamps,
 strangers and unauthenticated callers are denied.
 
@@ -300,6 +304,9 @@ editing/deleting, moderation or location sharing.
     unable to read or write either nested message collection.
 11. Cancel the rider seat or driver journey while the other conversation remains open. Existing
     history must remain visible, the composer must disappear, and a new send must fail safely.
+12. For a journey whose departure has passed, use **Mark journey complete** as the driver. Confirm
+    both accounts show **Journey completed**, open conversations become read-only with history
+    retained, and the action cannot be repeated.
 
 Remaining work includes richer discovery/query design, Circles, and any trusted backend operation needed for stronger
 multi-document invariants. None of those capabilities are silently delegated to the fictional
@@ -340,7 +347,7 @@ firebase emulators:exec --config firebase.rules-test.json --only auth,firestore 
 ```
 
 The gateway test uses only demo-ryde-rules-test and ports 8180/9199, with unique disposable
-accounts/offers. It also verifies driver cancellation, frozen pending requests and preservation
+accounts/offers. It also verifies driver cancellation, driver completion, frozen pending requests and preservation
 of earlier rider cancellations. It skips without that explicit argument and never clears manual data.
 
 Manual verification: accept a one-seat booking, cancel it from the rider's Trips tab, refresh
@@ -384,3 +391,18 @@ their actions and confirmed riders see Journey cancelled by driver without Cance
 driver retains an unavailable cancelled offer after its command refresh. Repeat with an earlier
 rider-cancelled booking: it remains Cancelled by rider. Other offers remain independent. Automated
 tests use only the dedicated demo namespace/ports.
+
+### Driver journey completion (emulator only)
+
+At or after departure, only the owning driver can select **Mark journey complete** and confirm the
+one-way `OPEN -> COMPLETED` transition. The journey receives a server-authored `completedAt`; its
+capacity and private acceptance guard remain frozen, while requests and confirmed trips retain
+their immutable source history. Rider and driver trip views derive **Journey completed** from the
+linked canonical journey. Participant message history remains readable, but new messages are
+denied as soon as the journey is completed.
+
+Completion requires the existing acceptance guard to agree with allocated capacity and changes
+only the journey document. It cannot occur before departure, be performed by a rider or stranger,
+be repeated, reopen the journey, or be changed into cancellation. This phase does not model
+driver en route, pickup, journey underway, arrival evidence, ratings, payment settlement, or
+automatic completion.
