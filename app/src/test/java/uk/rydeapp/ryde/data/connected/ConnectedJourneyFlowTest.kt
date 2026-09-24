@@ -11,6 +11,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 import uk.rydeapp.ryde.domain.NoPlaceResolver
+import uk.rydeapp.ryde.domain.PlaceMatch
 import uk.rydeapp.ryde.domain.PlaceResolution
 import uk.rydeapp.ryde.domain.PlaceResolver
 import uk.rydeapp.ryde.domain.model.GeographicCoordinate
@@ -39,6 +40,7 @@ class ConnectedJourneyFlowTest {
         val cases = listOf(
             "no-result" to DevelopmentFixturePlaceResolver(),
             "failure" to PlaceResolver { PlaceResolution.Failure },
+            "thrown-failure" to PlaceResolver { error("Provider unavailable") },
         )
         cases.forEach { (destination, resolver) ->
             val store = MemoryJourneyStore()
@@ -62,7 +64,7 @@ class ConnectedJourneyFlowTest {
 
         assertEquals(
             ConnectedJourneyCommandResult.Success,
-            repository("driver", store).createConnectedJourney(
+            repository("driver", store).createConnectedJourneyFromPlaceSelection(
                 "Mansfield", "Nottingham", "2099-01-01 10:00", "1", origin, destination,
             ),
         )
@@ -74,6 +76,46 @@ class ConnectedJourneyFlowTest {
         val closed = store.load("driver").journeys.single()
         assertEquals(origin, closed.originCoordinate)
         assertEquals(destination, closed.destinationCoordinate)
+    }
+
+    @Test
+    fun `automatic ambiguous resolution never silently creates a journey`() = runBlocking {
+        val store = MemoryJourneyStore()
+        val result = repository("driver", store, DevelopmentFixturePlaceResolver()).createConnectedJourney(
+            "Mansfield", "Richmond", "2099-01-01 10:00", "1",
+        )
+
+        assertEquals(
+            ConnectedJourneyCommandResult.InvalidInput(ConnectedRydeRepository.SAFE_PLACE_SELECTION_REQUIRED),
+            result,
+        )
+        assertTrue(store.load("driver").journeys.isEmpty())
+    }
+
+    @Test
+    fun `selected ambiguous candidate coordinate is persisted with unique endpoint`() = runBlocking {
+        val store = MemoryJourneyStore()
+        val origin = GeographicCoordinate(53.1432, -1.1984)
+        val selectedDestination = PlaceMatch(
+            "Richmond — North Yorkshire",
+            GeographicCoordinate(54.4037, -1.7375),
+        )
+
+        assertEquals(
+            ConnectedJourneyCommandResult.Success,
+            repository("driver", store).createConnectedJourneyFromPlaceSelection(
+                "Mansfield",
+                "Richmond",
+                "2099-01-01 10:00",
+                "1",
+                origin,
+                selectedDestination.coordinate,
+            ),
+        )
+
+        val stored = store.load("driver").journeys.single()
+        assertEquals(origin, stored.originCoordinate)
+        assertEquals(selectedDestination.coordinate, stored.destinationCoordinate)
     }
 
     @Test

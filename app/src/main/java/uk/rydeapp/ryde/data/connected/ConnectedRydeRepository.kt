@@ -130,6 +130,25 @@ class ConnectedRydeRepository(
         destinationArea: String,
         departure: String,
         seats: String,
+    ): ConnectedJourneyCommandResult {
+        val draft = when (val validated = ConnectedJourneyValidator.offer(originArea, destinationArea, departure, seats)) {
+            is ValidationResult.Invalid -> return ConnectedJourneyCommandResult.InvalidInput(validated.userMessage)
+            is ValidationResult.Valid -> validated.value
+        }
+        return when (val resolved = draft.withAutomaticallyResolvedCoordinates()) {
+            is AutomaticCoordinateResolution.Ready -> createConnectedJourney(resolved.draft)
+            AutomaticCoordinateResolution.Ambiguous -> ConnectedJourneyCommandResult.InvalidInput(
+                SAFE_PLACE_SELECTION_REQUIRED,
+            )
+        }
+    }
+
+    /** Creates from a completed UI resolution flow; null coordinates are the intentional fallback. */
+    suspend fun createConnectedJourneyFromPlaceSelection(
+        originArea: String,
+        destinationArea: String,
+        departure: String,
+        seats: String,
         originCoordinate: GeographicCoordinate? = null,
         destinationCoordinate: GeographicCoordinate? = null,
     ): ConnectedJourneyCommandResult {
@@ -144,10 +163,11 @@ class ConnectedRydeRepository(
             originCoordinate = originCoordinate,
             destinationCoordinate = destinationCoordinate,
         )
-        return journeyCommand { store, uid ->
-            store.create(uid, coordinateDraft.withResolvedCoordinates())
-        }
+        return createConnectedJourney(coordinateDraft)
     }
+
+    /** Safe provider-neutral lookup boundary used by the normal Offer selection flow. */
+    suspend fun resolveConnectedPlace(broadPlace: String): PlaceResolution = safelyResolve(broadPlace)
 
     suspend fun requestConnectedSeat(journeyId: String): ConnectedJourneyCommandResult =
         journeyCommand { store, uid -> store.requestSeat(uid, journeyId) }
@@ -353,14 +373,23 @@ class ConnectedRydeRepository(
         }
     }
 
-    private suspend fun ConnectedJourneyDraft.withResolvedCoordinates(): ConnectedJourneyDraft {
-        if (originCoordinate != null && destinationCoordinate != null) return this
+    private suspend fun createConnectedJourney(draft: ConnectedJourneyDraft): ConnectedJourneyCommandResult =
+        journeyCommand { store, uid -> store.create(uid, draft) }
+
+    private suspend fun ConnectedJourneyDraft.withAutomaticallyResolvedCoordinates(): AutomaticCoordinateResolution {
         val origin = safelyResolve(originArea)
         val destination = safelyResolve(destinationArea)
-        return if (origin is PlaceResolution.Resolved && destination is PlaceResolution.Resolved) {
-            copy(originCoordinate = origin.coordinate, destinationCoordinate = destination.coordinate)
+        return if (origin is PlaceResolution.Multiple || destination is PlaceResolution.Multiple) {
+            AutomaticCoordinateResolution.Ambiguous
+        } else if (origin is PlaceResolution.Unique && destination is PlaceResolution.Unique) {
+            AutomaticCoordinateResolution.Ready(
+                copy(
+                    originCoordinate = origin.match.coordinate,
+                    destinationCoordinate = destination.match.coordinate,
+                ),
+            )
         } else {
-            this
+            AutomaticCoordinateResolution.Ready(this)
         }
     }
 
@@ -399,7 +428,13 @@ class ConnectedRydeRepository(
         const val SAFE_COORDINATION_LOAD_ERROR = "Messages are unavailable right now. Try again."
         const val SAFE_COORDINATION_SEND_ERROR = "Ryde couldn't send that message. Try again."
         const val SAFE_COORDINATION_READ_ONLY = "This conversation is now read-only."
+        const val SAFE_PLACE_SELECTION_REQUIRED = "Choose the intended broad area before offering this journey."
     }
+}
+
+private sealed interface AutomaticCoordinateResolution {
+    data class Ready(val draft: ConnectedJourneyDraft) : AutomaticCoordinateResolution
+    data object Ambiguous : AutomaticCoordinateResolution
 }
 
 private fun ConnectedConversationSnapshot.readOnlyReason(): ConnectedConversationReadOnlyReason = when {

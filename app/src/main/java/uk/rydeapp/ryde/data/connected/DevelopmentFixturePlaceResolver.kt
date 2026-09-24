@@ -2,6 +2,7 @@ package uk.rydeapp.ryde.data.connected
 
 import uk.rydeapp.ryde.domain.PlaceResolution
 import uk.rydeapp.ryde.domain.PlaceResolver
+import uk.rydeapp.ryde.domain.PlaceMatch
 import uk.rydeapp.ryde.domain.model.GeographicCoordinate
 
 /**
@@ -11,13 +12,22 @@ import uk.rydeapp.ryde.domain.model.GeographicCoordinate
 internal class DevelopmentFixturePlaceResolver : PlaceResolver {
     override suspend fun resolve(broadPlace: String): PlaceResolution =
         fixtures[broadPlace.trim().lowercase()]
-            ?.let(PlaceResolution::Resolved)
-            ?: PlaceResolution.NoResult
+            ?: PlaceResolution.NoMatches
 
     private companion object {
         val fixtures = mapOf(
-            "mansfield" to GeographicCoordinate(53.1432, -1.1984),
-            "nottingham" to GeographicCoordinate(52.9548, -1.1581),
+            "mansfield" to PlaceResolution.Unique(
+                PlaceMatch("Mansfield", GeographicCoordinate(53.1432, -1.1984)),
+            ),
+            "nottingham" to PlaceResolution.Unique(
+                PlaceMatch("Nottingham", GeographicCoordinate(52.9548, -1.1581)),
+            ),
+            "richmond" to PlaceResolution.Multiple(
+                listOf(
+                    PlaceMatch("Richmond — Greater London", GeographicCoordinate(51.4613, -0.3037)),
+                    PlaceMatch("Richmond — North Yorkshire", GeographicCoordinate(54.4037, -1.7375)),
+                ),
+            ),
         )
     }
 }

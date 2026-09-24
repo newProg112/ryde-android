@@ -7,6 +7,8 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
+import uk.rydeapp.ryde.domain.PlaceMatch
+import uk.rydeapp.ryde.domain.model.GeographicCoordinate
 import uk.rydeapp.ryde.ui.theme.RydeTheme
 
 class ConnectedOfferScreenUiTest {
@@ -43,5 +45,37 @@ class ConnectedOfferScreenUiTest {
         compose.runOnIdle { assertEquals(0, calls); enabled.value = false }
         compose.onNodeWithText("Offer journey").assertIsNotEnabled()
         compose.onNodeWithText("Refresh").performScrollTo().assertIsEnabled()
+    }
+
+    @Test fun ambiguousBroadAreaRequiresAndReportsExplicitCandidateSelection() {
+        val london = PlaceMatch("Richmond — Greater London", GeographicCoordinate(51.4613, -0.3037))
+        val yorkshire = PlaceMatch("Richmond — North Yorkshire", GeographicCoordinate(54.4037, -1.7375))
+        var selected: PlaceMatch? = null
+        compose.setContent { RydeTheme {
+            ConnectedOfferScreen(
+                busy = false,
+                actionsEnabled = true,
+                message = null,
+                createdVersion = 0,
+                onCreate = { _, _, _, _ -> error("Selection must happen first") },
+                onRefresh = {},
+                onManageOffers = {},
+                placeSelectionPrompt = OfferPlaceSelectionPrompt(
+                    OfferPlaceEndpoint.DESTINATION,
+                    "Richmond",
+                    listOf(london, yorkshire),
+                ),
+                onPlaceSelected = { endpoint, match ->
+                    assertEquals(OfferPlaceEndpoint.DESTINATION, endpoint)
+                    selected = match
+                },
+            )
+        } }
+
+        compose.onNodeWithText("Choose the intended broad area").assertIsDisplayed()
+        compose.onNodeWithText("Richmond — Greater London").assertIsDisplayed()
+        compose.onNodeWithText("Richmond — North Yorkshire").performClick()
+
+        compose.runOnIdle { assertEquals(yorkshire, selected) }
     }
 }

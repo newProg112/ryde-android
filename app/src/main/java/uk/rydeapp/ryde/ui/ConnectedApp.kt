@@ -32,6 +32,7 @@ import uk.rydeapp.ryde.data.AccountSession
 import uk.rydeapp.ryde.data.connected.ConnectedJourneyCommandResult
 import uk.rydeapp.ryde.data.connected.ConnectedJourneyLifecycle
 import uk.rydeapp.ryde.data.connected.ConnectedRydeRepository
+import uk.rydeapp.ryde.domain.PlaceMatch
 import uk.rydeapp.ryde.domain.model.ProfileContent
 import uk.rydeapp.ryde.ui.account.ConnectedJourneyScreen
 import uk.rydeapp.ryde.ui.account.ConnectedJourneySection
@@ -48,6 +49,8 @@ import uk.rydeapp.ryde.ui.trips.connectedTripDetailsContent
 import uk.rydeapp.ryde.ui.trips.connectedTripsContent
 import uk.rydeapp.ryde.ui.trips.canDecideConnectedRequest
 import uk.rydeapp.ryde.ui.offer.ConnectedOfferScreen
+import uk.rydeapp.ryde.ui.offer.OfferPlaceEndpoint
+import uk.rydeapp.ryde.ui.offer.OfferPlaceSelection
 
 private data class ConnectedNavigation(
     val destination: RydeDestination = RydeDestination.HOME,
@@ -55,6 +58,14 @@ private data class ConnectedNavigation(
     val detailJourneyId: String? = null,
     val conversationTripId: String? = null,
     val conversationName: String? = null,
+)
+
+private data class PendingConnectedOffer(
+    val origin: String,
+    val destination: String,
+    val departure: String,
+    val seats: String,
+    val places: OfferPlaceSelection,
 )
 
 /** The only new connected repository observation/command boundary; tabs receive data and callbacks. */
@@ -100,6 +111,7 @@ internal fun ConnectedReadyApp(
     var refreshRequired by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var createdVersion by rememberSaveable { mutableIntStateOf(0) }
+    var pendingOffer by remember(session.accountId) { mutableStateOf<PendingConnectedOffer?>(null) }
     var lifecycleNowEpochMillis by remember(session.accountId) {
         mutableLongStateOf(currentTimeMillis())
     }
@@ -230,18 +242,78 @@ internal fun ConnectedReadyApp(
             result.userMessage
         }
     }
+
+    suspend fun finishOffer(pending: PendingConnectedOffer): String {
+        val coordinates = pending.places.coordinates
+        val result = repository.createConnectedJourneyFromPlaceSelection(
+            pending.origin,
+            pending.destination,
+            pending.departure,
+            pending.seats,
+            coordinates?.origin,
+            coordinates?.destination,
+        )
+        if (result == ConnectedJourneyCommandResult.Success) {
+            createdVersion++
+            navigation = navigation.copy(destination = RydeDestination.TRIPS)
+        }
+        return driverResult(result, R.string.connected_offer_created)
+    }
+
+    fun launchOffer(action: suspend () -> PendingConnectedOffer) {
+        if (busy || refreshRequired) return
+        busy = true
+        message = null
+        scope.launch {
+            try {
+                val pending = action()
+                if (pending.places.isComplete) {
+                    pendingOffer = null
+                    message = finishOffer(pending)
+                } else {
+                    pendingOffer = pending
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                refreshRequired = true
+                message = resources.getString(R.string.connected_refresh_failed)
+            } finally {
+                busy = false
+            }
+        }
+    }
+
     val createOffer: (String, String, String, String) -> Unit = { origin, destination, departure, seats ->
         if (!busy) {
-            if (!refreshRequired) runCommand {
-                val result = repository.createConnectedJourney(origin, destination, departure, seats)
-                if (result == ConnectedJourneyCommandResult.Success) {
-                    createdVersion++
-                    navigation = navigation.copy(destination = RydeDestination.TRIPS)
-                }
-                driverResult(result, R.string.connected_offer_created)
+            if (!refreshRequired) launchOffer {
+                PendingConnectedOffer(
+                    origin = origin,
+                    destination = destination,
+                    departure = departure,
+                    seats = seats,
+                    places = OfferPlaceSelection.from(
+                        origin,
+                        destination,
+                        repository.resolveConnectedPlace(origin),
+                        repository.resolveConnectedPlace(destination),
+                    ),
+                )
             } else message = resources.getString(R.string.connected_trips_refresh_required)
         }
     }
+    val selectOfferPlace: (OfferPlaceEndpoint, PlaceMatch) -> Unit = { endpoint, match ->
+        pendingOffer?.let { pending ->
+            val selected = pending.copy(places = pending.places.select(endpoint, match))
+            if (selected.places.isComplete) {
+                pendingOffer = null
+                launchOffer { selected }
+            } else {
+                pendingOffer = selected
+            }
+        }
+    }
+    val dismissOfferPlaceSelection: () -> Unit = { if (!busy) pendingOffer = null }
     val decideRequest: (String, Boolean) -> Unit = { requestId, accept ->
         if (!busy) {
             val current = repository.journeyState.value
@@ -349,6 +421,9 @@ internal fun ConnectedReadyApp(
                     busy = busy, actionsEnabled = !refreshRequired, message = message, createdVersion = createdVersion,
                     onCreate = createOffer, onRefresh = refresh,
                     onManageOffers = { navigation = navigation.copy(destination = RydeDestination.TRIPS) }, modifier = modifier,
+                    placeSelectionPrompt = pendingOffer?.places?.prompt,
+                    onPlaceSelected = selectOfferPlace,
+                    onDismissPlaceSelection = dismissOfferPlaceSelection,
                 )
                 RydeDestination.TRIPS -> ConnectedTripsScreen(
                     content = tripsContent,

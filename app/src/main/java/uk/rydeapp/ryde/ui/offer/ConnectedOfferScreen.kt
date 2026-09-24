@@ -33,6 +33,9 @@ internal fun ConnectedOfferScreen(
     onRefresh: () -> Unit,
     onManageOffers: () -> Unit,
     modifier: Modifier = Modifier,
+    placeSelectionPrompt: OfferPlaceSelectionPrompt? = null,
+    onPlaceSelected: (OfferPlaceEndpoint, uk.rydeapp.ryde.domain.PlaceMatch) -> Unit = { _, _ -> },
+    onDismissPlaceSelection: () -> Unit = {},
 ) {
     var origin by rememberSaveable { mutableStateOf("") }
     var destination by rememberSaveable { mutableStateOf("") }
@@ -122,5 +125,42 @@ internal fun ConnectedOfferScreen(
                     Text(stringResource(R.string.connected_picker_ok))
                 }
             }, dismissButton = { TextButton(onClick = { pickTime = false }) { Text(stringResource(R.string.connected_picker_cancel)) } })
+    }
+    placeSelectionPrompt?.let { prompt ->
+        AlertDialog(
+            onDismissRequest = onDismissPlaceSelection,
+            title = { Text(stringResource(R.string.connected_offer_choose_area)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        stringResource(
+                            if (prompt.endpoint == OfferPlaceEndpoint.ORIGIN) {
+                                R.string.connected_offer_choose_origin
+                            } else {
+                                R.string.connected_offer_choose_destination
+                            },
+                            prompt.typedBroadArea,
+                        ),
+                    )
+                    Text(
+                        stringResource(R.string.connected_offer_choice_privacy),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    prompt.candidates.forEach { candidate ->
+                        OutlinedButton(
+                            onClick = { onPlaceSelected(prompt.endpoint, candidate) },
+                            enabled = !busy,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text(candidate.broadAreaLabel) }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = onDismissPlaceSelection, enabled = !busy) {
+                    Text(stringResource(R.string.connected_picker_cancel))
+                }
+            },
+        )
     }
 }

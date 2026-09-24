@@ -2,10 +2,28 @@ package uk.rydeapp.ryde.domain
 
 import uk.rydeapp.ryde.domain.model.GeographicCoordinate
 
+/** The minimum provider-neutral information Ryde needs for a broad-area choice. */
+data class PlaceMatch(
+    val broadAreaLabel: String,
+    val coordinate: GeographicCoordinate,
+) {
+    init {
+        require(broadAreaLabel.isNotBlank() && broadAreaLabel.length <= 80)
+        require(broadAreaLabel.none { it.isDigit() || it == ',' || it.isISOControl() })
+    }
+}
+
 /** Provider-neutral result of resolving one validated broad place label. */
 sealed interface PlaceResolution {
-    data class Resolved(val coordinate: GeographicCoordinate) : PlaceResolution
-    data object NoResult : PlaceResolution
+    data object NoMatches : PlaceResolution
+    data class Unique(val match: PlaceMatch) : PlaceResolution
+    data class Multiple(val matches: List<PlaceMatch>) : PlaceResolution {
+        init {
+            require(matches.size >= 2)
+            require(matches.distinct() == matches)
+            require(matches.distinctBy { it.broadAreaLabel.lowercase() }.size == matches.size)
+        }
+    }
     data object Failure : PlaceResolution
 }
 
@@ -16,5 +34,5 @@ fun interface PlaceResolver {
 
 /** Default when no resolver has been composed. It never invents a coordinate. */
 object NoPlaceResolver : PlaceResolver {
-    override suspend fun resolve(broadPlace: String): PlaceResolution = PlaceResolution.NoResult
+    override suspend fun resolve(broadPlace: String): PlaceResolution = PlaceResolution.NoMatches
 }

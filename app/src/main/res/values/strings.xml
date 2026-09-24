@@ -80,6 +80,10 @@
     <string name="connected_offer_departure">Departure</string>
     <string name="connected_offer_seats">Spare seats (1–8)</string>
     <string name="connected_offer_future">Choose a departure in the future.</string>
+    <string name="connected_offer_choose_area">Choose the intended broad area</string>
+    <string name="connected_offer_choose_origin">Which “%1$s” starting area did you mean?</string>
+    <string name="connected_offer_choose_destination">Which “%1$s” destination area did you mean?</string>
+    <string name="connected_offer_choice_privacy">Choose a broad town or district only. Ryde does not request an exact address or live location.</string>
     <string name="connected_choose_date">Choose date</string>
     <string name="connected_choose_time">Choose time</string>
     <string name="connected_picker_ok">OK</string>
