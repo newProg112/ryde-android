@@ -3,6 +3,9 @@ package uk.rydeapp.ryde.ui.find
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import uk.rydeapp.ryde.domain.BroadAreaJourneyMatchPolicy
+import uk.rydeapp.ryde.domain.GeographicJourneyMatch
+import uk.rydeapp.ryde.domain.JourneyGeographicEndpoints
 import uk.rydeapp.ryde.domain.model.GeographicCoordinate
 import uk.rydeapp.ryde.ui.home.ConnectedHomeJourney
 import uk.rydeapp.ryde.ui.place.BroadAreaCoordinates
@@ -45,4 +48,47 @@ internal fun filterConnectedFindJourneys(
                 Instant.ofEpochMilli(item.journey.departureEpochMillis)
                     .atZone(zoneId).toLocalDate() == criteria.departureDate)
     }
+}
+
+/** A text/date-visible Find item plus its separately evaluated geographic state. */
+internal data class ConnectedFindJourneyResult(
+    val item: ConnectedHomeJourney,
+    val geographicMatch: GeographicJourneyMatch,
+)
+
+/**
+ * Preserves every existing text/date result, including legacy journeys with no coordinates, while
+ * exposing geographic compatibility for later filtering or presentation decisions.
+ */
+internal fun assessConnectedFindJourneys(
+    journeys: List<ConnectedHomeJourney>,
+    criteria: ConnectedFindCriteria,
+    zoneId: ZoneId = ZoneId.systemDefault(),
+    policy: BroadAreaJourneyMatchPolicy = BroadAreaJourneyMatchPolicy(),
+): List<ConnectedFindJourneyResult> {
+    val riderEndpoints = geographicEndpoints(
+        criteria.originCoordinate,
+        criteria.destinationCoordinate,
+    )
+    return filterConnectedFindJourneys(journeys, criteria, zoneId).map { item ->
+        ConnectedFindJourneyResult(
+            item = item,
+            geographicMatch = policy.assess(
+                rider = riderEndpoints,
+                offeredJourney = geographicEndpoints(
+                    item.journey.originCoordinate,
+                    item.journey.destinationCoordinate,
+                ),
+            ),
+        )
+    }
+}
+
+private fun geographicEndpoints(
+    origin: GeographicCoordinate?,
+    destination: GeographicCoordinate?,
+): JourneyGeographicEndpoints? = if (origin != null && destination != null) {
+    JourneyGeographicEndpoints(origin, destination)
+} else {
+    null
 }

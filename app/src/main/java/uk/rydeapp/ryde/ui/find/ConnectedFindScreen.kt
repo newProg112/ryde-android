@@ -77,7 +77,7 @@ internal fun ConnectedFindScreen(
         originCoordinate = matchingResolution?.originCoordinate,
         destinationCoordinate = matchingResolution?.destinationCoordinate,
     )
-    val matches = filterConnectedFindJourneys(journeys, criteria)
+    val results = assessConnectedFindJourneys(journeys, criteria)
 
     fun clearFilters() {
         onPlaceDraftChanged()
@@ -161,7 +161,7 @@ internal fun ConnectedFindScreen(
                 Text(
                     pluralStringResource(
                         if (criteria.hasFilters) R.plurals.connected_find_matching_count else R.plurals.connected_find_count,
-                        matches.size, matches.size,
+                        results.size, results.size,
                     ),
                     modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.titleMedium,
@@ -189,7 +189,7 @@ internal fun ConnectedFindScreen(
                     stringResource(R.string.connected_find_empty_body),
                 )
             }
-        } else if (matches.isEmpty()) {
+        } else if (results.isEmpty()) {
             item {
                 InfoCard(
                     stringResource(R.string.connected_find_no_matches),
@@ -198,7 +198,8 @@ internal fun ConnectedFindScreen(
                 TextButton(onClick = ::clearFilters) { Text(stringResource(R.string.connected_find_clear)) }
             }
         }
-        items(matches, key = { it.journey.id }) { item ->
+        items(results, key = { it.item.journey.id }) { result ->
+            val item = result.item
             Column {
                 ConnectedJourneyCard(
                     item, busy, requestsEnabled, onRequestSeat, allowRerequest = true,
