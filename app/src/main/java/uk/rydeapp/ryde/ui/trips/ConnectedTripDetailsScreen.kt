@@ -11,6 +11,7 @@ import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.dp
 import uk.rydeapp.ryde.R
 import uk.rydeapp.ryde.ui.components.formatConnectedJourneyDeparture
+import uk.rydeapp.ryde.ui.map.JourneyRouteVisualisation
 
 /** Displays shared repository presentation and forwards commands; owns only transient confirmations. */
 @Composable
@@ -96,6 +97,9 @@ internal fun ConnectedTripDetailsScreen(
                 ) { Text(stringResource(R.string.connected_messages_action)) }
             }
         }
+        content.routeMap?.let { route -> item(key = "route-visual") {
+            JourneyRouteVisualisation(route)
+        } }
         if (content.canRequest && journey != null) item {
             Button(enabled = !busy && actionsEnabled, onClick = { onRequestSeat(journey.id) }) {
                 Text(stringResource(R.string.connected_request_seat))

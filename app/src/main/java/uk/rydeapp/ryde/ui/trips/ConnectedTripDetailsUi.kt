@@ -4,6 +4,8 @@ import uk.rydeapp.ryde.data.connected.ConnectedJourney
 import uk.rydeapp.ryde.data.connected.ConnectedJourneyLifecycle
 import uk.rydeapp.ryde.data.connected.ConnectedJourneySnapshot
 import uk.rydeapp.ryde.ui.home.ConnectedHomeJourney
+import uk.rydeapp.ryde.ui.map.JourneyMapPresentation
+import uk.rydeapp.ryde.ui.map.broadAreaJourneyMap
 
 /** A selection of existing presentation records, never a second journey store or lifecycle. */
 internal data class ConnectedTripDetailsContent(
@@ -11,6 +13,7 @@ internal data class ConnectedTripDetailsContent(
     val journey: ConnectedJourney? = null,
     val canRequest: Boolean = false,
     val unrequestedStatusText: Int? = null,
+    val routeMap: JourneyMapPresentation? = null,
 )
 
 internal fun connectedTripDetailsContent(
@@ -57,6 +60,8 @@ internal fun connectedTripDetailsContent(
             } else it.copy(messageTarget = target)
         },
     )
+    val origin = safeSummary?.origin ?: journey?.originArea
+    val destination = safeSummary?.destination ?: journey?.destinationArea
     return ConnectedTripDetailsContent(
         safeSummary, journey,
         journey != null && trip == null && discovery.any {
@@ -65,5 +70,8 @@ internal fun connectedTripDetailsContent(
         journey?.takeIf { safeSummary == null }?.let {
             connectedOfferedJourneyStatusText(it, nowEpochMillis)
         },
+        if (!origin.isNullOrBlank() && !destination.isNullOrBlank()) {
+            broadAreaJourneyMap(origin, destination)
+        } else null,
     )
 }

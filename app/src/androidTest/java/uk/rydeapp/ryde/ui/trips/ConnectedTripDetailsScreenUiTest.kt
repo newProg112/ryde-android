@@ -247,6 +247,9 @@ class ConnectedTripDetailsScreenUiTest {
         text("Departure has passed").assertIsDisplayed()
         text("Driver: Morgan Driver").assertIsDisplayed()
         text("${journey.originArea} \u2192 ${journey.destinationArea}").assertIsDisplayed()
+        text("Route overview").assertIsDisplayed()
+        text("Visual connection only — broad areas, not a road route or navigation.").assertIsDisplayed()
+        text("A separate rider pickup point is not stored for this journey.").assertIsDisplayed()
         compose.onNodeWithText("2099", substring = true).assertIsDisplayed()
         compose.onAllNodesWithText("Your seat is confirmed").assertCountEquals(0)
         compose.onAllNodesWithText("Cancel my seat").assertCountEquals(0)
@@ -363,7 +366,10 @@ class ConnectedTripDetailsScreenUiTest {
                 onOpenMessages = { driverTargets += it },
             )
         } }
+        val list = compose.onNodeWithTag("connected-trip-details-list")
+        list.performScrollToNode(hasTestTag("details-messages:${riderTrip.id}"))
         compose.onNodeWithTag("details-messages:${riderTrip.id}").performScrollTo().performClick()
+        list.performScrollToNode(hasTestTag("details-messages:${secondTrip.id}"))
         compose.onNodeWithTag("details-messages:${secondTrip.id}").performScrollTo().performClick()
         compose.runOnIdle {
             assertEquals(setOf(riderTrip.id, secondTrip.id), driverTargets.map { it.tripId }.toSet())

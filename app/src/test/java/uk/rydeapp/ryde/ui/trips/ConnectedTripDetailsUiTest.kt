@@ -5,6 +5,8 @@ import org.junit.Test
 import uk.rydeapp.ryde.R
 import uk.rydeapp.ryde.data.connected.*
 import uk.rydeapp.ryde.ui.home.connectedHomeJourneys
+import uk.rydeapp.ryde.ui.map.JourneyMapLine
+import uk.rydeapp.ryde.ui.map.JourneyMapPointRole
 
 class ConnectedTripDetailsUiTest {
     private val journey = ConnectedJourney("journey", "driver", "Mansfield", "Sheffield", 1000, 3, 2)
@@ -77,6 +79,12 @@ class ConnectedTripDetailsUiTest {
         assertNull(result.unrequestedStatusText)
         assertFalse(result.canRequest)
         assertNull(result.summary.cancellableRequestId)
+        assertEquals(listOf("Persisted area", "Sheffield"), result.routeMap!!.points.map { it.label })
+        assertEquals(
+            listOf(JourneyMapPointRole.JOURNEY_START, JourneyMapPointRole.JOURNEY_DESTINATION),
+            result.routeMap.points.map { it.role },
+        )
+        assertEquals(JourneyMapLine.VisualConnection, result.routeMap.line)
         // A partial read without the accepted request must never re-enable a new request.
         assertFalse(details(snapshot.copy(requests = emptyList())).canRequest)
         val cancelled = details(snapshot.copy(confirmedTrips = listOf(trip.copy(status = ConnectedTripStatus.CANCELLED_BY_RIDER))))
@@ -150,6 +158,7 @@ class ConnectedTripDetailsUiTest {
             assertNull(pending.summary!!.origin)
             assertEquals(R.string.connected_trips_unavailable, pending.summary.statusText)
             assertNull(pending.summary.cancellableRequestId)
+            assertNull(pending.routeMap)
             assertFalse(pending.canRequest)
             val confirmed = details(ConnectedJourneySnapshot(journeys, listOf(request), listOf(trip)))
             assertNull(confirmed.journey)

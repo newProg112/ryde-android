@@ -27,6 +27,12 @@
     <string name="connected_no_journeys">No upcoming journeys yet</string>
     <string name="connected_no_journeys_body">Check again after someone offers a journey. Refresh to see the latest availability.</string>
     <string name="connected_route">%1$s → %2$s</string>
+    <string name="connected_route_overview">Route overview</string>
+    <string name="connected_route_start">Journey start</string>
+    <string name="connected_route_destination">Destination</string>
+    <string name="connected_route_visual_description">Visual connection from %1$s to %2$s; this is not a geographic map</string>
+    <string name="connected_route_visual_only">Visual connection only — broad areas, not a road route or navigation.</string>
+    <string name="connected_route_pickup_unavailable">A separate rider pickup point is not stored for this journey.</string>
     <string name="connected_seats">Seats remaining: %1$d/%2$d</string>
     <string name="connected_request_pending">Your request is pending</string>
     <string name="connected_request_pending_departed">Departure has passed - this request can no longer be accepted</string>

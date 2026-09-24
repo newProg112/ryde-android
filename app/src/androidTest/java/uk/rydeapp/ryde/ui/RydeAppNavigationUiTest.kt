@@ -976,23 +976,32 @@ class RydeAppNavigationUiTest {
     fun driverTripsDetailsReuseDecisionsAndCancellationAndStayOpenAfterMutations() {
         pendingForDriver()
         val first = store.requests.single()
-        val second = first.copy(id = "second-request-id", riderUid = "second-private-uid")
+        val second = first.copy(
+            id = "${first.journeyId}_second-private-uid",
+            riderUid = "second-private-uid",
+        )
         store.requests += second
         launchConnected()
         tab("Trips").performClick()
         openDetails()
-        compose.onAllNodesWithText("Rider: Taylor").assertCountEquals(2)
         val list = compose.onNodeWithTag("connected-trip-details-list")
         list.performScrollToNode(hasTestTag("details-incoming:${first.id}"))
+        compose.onNode(
+            hasText("Rider: Taylor") and hasAnyAncestor(hasTestTag("details-incoming:${first.id}")),
+        ).assertIsDisplayed()
         compose.onNode(hasText("Accept") and hasAnyAncestor(hasTestTag("details-incoming:${first.id}"))).performClick()
         list.performScrollToNode(hasTestTag("details-incoming:${second.id}"))
+        compose.onNode(
+            hasText("Rider: Taylor") and hasAnyAncestor(hasTestTag("details-incoming:${second.id}")),
+        ).assertIsDisplayed()
         compose.onNode(hasText("Decline") and hasAnyAncestor(hasTestTag("details-incoming:${second.id}"))).performClick()
         detailsText("Cancel journey").performClick()
         compose.onNodeWithText("Keep journey").performClick()
         compose.runOnIdle { assertTrue(store.journeyCancelCalls.isEmpty()) }
         detailsText("Cancel journey").performClick()
         compose.onNodeWithText("Confirm journey cancellation").performClick()
-        compose.onNodeWithText("Trip details").performScrollTo().assertIsDisplayed()
+        list.performScrollToNode(hasText("Trip details"))
+        compose.onNodeWithText("Trip details").assertIsDisplayed()
         compose.onAllNodesWithText("Accept").assertCountEquals(0)
         compose.onAllNodesWithText("Decline").assertCountEquals(0)
         compose.onAllNodesWithText("Cancel journey").assertCountEquals(0)

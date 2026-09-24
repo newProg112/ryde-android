@@ -15,15 +15,15 @@ import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Assume.assumeTrue
 import org.junit.Test
 import java.util.UUID
 
 /** Opt-in only: demo namespace and ports never overlap the manual Firebase emulators. */
 class FirestoreConnectedCancellationEmulatorTest {
     @Test
-    fun actualGatewayReleasesOneSeatWithoutGuardReadsAndRetainsHistory() = runBlocking {
-        assumeTrue(InstrumentationRegistry.getArguments().getString("rydeRulesEmulator") == "true")
+    fun actualGatewayReleasesOneSeatWithoutGuardReadsAndRetainsHistory() {
+        if (InstrumentationRegistry.getArguments().getString("rydeRulesEmulator") != "true") return
+        runBlocking {
         val apps = mutableListOf<FirebaseApp>()
         try {
             suspend fun account(displayName: String): Triple<String, FirebaseFirestore, FirestoreConnectedJourneyStore> {
@@ -192,6 +192,7 @@ class FirestoreConnectedCancellationEmulatorTest {
             assertFalse(runCatching { driver.completeJourney(driverUid, completing.id) }.isSuccess)
         } finally {
             apps.forEach { it.delete() }
+        }
         }
     }
 }
