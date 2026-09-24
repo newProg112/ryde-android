@@ -11,6 +11,9 @@ import uk.rydeapp.ryde.data.connected.ConnectedJourneySnapshot
 import uk.rydeapp.ryde.data.connected.ConnectedJourneyStatus
 import uk.rydeapp.ryde.data.connected.ConnectedRequestStatus
 import uk.rydeapp.ryde.data.connected.ConnectedSeatRequest
+import uk.rydeapp.ryde.domain.BroadAreaJourneyMatchPolicy
+import uk.rydeapp.ryde.domain.GeographicDistance
+import uk.rydeapp.ryde.domain.GeographicDistanceCalculator
 import uk.rydeapp.ryde.domain.GeographicJourneyMatch
 import uk.rydeapp.ryde.domain.model.GeographicCoordinate
 import uk.rydeapp.ryde.ui.home.ConnectedHomeJourney
@@ -170,6 +173,83 @@ class ConnectedFindUiTest {
         assertTrue(result.geographicMatch is GeographicJourneyMatch.Compatible)
     }
 
+    @Test fun actualConnectedFindResultsRankTheCloserJourneyAtBothEndsFirst() {
+        val farther = locatedItem("farther", originKilometres = 5.0, destinationKilometres = 6.0,
+            departure = "2026-09-18T08:00:00Z")
+        val closer = locatedItem("closer", originKilometres = 2.0, destinationKilometres = 3.0,
+            departure = "2026-09-18T10:00:00Z")
+        val outsideTolerance = locatedItem("outside", originKilometres = 16.0, destinationKilometres = 0.0,
+            departure = "2026-09-18T07:00:00Z")
+
+        val results = matchConnectedFindJourneys(
+            journeys = listOf(farther, outsideTolerance, closer),
+            criteria = rankedCriteria(),
+            policy = encodedDistancePolicy,
+        )
+
+        assertEquals(listOf("closer", "farther"), results.map { it.item.journey.id })
+        assertEquals(listOf(5.0, 11.0), results.map { it.geographicScore!!.combinedEndpointDistance.kilometres })
+    }
+
+    @Test fun rankingUsesCombinedDistanceWhenEndpointsHaveATradeOff() {
+        val closerAtOrigin = locatedItem(
+            "closer-origin", originKilometres = 1.0, destinationKilometres = 8.0,
+        )
+        val closerAtDestination = locatedItem(
+            "closer-destination", originKilometres = 4.0, destinationKilometres = 2.0,
+        )
+
+        val results = matchConnectedFindJourneys(
+            listOf(closerAtOrigin, closerAtDestination),
+            rankedCriteria(),
+            policy = encodedDistancePolicy,
+        )
+
+        assertEquals(listOf("closer-destination", "closer-origin"), results.map { it.item.journey.id })
+    }
+
+    @Test fun equalGeographicScoresUseDepartureThenJourneyIdAsStableTieBreaks() {
+        val later = locatedItem(
+            "a-later", originKilometres = 2.0, destinationKilometres = 4.0,
+            departure = "2026-09-18T10:00:00Z",
+        )
+        val earlyZ = locatedItem(
+            "z-early", originKilometres = 3.0, destinationKilometres = 3.0,
+            departure = "2026-09-18T08:00:00Z",
+        )
+        val earlyA = locatedItem(
+            "a-early", originKilometres = 1.0, destinationKilometres = 5.0,
+            departure = "2026-09-18T08:00:00Z",
+        )
+
+        val results = matchConnectedFindJourneys(
+            listOf(later, earlyZ, earlyA),
+            rankedCriteria(),
+            policy = encodedDistancePolicy,
+        )
+
+        assertEquals(listOf("a-early", "z-early", "a-later"), results.map { it.item.journey.id })
+    }
+
+    @Test fun legacyFallbackResultsAreUnscoredAndDeterministicAfterGeographicResults() {
+        val legacyZ = item("z-legacy", "Mansfield", "Nottingham", "2026-09-18T08:00:00Z")
+        val geographic = locatedItem(
+            "geographic", originKilometres = 5.0, destinationKilometres = 5.0,
+            departure = "2026-09-18T10:00:00Z",
+        )
+        val legacyA = item("a-legacy", "Mansfield", "Nottingham", "2026-09-18T08:00:00Z")
+
+        val results = matchConnectedFindJourneys(
+            listOf(legacyZ, geographic, legacyA),
+            rankedCriteria(),
+            policy = encodedDistancePolicy,
+        )
+
+        assertEquals(listOf("geographic", "a-legacy", "z-legacy"), results.map { it.item.journey.id })
+        assertTrue(results.first().geographicScore != null)
+        assertTrue(results.drop(1).all { it.geographicScore == null })
+    }
+
     @Test fun originOutsideGeographicToleranceDoesNotMatch() {
         val riderOrigin = GeographicCoordinate(53.1432, -1.1984)
         val destination = GeographicCoordinate(52.9548, -1.1581)
@@ -283,5 +363,32 @@ class ConnectedFindUiTest {
     private fun item(id: String, origin: String, destination: String, departure: String) = ConnectedHomeJourney(
         ConnectedJourney(id, "driver", origin, destination, Instant.parse(departure).toEpochMilli(), 2, 1),
         request = null, canRequest = true,
+    )
+
+    private fun locatedItem(
+        id: String,
+        originKilometres: Double,
+        destinationKilometres: Double,
+        departure: String = "2026-09-18T08:00:00Z",
+    ): ConnectedHomeJourney = item(id, "Mansfield", "Nottingham", departure).let { source ->
+        source.copy(
+            journey = source.journey.copy(
+                originCoordinate = GeographicCoordinate(0.0, originKilometres),
+                destinationCoordinate = GeographicCoordinate(1.0, destinationKilometres),
+            ),
+        )
+    }
+
+    private fun rankedCriteria() = ConnectedFindCriteria(
+        origin = "Mansfield",
+        destination = "Nottingham",
+        originCoordinate = GeographicCoordinate(0.0, 0.0),
+        destinationCoordinate = GeographicCoordinate(1.0, 0.0),
+    )
+
+    private val encodedDistancePolicy = BroadAreaJourneyMatchPolicy(
+        distanceCalculator = GeographicDistanceCalculator { _, offered ->
+            GeographicDistance(offered.longitude)
+        },
     )
 }

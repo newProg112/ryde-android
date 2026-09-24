@@ -9,6 +9,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import uk.rydeapp.ryde.data.connected.ConnectedJourney
@@ -136,6 +137,53 @@ class ConnectedFindScreenUiTest {
             assertEquals("Mansfield", submitted?.origin)
             assertEquals("Nottingham", submitted?.destination)
         }
+    }
+
+    @Test fun resolvedSearchRendersGeographicallyCloserJourneyFirst() {
+        val riderOrigin = GeographicCoordinate(53.1432, -1.1984)
+        val riderDestination = GeographicCoordinate(52.9548, -1.1581)
+        val farther = item("farther", "Farther origin", "Farther destination").let { source ->
+            source.copy(journey = source.journey.copy(
+                originCoordinate = GeographicCoordinate(53.1932, -1.1984),
+                destinationCoordinate = GeographicCoordinate(53.0048, -1.1581),
+            ))
+        }
+        val closer = item("closer", "Closer origin", "Closer destination").let { source ->
+            source.copy(journey = source.journey.copy(
+                originCoordinate = riderOrigin,
+                destinationCoordinate = riderDestination,
+            ))
+        }
+        val resolved = mutableStateOf<ConnectedFindCriteria?>(null)
+        compose.setContent { RydeTheme {
+            ConnectedFindScreen(
+                journeys = listOf(farther, closer),
+                busy = false,
+                requestsEnabled = true,
+                message = null,
+                onRefresh = {},
+                onRequestSeat = {},
+                onManageRequests = {},
+                resolvedCriteria = resolved.value,
+                onResolveCriteria = { criteria ->
+                    resolved.value = criteria.copy(
+                        originCoordinate = riderOrigin,
+                        destinationCoordinate = riderDestination,
+                    )
+                },
+            )
+        } }
+
+        origin().performTextInput("Mansfield")
+        destination().performTextInput("Nottingham")
+        field("connected-find-search").performScrollTo().performClick()
+        compose.onNodeWithTag("connected-find-list").performScrollToIndex(6)
+
+        val closerTop = compose.onNodeWithText("Closer origin", substring = true)
+            .fetchSemanticsNode().boundsInRoot.top
+        val fartherTop = compose.onNodeWithText("Farther origin", substring = true)
+            .fetchSemanticsNode().boundsInRoot.top
+        assertTrue(closerTop < fartherTop)
     }
 
     @Test fun ambiguousFromChoiceIsExplicitAndPreservesToDraft() {

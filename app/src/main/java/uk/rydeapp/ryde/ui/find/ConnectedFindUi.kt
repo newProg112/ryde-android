@@ -5,7 +5,9 @@ import java.time.LocalDate
 import java.time.ZoneId
 import uk.rydeapp.ryde.domain.BroadAreaJourneyMatchPolicy
 import uk.rydeapp.ryde.domain.GeographicJourneyMatch
+import uk.rydeapp.ryde.domain.GeographicJourneyMatchScore
 import uk.rydeapp.ryde.domain.JourneyGeographicEndpoints
+import uk.rydeapp.ryde.domain.combinedEndpointScore
 import uk.rydeapp.ryde.domain.model.GeographicCoordinate
 import uk.rydeapp.ryde.ui.home.ConnectedHomeJourney
 import uk.rydeapp.ryde.ui.place.BroadAreaCoordinates
@@ -44,7 +46,10 @@ internal fun filterConnectedFindJourneys(
 internal data class ConnectedFindJourneyResult(
     val item: ConnectedHomeJourney,
     val geographicMatch: GeographicJourneyMatch,
-)
+) {
+    val geographicScore: GeographicJourneyMatchScore?
+        get() = (geographicMatch as? GeographicJourneyMatch.Compatible)?.combinedEndpointScore()
+}
 
 /**
  * Matches the already-authorized CONNECTED discovery presentation without loading journey state.
@@ -80,8 +85,14 @@ internal fun matchConnectedFindJourneys(
             GeographicJourneyMatch.InsufficientGeographicData -> textRouteMatches(item, criteria)
         }
         if (routeMatches) ConnectedFindJourneyResult(item, geographicMatch) else null
-    }
+    }.sortedWith(connectedFindResultRanking)
 }
+
+private val connectedFindResultRanking =
+    compareBy<ConnectedFindJourneyResult> { it.geographicScore == null }
+        .thenBy { it.geographicScore }
+        .thenBy { it.item.journey.departureEpochMillis }
+        .thenBy { it.item.journey.id }
 
 private fun textRouteMatches(
     item: ConnectedHomeJourney,
