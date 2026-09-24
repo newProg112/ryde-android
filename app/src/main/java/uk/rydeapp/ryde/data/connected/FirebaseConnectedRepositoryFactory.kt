@@ -27,6 +27,7 @@ object FirebaseConnectedRepositoryFactory {
             profiles = FirestoreConnectedProfileStore(firestore),
             journeys = FirestoreConnectedJourneyStore(firestore),
             coordination = FirestoreConnectedCoordinationStore(firestore),
+            placeResolver = DevelopmentFixturePlaceResolver(),
         )
     }
 }

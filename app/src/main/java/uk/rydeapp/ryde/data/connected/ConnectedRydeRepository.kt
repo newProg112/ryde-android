@@ -17,6 +17,9 @@ import uk.rydeapp.ryde.data.AsyncState
 import uk.rydeapp.ryde.data.FakeRydeRepository
 import uk.rydeapp.ryde.data.RydeRepository
 import uk.rydeapp.ryde.data.RydeSnapshot
+import uk.rydeapp.ryde.domain.NoPlaceResolver
+import uk.rydeapp.ryde.domain.PlaceResolution
+import uk.rydeapp.ryde.domain.PlaceResolver
 import uk.rydeapp.ryde.domain.model.GeographicCoordinate
 import uk.rydeapp.ryde.domain.model.ProfileContent
 import uk.rydeapp.ryde.domain.model.SavePlaceResult
@@ -30,6 +33,7 @@ class ConnectedRydeRepository(
     private val firebaseOperationTimeoutMillis: Long = FIREBASE_OPERATION_TIMEOUT_MILLIS,
     private val journeys: ConnectedJourneyStore? = null,
     private val coordination: ConnectedCoordinationStore? = null,
+    private val placeResolver: PlaceResolver = NoPlaceResolver,
 ) : RydeRepository by legacyCapabilities {
     private val mutableSessionState = MutableStateFlow<AccountSession>(
         if (auth.currentUserId == null) AccountSession.SignedOut else AccountSession.Checking,
@@ -136,11 +140,12 @@ class ConnectedRydeRepository(
         if ((originCoordinate == null) != (destinationCoordinate == null)) {
             return ConnectedJourneyCommandResult.InvalidInput("Both journey coordinates are required together.")
         }
+        val coordinateDraft = draft.copy(
+            originCoordinate = originCoordinate,
+            destinationCoordinate = destinationCoordinate,
+        )
         return journeyCommand { store, uid ->
-            store.create(uid, draft.copy(
-                originCoordinate = originCoordinate,
-                destinationCoordinate = destinationCoordinate,
-            ))
+            store.create(uid, coordinateDraft.withResolvedCoordinates())
         }
     }
 
@@ -346,6 +351,25 @@ class ConnectedRydeRepository(
         } catch (_: Throwable) {
             ConnectedJourneyCommandResult.Failure(SAFE_JOURNEY_ERROR)
         }
+    }
+
+    private suspend fun ConnectedJourneyDraft.withResolvedCoordinates(): ConnectedJourneyDraft {
+        if (originCoordinate != null && destinationCoordinate != null) return this
+        val origin = safelyResolve(originArea)
+        val destination = safelyResolve(destinationArea)
+        return if (origin is PlaceResolution.Resolved && destination is PlaceResolution.Resolved) {
+            copy(originCoordinate = origin.coordinate, destinationCoordinate = destination.coordinate)
+        } else {
+            this
+        }
+    }
+
+    private suspend fun safelyResolve(broadPlace: String): PlaceResolution = try {
+        placeResolver.resolve(broadPlace)
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Throwable) {
+        PlaceResolution.Failure
     }
 
     private suspend fun <T> firebaseCall(action: suspend () -> T): T = try {

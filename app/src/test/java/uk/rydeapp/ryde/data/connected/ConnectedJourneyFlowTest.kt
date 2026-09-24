@@ -10,9 +10,50 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import uk.rydeapp.ryde.domain.NoPlaceResolver
+import uk.rydeapp.ryde.domain.PlaceResolution
+import uk.rydeapp.ryde.domain.PlaceResolver
 import uk.rydeapp.ryde.domain.model.GeographicCoordinate
 
 class ConnectedJourneyFlowTest {
+    @Test
+    fun `known broad places resolve into persisted coordinates while retaining labels`() = runBlocking {
+        val store = MemoryJourneyStore()
+
+        assertEquals(
+            ConnectedJourneyCommandResult.Success,
+            repository("driver", store, DevelopmentFixturePlaceResolver()).createConnectedJourney(
+                " Mansfield ", "Nottingham", "2099-01-01 10:00", "1",
+            ),
+        )
+
+        val stored = store.load("driver").journeys.single()
+        assertEquals("Mansfield", stored.originArea)
+        assertEquals("Nottingham", stored.destinationArea)
+        assertEquals(GeographicCoordinate(53.1432, -1.1984), stored.originCoordinate)
+        assertEquals(GeographicCoordinate(52.9548, -1.1581), stored.destinationCoordinate)
+    }
+
+    @Test
+    fun `no result or resolver failure creates a valid coordinate-less journey`() = runBlocking {
+        val cases = listOf(
+            "no-result" to DevelopmentFixturePlaceResolver(),
+            "failure" to PlaceResolver { PlaceResolution.Failure },
+        )
+        cases.forEach { (destination, resolver) ->
+            val store = MemoryJourneyStore()
+            assertEquals(
+                ConnectedJourneyCommandResult.Success,
+                repository("driver", store, resolver).createConnectedJourney(
+                    "Mansfield", destination, "2099-01-01 10:00", "1",
+                ),
+            )
+            val stored = store.load("driver").journeys.single()
+            assertNull(stored.originCoordinate)
+            assertNull(stored.destinationCoordinate)
+        }
+    }
+
     @Test
     fun `explicit coordinates cross the repository create boundary without geocoding area text`() = runBlocking {
         val store = MemoryJourneyStore()
@@ -584,11 +625,16 @@ class ConnectedJourneyFlowTest {
         }
     }
 
-    private fun repository(uid: String, store: ConnectedJourneyStore): ConnectedRydeRepository =
+    private fun repository(
+        uid: String,
+        store: ConnectedJourneyStore,
+        placeResolver: PlaceResolver = NoPlaceResolver,
+    ): ConnectedRydeRepository =
         ConnectedRydeRepository(
             auth = StaticAuth(uid),
             profiles = StaticProfiles(uid),
             journeys = store,
+            placeResolver = placeResolver,
         )
 
     private class StaticAuth(private val uid: String) : ConnectedAuthGateway {
