@@ -173,6 +173,41 @@ class ConnectedFindUiTest {
         assertTrue(result.geographicMatch is GeographicJourneyMatch.Compatible)
     }
 
+    @Test fun geographicMatchInfoRoundsEachBroadAreaDistanceToWholeKilometres() {
+        val result = ConnectedFindJourneyResult(
+            item = first,
+            geographicMatch = GeographicJourneyMatch.Compatible(
+                originDistance = GeographicDistance(2.49),
+                destinationDistance = GeographicDistance(4.5),
+            ),
+        )
+
+        assertEquals(
+            ConnectedFindGeographicMatchInfo(
+                pickupAreaKilometres = 2,
+                dropOffAreaKilometres = 5,
+            ),
+            result.geographicMatchInfo,
+        )
+    }
+
+    @Test fun unavailableGeographicDistancesProduceNoMatchInfo() {
+        val legacy = ConnectedFindJourneyResult(
+            item = first,
+            geographicMatch = GeographicJourneyMatch.InsufficientGeographicData,
+        )
+        val incompatible = ConnectedFindJourneyResult(
+            item = first,
+            geographicMatch = GeographicJourneyMatch.Incompatible(
+                originDistance = GeographicDistance(16.0),
+                destinationDistance = GeographicDistance(1.0),
+            ),
+        )
+
+        assertNull(legacy.geographicMatchInfo)
+        assertNull(incompatible.geographicMatchInfo)
+    }
+
     @Test fun actualConnectedFindResultsRankTheCloserJourneyAtBothEndsFirst() {
         val farther = locatedItem("farther", originKilometres = 5.0, destinationKilometres = 6.0,
             departure = "2026-09-18T08:00:00Z")
@@ -189,6 +224,13 @@ class ConnectedFindUiTest {
 
         assertEquals(listOf("closer", "farther"), results.map { it.item.journey.id })
         assertEquals(listOf(5.0, 11.0), results.map { it.geographicScore!!.combinedEndpointDistance.kilometres })
+        assertEquals(
+            listOf(
+                ConnectedFindGeographicMatchInfo(2, 3),
+                ConnectedFindGeographicMatchInfo(5, 6),
+            ),
+            results.map { it.geographicMatchInfo },
+        )
     }
 
     @Test fun rankingUsesCombinedDistanceWhenEndpointsHaveATradeOff() {

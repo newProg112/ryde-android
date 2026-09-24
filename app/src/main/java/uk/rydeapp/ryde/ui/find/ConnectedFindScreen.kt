@@ -204,6 +204,11 @@ internal fun ConnectedFindScreen(
                 ConnectedJourneyCard(
                     item, busy, requestsEnabled, onRequestSeat, allowRerequest = true,
                     onManageRequests = onManageRequests,
+                    additionalContent = {
+                        result.geographicMatchInfo?.let { matchInfo ->
+                            ConnectedFindGeographicMatchSummary(matchInfo)
+                        }
+                    },
                 )
                 TextButton(onClick = { onOpenJourney(item.journey.id) }) {
                     Text(stringResource(R.string.connected_view_trip_details))
@@ -252,6 +257,30 @@ internal fun ConnectedFindScreen(
             ),
             onPlaceSelected = onPlaceSelected,
             onDismiss = onDismissPlaceSelection,
+        )
+    }
+}
+
+@Composable
+private fun ConnectedFindGeographicMatchSummary(
+    matchInfo: ConnectedFindGeographicMatchInfo,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+            stringResource(
+                R.string.connected_find_pickup_area_distance,
+                matchInfo.pickupAreaKilometres,
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            stringResource(
+                R.string.connected_find_drop_off_area_distance,
+                matchInfo.dropOffAreaKilometres,
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }

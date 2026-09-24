@@ -144,14 +144,14 @@ class ConnectedFindScreenUiTest {
         val riderDestination = GeographicCoordinate(52.9548, -1.1581)
         val farther = item("farther", "Farther origin", "Farther destination").let { source ->
             source.copy(journey = source.journey.copy(
-                originCoordinate = GeographicCoordinate(53.1932, -1.1984),
-                destinationCoordinate = GeographicCoordinate(53.0048, -1.1581),
+                originCoordinate = GeographicCoordinate(53.2232, -1.1984),
+                destinationCoordinate = GeographicCoordinate(53.0448, -1.1581),
             ))
         }
         val closer = item("closer", "Closer origin", "Closer destination").let { source ->
             source.copy(journey = source.journey.copy(
-                originCoordinate = riderOrigin,
-                destinationCoordinate = riderDestination,
+                originCoordinate = GeographicCoordinate(53.1702, -1.1984),
+                destinationCoordinate = GeographicCoordinate(52.9998, -1.1581),
             ))
         }
         val resolved = mutableStateOf<ConnectedFindCriteria?>(null)
@@ -184,6 +184,26 @@ class ConnectedFindScreenUiTest {
         val fartherTop = compose.onNodeWithText("Farther origin", substring = true)
             .fetchSemanticsNode().boundsInRoot.top
         assertTrue(closerTop < fartherTop)
+        compose.onNodeWithText("Pickup area ~3 km from your search").assertIsDisplayed()
+        compose.onNodeWithText("Drop-off area ~5 km from your search").assertIsDisplayed()
+    }
+
+    @Test fun legacyTextOnlyResultDoesNotInventGeographicMatchInformation() {
+        compose.setContent { RydeTheme {
+            ConnectedFindScreen(
+                journeys = listOf(item("legacy", "Mansfield", "Nottingham")),
+                busy = false,
+                requestsEnabled = true,
+                message = null,
+                onRefresh = {},
+                onRequestSeat = {},
+                onManageRequests = {},
+            )
+        } }
+
+        scrollTo("Request one seat").assertIsDisplayed()
+        compose.onAllNodes(hasText("Pickup area", substring = true)).assertCountEquals(0)
+        compose.onAllNodes(hasText("Drop-off area", substring = true)).assertCountEquals(0)
     }
 
     @Test fun ambiguousFromChoiceIsExplicitAndPreservesToDraft() {

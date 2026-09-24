@@ -33,6 +33,7 @@ internal fun ConnectedJourneyCard(
     modifier: Modifier = Modifier,
     allowRerequest: Boolean = false,
     onManageRequests: (() -> Unit)? = null,
+    additionalContent: @Composable (() -> Unit)? = null,
 ) {
     Card(
         modifier = modifier.fillMaxWidth(),
@@ -49,6 +50,7 @@ internal fun ConnectedJourneyCard(
                 stringResource(R.string.connected_seats, item.journey.seatsRemaining, item.journey.seatCapacity),
                 color = MaterialTheme.colorScheme.primary,
             )
+            additionalContent?.invoke()
             item.request?.let { request ->
                 Text(stringResource(when (request.status) {
                     ConnectedRequestStatus.PENDING -> R.string.connected_request_pending

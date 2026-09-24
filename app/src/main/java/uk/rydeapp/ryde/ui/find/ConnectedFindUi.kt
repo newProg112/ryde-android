@@ -3,6 +3,7 @@ package uk.rydeapp.ryde.ui.find
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import kotlin.math.roundToInt
 import uk.rydeapp.ryde.domain.BroadAreaJourneyMatchPolicy
 import uk.rydeapp.ryde.domain.GeographicJourneyMatch
 import uk.rydeapp.ryde.domain.GeographicJourneyMatchScore
@@ -49,7 +50,21 @@ internal data class ConnectedFindJourneyResult(
 ) {
     val geographicScore: GeographicJourneyMatchScore?
         get() = (geographicMatch as? GeographicJourneyMatch.Compatible)?.combinedEndpointScore()
+
+    val geographicMatchInfo: ConnectedFindGeographicMatchInfo?
+        get() = (geographicMatch as? GeographicJourneyMatch.Compatible)?.let { compatible ->
+            ConnectedFindGeographicMatchInfo(
+                pickupAreaKilometres = compatible.originDistance.kilometres.roundToInt(),
+                dropOffAreaKilometres = compatible.destinationDistance.kilometres.roundToInt(),
+            )
+        }
 }
+
+/** Whole-kilometre broad-area context for rider-facing Find presentation. */
+internal data class ConnectedFindGeographicMatchInfo(
+    val pickupAreaKilometres: Int,
+    val dropOffAreaKilometres: Int,
+)
 
 /**
  * Matches the already-authorized CONNECTED discovery presentation without loading journey state.
