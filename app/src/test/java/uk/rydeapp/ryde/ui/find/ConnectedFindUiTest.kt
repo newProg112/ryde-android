@@ -7,11 +7,14 @@ import java.util.TimeZone
 import org.junit.Assert.*
 import org.junit.Test
 import uk.rydeapp.ryde.data.connected.ConnectedJourney
+import uk.rydeapp.ryde.data.connected.ConnectedJourneySnapshot
+import uk.rydeapp.ryde.data.connected.ConnectedJourneyStatus
 import uk.rydeapp.ryde.data.connected.ConnectedRequestStatus
 import uk.rydeapp.ryde.data.connected.ConnectedSeatRequest
 import uk.rydeapp.ryde.domain.GeographicJourneyMatch
 import uk.rydeapp.ryde.domain.model.GeographicCoordinate
 import uk.rydeapp.ryde.ui.home.ConnectedHomeJourney
+import uk.rydeapp.ryde.ui.home.connectedHomeJourneys
 import uk.rydeapp.ryde.ui.place.BroadAreaCoordinates
 
 class ConnectedFindUiTest {
@@ -86,14 +89,18 @@ class ConnectedFindUiTest {
         ConnectedRequestStatus.entries.forEach { status ->
             val request = ConnectedSeatRequest("first_rider", "first", "driver", "rider", status)
             val source = first.copy(request = request, canRequest = false, canRerequest = status == ConnectedRequestStatus.CANCELLED)
-            val match = filterConnectedFindJourneys(listOf(source), ConnectedFindCriteria("mans", "nott")).single()
+            val match = matchConnectedFindJourneys(
+                listOf(source), ConnectedFindCriteria("mans", "nott"),
+            ).single().item
             assertSame(source, match)
             assertSame(request, match.request)
             assertFalse(match.canRequest)
             assertEquals(source.canRerequest, match.canRerequest)
         }
         val full = first.copy(journey = first.journey.copy(seatsRemaining = 0), canRequest = false)
-        assertSame(full, filterConnectedFindJourneys(listOf(full), ConnectedFindCriteria("mans")).single())
+        assertSame(full, matchConnectedFindJourneys(
+            listOf(full), ConnectedFindCriteria("mans"),
+        ).single().item)
     }
 
     @Test fun resolvedCoordinatesReachSearchBoundaryWithoutChangingTextMatching() {
@@ -119,7 +126,7 @@ class ConnectedFindUiTest {
         assertTrue(filterConnectedFindJourneys(journeys, resolved).isEmpty())
     }
 
-    @Test fun connectedFindExposesCompatibleGeographicStateWithoutChangingVisibleResult() {
+    @Test fun exactSameAreaJourneyMatchesGeographically() {
         val origin = GeographicCoordinate(53.1432, -1.1984)
         val destination = GeographicCoordinate(52.9548, -1.1581)
         val located = first.copy(
@@ -135,13 +142,35 @@ class ConnectedFindUiTest {
             destinationCoordinate = destination,
         )
 
-        val result = assessConnectedFindJourneys(listOf(located), criteria).single()
+        val result = matchConnectedFindJourneys(listOf(located), criteria).single()
 
         assertSame(located, result.item)
         assertTrue(result.geographicMatch is GeographicJourneyMatch.Compatible)
     }
 
-    @Test fun geographicallyIncompatibleJourneyRemainsVisibleForMigrationSafety() {
+    @Test fun nearbyBroadAreasMatchGeographicallyEvenWhenTheirTextDoesNot() {
+        val offeredOrigin = GeographicCoordinate(53.1432, -1.1984)
+        val offeredDestination = GeographicCoordinate(52.9548, -1.1581)
+        val located = first.copy(
+            journey = first.journey.copy(
+                originCoordinate = offeredOrigin,
+                destinationCoordinate = offeredDestination,
+            ),
+        )
+        val criteria = ConnectedFindCriteria(
+            origin = "Nearby origin",
+            destination = "Nearby destination",
+            originCoordinate = GeographicCoordinate(53.18, -1.20),
+            destinationCoordinate = GeographicCoordinate(52.99, -1.15),
+        )
+
+        val result = matchConnectedFindJourneys(listOf(located), criteria).single()
+
+        assertSame(located, result.item)
+        assertTrue(result.geographicMatch is GeographicJourneyMatch.Compatible)
+    }
+
+    @Test fun originOutsideGeographicToleranceDoesNotMatch() {
         val riderOrigin = GeographicCoordinate(53.1432, -1.1984)
         val destination = GeographicCoordinate(52.9548, -1.1581)
         val locatedElsewhere = first.copy(
@@ -157,22 +186,98 @@ class ConnectedFindUiTest {
             destinationCoordinate = destination,
         )
 
-        val result = assessConnectedFindJourneys(listOf(locatedElsewhere), criteria).single()
-
-        assertSame(locatedElsewhere, result.item)
-        assertTrue(result.geographicMatch is GeographicJourneyMatch.Incompatible)
+        assertTrue(matchConnectedFindJourneys(listOf(locatedElsewhere), criteria).isEmpty())
     }
 
-    @Test fun legacyJourneyOrUnresolvedRiderHasInsufficientGeographicDataAndStaysVisible() {
-        val coordinate = GeographicCoordinate(53.1432, -1.1984)
-        val unresolvedRider = ConnectedFindCriteria("Mansfield", "Nottingham")
-        val partiallyResolvedRider = unresolvedRider.copy(originCoordinate = coordinate)
+    @Test fun destinationMustAlsoBeWithinGeographicTolerance() {
+        val origin = GeographicCoordinate(53.1432, -1.1984)
+        val offeredDestination = GeographicCoordinate(52.9548, -1.1581)
+        val located = first.copy(
+            journey = first.journey.copy(
+                originCoordinate = origin,
+                destinationCoordinate = offeredDestination,
+            ),
+        )
+        val criteria = ConnectedFindCriteria(
+            origin = "Mansfield",
+            destination = "Nottingham",
+            originCoordinate = origin,
+            destinationCoordinate = GeographicCoordinate(51.5074, -0.1278),
+        )
 
-        listOf(unresolvedRider, partiallyResolvedRider).forEach { criteria ->
-            val result = assessConnectedFindJourneys(listOf(first), criteria).single()
+        assertTrue(matchConnectedFindJourneys(listOf(located), criteria).isEmpty())
+    }
+
+    @Test fun missingCoordinatesFallBackToTextWithoutWideningTheSearch() {
+        val origin = GeographicCoordinate(53.1432, -1.1984)
+        val destination = GeographicCoordinate(52.9548, -1.1581)
+        val located = first.copy(
+            journey = first.journey.copy(
+                originCoordinate = origin,
+                destinationCoordinate = destination,
+            ),
+        )
+        val unresolvedRider = ConnectedFindCriteria("Mansfield", "Nottingham")
+        val partiallyResolvedRider = unresolvedRider.copy(originCoordinate = origin)
+        val resolvedRider = unresolvedRider.copy(
+            originCoordinate = origin,
+            destinationCoordinate = destination,
+        )
+
+        listOf(unresolvedRider, partiallyResolvedRider, resolvedRider).forEach { criteria ->
+            val result = matchConnectedFindJourneys(listOf(first), criteria).single()
             assertSame(first, result.item)
             assertEquals(GeographicJourneyMatch.InsufficientGeographicData, result.geographicMatch)
         }
+        val unresolvedResult = matchConnectedFindJourneys(listOf(located), unresolvedRider).single()
+        assertSame(located, unresolvedResult.item)
+        assertEquals(
+            GeographicJourneyMatch.InsufficientGeographicData,
+            unresolvedResult.geographicMatch,
+        )
+        assertTrue(matchConnectedFindJourneys(
+            listOf(first), resolvedRider.copy(origin = "Sheffield"),
+        ).isEmpty())
+        assertTrue(matchConnectedFindJourneys(
+            listOf(located), unresolvedRider.copy(origin = "Sheffield"),
+        ).isEmpty())
+    }
+
+    @Test fun geographicMatchingCannotRestoreJourneysExcludedByConnectedDiscoveryRules() {
+        val origin = GeographicCoordinate(53.1432, -1.1984)
+        val destination = GeographicCoordinate(52.9548, -1.1581)
+        val located = ConnectedJourney(
+            id = "eligible",
+            driverUid = "driver",
+            originArea = "Mansfield",
+            destinationArea = "Nottingham",
+            departureEpochMillis = 200,
+            seatCapacity = 2,
+            seatsRemaining = 1,
+            originCoordinate = origin,
+            destinationCoordinate = destination,
+        )
+        val snapshot = ConnectedJourneySnapshot(listOf(
+            located,
+            located.copy(id = "full", seatsRemaining = 0),
+            located.copy(id = "own", driverUid = "rider"),
+            located.copy(id = "cancelled", status = ConnectedJourneyStatus.CANCELLED),
+            located.copy(id = "completed", status = ConnectedJourneyStatus.COMPLETED),
+            located.copy(id = "departed", departureEpochMillis = 100),
+        ))
+        val discoverable = connectedHomeJourneys(snapshot, viewerUid = "rider", nowEpochMillis = 100)
+        val criteria = ConnectedFindCriteria(
+            origin = "Nearby origin",
+            destination = "Nearby destination",
+            originCoordinate = GeographicCoordinate(53.18, -1.20),
+            destinationCoordinate = GeographicCoordinate(52.99, -1.15),
+        )
+
+        val results = matchConnectedFindJourneys(discoverable, criteria)
+
+        assertEquals(listOf("eligible", "full"), results.map { it.item.journey.id })
+        assertTrue(results.all { it.geographicMatch is GeographicJourneyMatch.Compatible })
+        assertFalse(results.single { it.item.journey.id == "full" }.item.canRequest)
     }
 
     private fun item(id: String, origin: String, destination: String, departure: String) = ConnectedHomeJourney(

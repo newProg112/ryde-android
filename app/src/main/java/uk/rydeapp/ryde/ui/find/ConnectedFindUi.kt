@@ -36,31 +36,26 @@ internal fun filterConnectedFindJourneys(
     journeys: List<ConnectedHomeJourney>,
     criteria: ConnectedFindCriteria,
     zoneId: ZoneId = ZoneId.systemDefault(),
-): List<ConnectedHomeJourney> {
-    // Coordinates intentionally cross this boundary for a later matching phase. Current CONNECTED
-    // fixture semantics remain broad-area text/date matching only.
-    val origin = criteria.origin.trim()
-    val destination = criteria.destination.trim()
-    return journeys.filter { item ->
-        item.journey.originArea.contains(origin, ignoreCase = true) &&
-            item.journey.destinationArea.contains(destination, ignoreCase = true) &&
-            (criteria.departureDate == null ||
-                Instant.ofEpochMilli(item.journey.departureEpochMillis)
-                    .atZone(zoneId).toLocalDate() == criteria.departureDate)
-    }
+): List<ConnectedHomeJourney> = journeys.filter { item ->
+    textRouteMatches(item, criteria) && dateMatches(item, criteria, zoneId)
 }
 
-/** A text/date-visible Find item plus its separately evaluated geographic state. */
+/** A Find item accepted by either geographic matching or the safe legacy text fallback. */
 internal data class ConnectedFindJourneyResult(
     val item: ConnectedHomeJourney,
     val geographicMatch: GeographicJourneyMatch,
 )
 
 /**
- * Preserves every existing text/date result, including legacy journeys with no coordinates, while
- * exposing geographic compatibility for later filtering or presentation decisions.
+ * Matches the already-authorized CONNECTED discovery presentation without loading journey state.
+ *
+ * Complete rider and journey coordinates are assessed by [BroadAreaJourneyMatchPolicy], which
+ * compares both endpoints. If either coordinate pair is unavailable, matching falls back to the
+ * existing broad-area text rule. That keeps legacy journeys discoverable by their entered areas
+ * without treating missing geography as a positive or unbounded match. Date filtering always
+ * applies.
  */
-internal fun assessConnectedFindJourneys(
+internal fun matchConnectedFindJourneys(
     journeys: List<ConnectedHomeJourney>,
     criteria: ConnectedFindCriteria,
     zoneId: ZoneId = ZoneId.systemDefault(),
@@ -70,19 +65,37 @@ internal fun assessConnectedFindJourneys(
         criteria.originCoordinate,
         criteria.destinationCoordinate,
     )
-    return filterConnectedFindJourneys(journeys, criteria, zoneId).map { item ->
-        ConnectedFindJourneyResult(
-            item = item,
-            geographicMatch = policy.assess(
-                rider = riderEndpoints,
-                offeredJourney = geographicEndpoints(
-                    item.journey.originCoordinate,
-                    item.journey.destinationCoordinate,
-                ),
+    return journeys.mapNotNull { item ->
+        if (!dateMatches(item, criteria, zoneId)) return@mapNotNull null
+        val geographicMatch = policy.assess(
+            rider = riderEndpoints,
+            offeredJourney = geographicEndpoints(
+                item.journey.originCoordinate,
+                item.journey.destinationCoordinate,
             ),
         )
+        val routeMatches = when (geographicMatch) {
+            is GeographicJourneyMatch.Compatible -> true
+            is GeographicJourneyMatch.Incompatible -> false
+            GeographicJourneyMatch.InsufficientGeographicData -> textRouteMatches(item, criteria)
+        }
+        if (routeMatches) ConnectedFindJourneyResult(item, geographicMatch) else null
     }
 }
+
+private fun textRouteMatches(
+    item: ConnectedHomeJourney,
+    criteria: ConnectedFindCriteria,
+): Boolean = item.journey.originArea.contains(criteria.origin.trim(), ignoreCase = true) &&
+    item.journey.destinationArea.contains(criteria.destination.trim(), ignoreCase = true)
+
+private fun dateMatches(
+    item: ConnectedHomeJourney,
+    criteria: ConnectedFindCriteria,
+    zoneId: ZoneId,
+): Boolean = criteria.departureDate == null ||
+    Instant.ofEpochMilli(item.journey.departureEpochMillis)
+        .atZone(zoneId).toLocalDate() == criteria.departureDate
 
 private fun geographicEndpoints(
     origin: GeographicCoordinate?,

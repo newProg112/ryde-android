@@ -77,7 +77,7 @@ internal fun ConnectedFindScreen(
         originCoordinate = matchingResolution?.originCoordinate,
         destinationCoordinate = matchingResolution?.destinationCoordinate,
     )
-    val results = assessConnectedFindJourneys(journeys, criteria)
+    val results = matchConnectedFindJourneys(journeys, criteria)
 
     fun clearFilters() {
         onPlaceDraftChanged()
