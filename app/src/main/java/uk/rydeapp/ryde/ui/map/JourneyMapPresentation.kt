@@ -1,15 +1,6 @@
 package uk.rydeapp.ryde.ui.map
 
-/** Provider-neutral coordinates for a future map implementation. */
-internal data class GeoCoordinate(
-    val latitude: Double,
-    val longitude: Double,
-) {
-    init {
-        require(latitude.isFinite() && latitude in -90.0..90.0)
-        require(longitude.isFinite() && longitude in -180.0..180.0)
-    }
-}
+import uk.rydeapp.ryde.domain.model.GeographicCoordinate
 
 internal enum class JourneyMapPointRole {
     JOURNEY_START,
@@ -21,7 +12,7 @@ internal enum class JourneyMapPointRole {
 internal data class JourneyMapPoint(
     val label: String,
     val role: JourneyMapPointRole,
-    val coordinate: GeoCoordinate? = null,
+    val coordinate: GeographicCoordinate? = null,
 ) {
     init {
         require(label.isNotBlank())
@@ -32,7 +23,7 @@ internal data class JourneyMapPoint(
  * A line must state what it means. The fallback deliberately cannot be mistaken for road geometry.
  */
 internal sealed interface JourneyMapLine {
-    data class RoadRoute(val geometry: List<GeoCoordinate>) : JourneyMapLine {
+    data class RoadRoute(val geometry: List<GeographicCoordinate>) : JourneyMapLine {
         init {
             require(geometry.size >= 2)
         }
@@ -51,16 +42,25 @@ internal data class JourneyMapPresentation(
     }
 }
 
-/**
- * CONNECTED currently stores broad area names only. Keep that limitation explicit at the boundary.
- */
+/** Builds a route boundary from persisted truth; two endpoints never imply road geometry. */
+internal fun journeyMap(
+    originArea: String,
+    destinationArea: String,
+    originCoordinate: GeographicCoordinate? = null,
+    destinationCoordinate: GeographicCoordinate? = null,
+): JourneyMapPresentation {
+    require((originCoordinate == null) == (destinationCoordinate == null))
+    return JourneyMapPresentation(
+        points = listOf(
+            JourneyMapPoint(originArea, JourneyMapPointRole.JOURNEY_START, originCoordinate),
+            JourneyMapPoint(destinationArea, JourneyMapPointRole.JOURNEY_DESTINATION, destinationCoordinate),
+        ),
+        line = JourneyMapLine.VisualConnection,
+    )
+}
+
+/** Legacy/missing-coordinate fallback retained as an explicit compatibility boundary. */
 internal fun broadAreaJourneyMap(
     originArea: String,
     destinationArea: String,
-): JourneyMapPresentation = JourneyMapPresentation(
-    points = listOf(
-        JourneyMapPoint(originArea, JourneyMapPointRole.JOURNEY_START),
-        JourneyMapPoint(destinationArea, JourneyMapPointRole.JOURNEY_DESTINATION),
-    ),
-    line = JourneyMapLine.VisualConnection,
-)
+): JourneyMapPresentation = journeyMap(originArea, destinationArea)

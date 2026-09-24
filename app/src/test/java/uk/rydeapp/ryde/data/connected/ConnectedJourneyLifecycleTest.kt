@@ -3,6 +3,7 @@ package uk.rydeapp.ryde.data.connected
 import com.google.firebase.Timestamp
 import org.junit.Assert.*
 import org.junit.Test
+import uk.rydeapp.ryde.domain.model.GeographicCoordinate
 
 class ConnectedJourneyLifecycleTest {
     private val journey = ConnectedJourney("j", "driver", "Mansfield", "Nottingham", 4_070_908_800_000L, 2, 1)
@@ -157,5 +158,39 @@ class ConnectedJourneyLifecycleTest {
         for (invalid in listOf(closed - "cancelledAt", closed + ("cancelledAt" to "bad"), data + ("cancelledAt" to Timestamp(100, 0)), closed + ("extra" to true), data + ("status" to "CONFIRMED"), complete - "completedAt", complete + ("completedAt" to "bad"), complete + ("cancelledAt" to Timestamp(100, 0)))) {
             assertNull(FirestoreJourneyMapper.journey("j", invalid))
         }
+    }
+
+    @Test
+    fun `journey mapping persists valid coordinate pairs and accepts legacy records`() {
+        val origin = GeographicCoordinate(53.1432, -1.1984)
+        val destination = GeographicCoordinate(52.9548, -1.1581)
+        val legacy = FirestoreJourneyMapper.journeyData(
+            "driver",
+            ConnectedJourneyDraft("Mansfield", "Nottingham", journey.departureEpochMillis, 2),
+        )
+        val coordinateData = FirestoreJourneyMapper.journeyData(
+            "driver",
+            ConnectedJourneyDraft(
+                "Mansfield", "Nottingham", journey.departureEpochMillis, 2,
+                origin, destination,
+            ),
+        )
+
+        assertNull(FirestoreJourneyMapper.journey("legacy", legacy)?.originCoordinate)
+        assertEquals(origin, FirestoreJourneyMapper.journey("located", coordinateData)?.originCoordinate)
+        assertEquals(destination, FirestoreJourneyMapper.journey("located", coordinateData)?.destinationCoordinate)
+        assertNull(FirestoreJourneyMapper.journey("partial", coordinateData - "destinationCoordinate"))
+        assertNull(FirestoreJourneyMapper.journey(
+            "invalid",
+            coordinateData + ("originCoordinate" to mapOf("latitude" to 91.0, "longitude" to 0.0)),
+        ))
+        assertNull(FirestoreJourneyMapper.journey(
+            "extra",
+            coordinateData + ("originCoordinate" to mapOf(
+                "latitude" to 53.1432,
+                "longitude" to -1.1984,
+                "providerPlaceId" to "forbidden",
+            )),
+        ))
     }
 }

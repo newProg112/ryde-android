@@ -7,6 +7,7 @@ import uk.rydeapp.ryde.data.connected.*
 import uk.rydeapp.ryde.ui.home.connectedHomeJourneys
 import uk.rydeapp.ryde.ui.map.JourneyMapLine
 import uk.rydeapp.ryde.ui.map.JourneyMapPointRole
+import uk.rydeapp.ryde.domain.model.GeographicCoordinate
 
 class ConnectedTripDetailsUiTest {
     private val journey = ConnectedJourney("journey", "driver", "Mansfield", "Sheffield", 1000, 3, 2)
@@ -92,6 +93,20 @@ class ConnectedTripDetailsUiTest {
         assertEquals("Morgan Driver", cancelled.summary.driverDisplayName)
         assertNull(cancelled.summary.cancellableTripId)
         assertFalse(cancelled.canRequest)
+    }
+
+    @Test fun persistedJourneyCoordinatesReachRouteWhileLegacyJourneyRemainsAreaOnly() {
+        val origin = GeographicCoordinate(53.1432, -1.1984)
+        val destination = GeographicCoordinate(52.9548, -1.1581)
+        val located = journey.copy(originCoordinate = origin, destinationCoordinate = destination)
+
+        assertEquals(
+            listOf(origin, destination),
+            details(ConnectedJourneySnapshot(listOf(located))).routeMap!!.points.map { it.coordinate },
+        )
+        details(ConnectedJourneySnapshot(listOf(journey))).routeMap!!.points.forEach {
+            assertNull(it.coordinate)
+        }
     }
 
     @Test fun messageTargetsSurviveJourneyLossButMalformedTripIdentityFailsClosed() {

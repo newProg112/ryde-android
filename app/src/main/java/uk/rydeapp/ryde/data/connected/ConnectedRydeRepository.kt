@@ -17,6 +17,7 @@ import uk.rydeapp.ryde.data.AsyncState
 import uk.rydeapp.ryde.data.FakeRydeRepository
 import uk.rydeapp.ryde.data.RydeRepository
 import uk.rydeapp.ryde.data.RydeSnapshot
+import uk.rydeapp.ryde.domain.model.GeographicCoordinate
 import uk.rydeapp.ryde.domain.model.ProfileContent
 import uk.rydeapp.ryde.domain.model.SavePlaceResult
 import uk.rydeapp.ryde.domain.model.SavedPlace
@@ -125,12 +126,22 @@ class ConnectedRydeRepository(
         destinationArea: String,
         departure: String,
         seats: String,
+        originCoordinate: GeographicCoordinate? = null,
+        destinationCoordinate: GeographicCoordinate? = null,
     ): ConnectedJourneyCommandResult {
         val draft = when (val validated = ConnectedJourneyValidator.offer(originArea, destinationArea, departure, seats)) {
             is ValidationResult.Invalid -> return ConnectedJourneyCommandResult.InvalidInput(validated.userMessage)
             is ValidationResult.Valid -> validated.value
         }
-        return journeyCommand { store, uid -> store.create(uid, draft) }
+        if ((originCoordinate == null) != (destinationCoordinate == null)) {
+            return ConnectedJourneyCommandResult.InvalidInput("Both journey coordinates are required together.")
+        }
+        return journeyCommand { store, uid ->
+            store.create(uid, draft.copy(
+                originCoordinate = originCoordinate,
+                destinationCoordinate = destinationCoordinate,
+            ))
+        }
     }
 
     suspend fun requestConnectedSeat(journeyId: String): ConnectedJourneyCommandResult =

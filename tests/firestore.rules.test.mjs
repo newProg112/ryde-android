@@ -97,6 +97,12 @@ const journey = (driverUid, seats = 2) => ({
   seatsRemaining: seats,
   status: "OPEN",
 });
+const coordinate = (latitude, longitude) => ({ latitude, longitude });
+const journeyWithCoordinates = (driverUid, seats = 2) => ({
+  ...journey(driverUid, seats),
+  originCoordinate: coordinate(53.1432, -1.1984),
+  destinationCoordinate: coordinate(52.9548, -1.1581),
+});
 const request = (journeyId, driverUid, riderUid, status = "PENDING", riderDisplayName = displayNameFor(riderUid)) => ({
   journeyId, driverUid, riderUid, status, riderDisplayName,
 });
@@ -801,6 +807,43 @@ test("journey and private zeroed acceptance guard must be created atomically", a
   await assertFails(createJourney(driver, "too-many", "driver", 9));
   await assertFails(createJourney(driver, "wrong-guard-owner", "driver", 2, guard("stranger")));
   await assertFails(createJourney(driver, "nonzero-guard", "driver", 2, guard("driver", 1, "forged")));
+});
+
+test("journeys accept validated coordinate pairs while legacy and missing-coordinate records remain valid", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  await assertSucceeds(createJourney(
+    driver,
+    "coordinates",
+    "driver",
+    2,
+    guard("driver"),
+    journeyWithCoordinates("driver"),
+  ));
+  await assertSucceeds(createJourney(driver, "legacy", "driver"));
+
+  const invalidCoordinates = [
+    { originCoordinate: coordinate(53.1432, -1.1984) },
+    { destinationCoordinate: coordinate(52.9548, -1.1581) },
+    { originCoordinate: coordinate(90.1, 0), destinationCoordinate: coordinate(52.9548, -1.1581) },
+    { originCoordinate: coordinate(53.1432, -180.1), destinationCoordinate: coordinate(52.9548, -1.1581) },
+    { originCoordinate: { latitude: 53.1432 }, destinationCoordinate: coordinate(52.9548, -1.1581) },
+    { originCoordinate: { ...coordinate(53.1432, -1.1984), providerPlaceId: "forbidden" }, destinationCoordinate: coordinate(52.9548, -1.1581) },
+    { originCoordinate: { latitude: "53.1432", longitude: -1.1984 }, destinationCoordinate: coordinate(52.9548, -1.1581) },
+  ];
+  for (const [index, coordinateFields] of invalidCoordinates.entries()) {
+    await assertFails(createJourney(
+      driver,
+      `invalid-coordinate-${index}`,
+      "driver",
+      2,
+      guard("driver"),
+      { ...journey("driver"), ...coordinateFields },
+    ));
+  }
+  await assertSucceeds(cancelJourneyLikeGateway(driver, "coordinates"));
+  const closed = (await getDoc(doc(driver, "journeys/coordinates"))).data();
+  assert.deepEqual(closed.originCoordinate, coordinate(53.1432, -1.1984));
+  assert.deepEqual(closed.destinationCoordinate, coordinate(52.9548, -1.1581));
 });
 
 test("requests enforce real participants deterministic ownership and self-request denial", async () => {

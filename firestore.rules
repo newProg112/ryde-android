@@ -22,6 +22,16 @@ service cloud.firestore {
         && !value.matches('.*[\\x00-\\x1F\\x7F-\\x9F].*');
     }
 
+    function validCoordinate(value) {
+      return value is map
+        && value.keys().hasOnly(['latitude', 'longitude'])
+        && value.keys().hasAll(['latitude', 'longitude'])
+        && value.latitude is number
+        && value.latitude >= -90 && value.latitude <= 90
+        && value.longitude is number
+        && value.longitude >= -180 && value.longitude <= 180;
+    }
+
     function signedIn() {
       return request.auth != null;
     }
@@ -61,12 +71,17 @@ service cloud.firestore {
     function validJourney(data) {
       return data.keys().hasOnly([
           'driverUid', 'originArea', 'destinationArea', 'departureAt',
-          'seatCapacity', 'seatsRemaining', 'status', 'cancelledAt', 'completedAt'
+          'seatCapacity', 'seatsRemaining', 'status', 'cancelledAt', 'completedAt',
+          'originCoordinate', 'destinationCoordinate'
         ])
         && data.driverUid is string
         && validBroadArea(data.originArea)
         && validBroadArea(data.destinationArea)
         && data.originArea != data.destinationArea
+        && ((!('originCoordinate' in data) && !('destinationCoordinate' in data))
+          || ('originCoordinate' in data && 'destinationCoordinate' in data
+            && validCoordinate(data.originCoordinate)
+            && validCoordinate(data.destinationCoordinate)))
         && data.departureAt is timestamp
         && data.seatCapacity is int
         && data.seatCapacity >= 1 && data.seatCapacity <= 8

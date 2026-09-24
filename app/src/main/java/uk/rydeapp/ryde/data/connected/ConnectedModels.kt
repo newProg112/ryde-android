@@ -5,6 +5,7 @@ import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
+import uk.rydeapp.ryde.domain.model.GeographicCoordinate
 import uk.rydeapp.ryde.domain.model.SavedPlace
 import uk.rydeapp.ryde.domain.model.SavedPlacePolicy
 
@@ -91,7 +92,15 @@ data class ConnectedJourney(
     val status: ConnectedJourneyStatus = ConnectedJourneyStatus.OPEN,
     val cancelledAtEpochMillis: Long? = null,
     val completedAtEpochMillis: Long? = null,
-)
+    val originCoordinate: GeographicCoordinate? = null,
+    val destinationCoordinate: GeographicCoordinate? = null,
+) {
+    init {
+        require((originCoordinate == null) == (destinationCoordinate == null)) {
+            "Journey coordinates must contain both origin and destination or neither."
+        }
+    }
+}
 
 data class ConnectedSeatRequest(
     val id: String,
@@ -136,7 +145,15 @@ data class ConnectedJourneyDraft(
     val destinationArea: String,
     val departureEpochMillis: Long,
     val seats: Int,
-)
+    val originCoordinate: GeographicCoordinate? = null,
+    val destinationCoordinate: GeographicCoordinate? = null,
+) {
+    init {
+        require((originCoordinate == null) == (destinationCoordinate == null)) {
+            "Journey coordinates must contain both origin and destination or neither."
+        }
+    }
+}
 
 sealed interface ConnectedJourneyCommandResult {
     data object Success : ConnectedJourneyCommandResult
@@ -181,7 +198,9 @@ object ConnectedJourneyValidator {
 }
 
 object FirestoreJourneyMapper {
-    private val journeyFields = setOf("driverUid", "originArea", "destinationArea", "departureAt", "seatCapacity", "seatsRemaining", "status")
+    private val legacyJourneyFields = setOf("driverUid", "originArea", "destinationArea", "departureAt", "seatCapacity", "seatsRemaining", "status")
+    private val coordinateJourneyFields = legacyJourneyFields + setOf("originCoordinate", "destinationCoordinate")
+    private val coordinateFields = setOf("latitude", "longitude")
     private val legacyRequestFields = setOf("journeyId", "driverUid", "riderUid", "status")
     private val requestFields = legacyRequestFields + "riderDisplayName"
     private val acceptanceGuardFields = setOf("driverUid", "acceptanceCount", "lastAcceptedRequestId")
@@ -197,15 +216,19 @@ object FirestoreJourneyMapper {
     )
     private val confirmedTripFields = legacyConfirmedTripFields + "driverDisplayName"
 
-    fun journeyData(driverUid: String, draft: ConnectedJourneyDraft): Map<String, Any> = mapOf(
-        "driverUid" to driverUid,
-        "originArea" to draft.originArea,
-        "destinationArea" to draft.destinationArea,
-        "departureAt" to Timestamp(draft.departureEpochMillis / 1000, ((draft.departureEpochMillis % 1000) * 1_000_000).toInt()),
-        "seatCapacity" to draft.seats,
-        "seatsRemaining" to draft.seats,
-        "status" to "OPEN",
-    )
+    fun journeyData(driverUid: String, draft: ConnectedJourneyDraft): Map<String, Any> = buildMap {
+        putAll(mapOf(
+            "driverUid" to driverUid,
+            "originArea" to draft.originArea,
+            "destinationArea" to draft.destinationArea,
+            "departureAt" to Timestamp(draft.departureEpochMillis / 1000, ((draft.departureEpochMillis % 1000) * 1_000_000).toInt()),
+            "seatCapacity" to draft.seats,
+            "seatsRemaining" to draft.seats,
+            "status" to "OPEN",
+        ))
+        draft.originCoordinate?.let { put("originCoordinate", coordinateData(it)) }
+        draft.destinationCoordinate?.let { put("destinationCoordinate", coordinateData(it)) }
+    }
 
     fun requestData(
         journey: ConnectedJourney,
@@ -243,10 +266,15 @@ object FirestoreJourneyMapper {
 
     fun journey(id: String, data: Map<String, Any?>): ConnectedJourney? {
         val status = runCatching { ConnectedJourneyStatus.valueOf(data["status"] as? String ?: return null) }.getOrNull() ?: return null
+        val baseFields = when {
+            "originCoordinate" in data && "destinationCoordinate" in data -> coordinateJourneyFields
+            "originCoordinate" !in data && "destinationCoordinate" !in data -> legacyJourneyFields
+            else -> return null
+        }
         val expectedFields = when (status) {
-            ConnectedJourneyStatus.OPEN -> journeyFields
-            ConnectedJourneyStatus.CANCELLED -> journeyFields + "cancelledAt"
-            ConnectedJourneyStatus.COMPLETED -> journeyFields + "completedAt"
+            ConnectedJourneyStatus.OPEN -> baseFields
+            ConnectedJourneyStatus.CANCELLED -> baseFields + "cancelledAt"
+            ConnectedJourneyStatus.COMPLETED -> baseFields + "completedAt"
         }
         if (data.keys != expectedFields) return null
         val cancelledAt = if (status == ConnectedJourneyStatus.CANCELLED) {
@@ -257,12 +285,14 @@ object FirestoreJourneyMapper {
         } else null
         val capacity = (data["seatCapacity"] as? Number)?.toInt() ?: return null
         val remaining = (data["seatsRemaining"] as? Number)?.toInt() ?: return null
+        val originCoordinate = data["originCoordinate"]?.let(::coordinate) ?: if ("originCoordinate" in data) return null else null
+        val destinationCoordinate = data["destinationCoordinate"]?.let(::coordinate) ?: if ("destinationCoordinate" in data) return null else null
         return ConnectedJourney(
             id, data["driverUid"] as? String ?: return null,
             data["originArea"] as? String ?: return null,
             data["destinationArea"] as? String ?: return null,
             (data["departureAt"] as? Timestamp)?.toDate()?.time ?: return null,
-            capacity, remaining, status, cancelledAt, completedAt,
+            capacity, remaining, status, cancelledAt, completedAt, originCoordinate, destinationCoordinate,
         ).takeIf { isValidJourney(it) }
     }
 
@@ -340,6 +370,19 @@ object FirestoreJourneyMapper {
 
     private fun isSafeDisplayName(value: String): Boolean =
         value.isNotBlank() && value.length <= 60 && value.none(Char::isISOControl)
+
+    private fun coordinateData(coordinate: GeographicCoordinate): Map<String, Double> = mapOf(
+        "latitude" to coordinate.latitude,
+        "longitude" to coordinate.longitude,
+    )
+
+    private fun coordinate(value: Any): GeographicCoordinate? {
+        val data = value as? Map<*, *> ?: return null
+        if (data.keys != coordinateFields) return null
+        val latitude = (data["latitude"] as? Number)?.toDouble() ?: return null
+        val longitude = (data["longitude"] as? Number)?.toDouble() ?: return null
+        return runCatching { GeographicCoordinate(latitude, longitude) }.getOrNull()
+    }
 
     private fun Long.toTimestamp(): Timestamp =
         Timestamp(this / 1000, ((this % 1000) * 1_000_000).toInt())

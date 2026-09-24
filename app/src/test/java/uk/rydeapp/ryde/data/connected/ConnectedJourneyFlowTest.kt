@@ -10,8 +10,31 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import uk.rydeapp.ryde.domain.model.GeographicCoordinate
 
 class ConnectedJourneyFlowTest {
+    @Test
+    fun `explicit coordinates cross the repository create boundary without geocoding area text`() = runBlocking {
+        val store = MemoryJourneyStore()
+        val origin = GeographicCoordinate(53.1432, -1.1984)
+        val destination = GeographicCoordinate(52.9548, -1.1581)
+
+        assertEquals(
+            ConnectedJourneyCommandResult.Success,
+            repository("driver", store).createConnectedJourney(
+                "Mansfield", "Nottingham", "2099-01-01 10:00", "1", origin, destination,
+            ),
+        )
+
+        val stored = store.load("driver").journeys.single()
+        assertEquals(origin, stored.originCoordinate)
+        assertEquals(destination, stored.destinationCoordinate)
+        assertEquals(ConnectedJourneyCommandResult.Success, repository("driver", store).cancelConnectedJourney(stored.id))
+        val closed = store.load("driver").journeys.single()
+        assertEquals(origin, closed.originCoordinate)
+        assertEquals(destination, closed.destinationCoordinate)
+    }
+
     @Test
     fun `driver cancellation freezes capacity closes pending and confirmed bookings and preserves rider cancellations`() = runBlocking {
         val store = MemoryJourneyStore()
@@ -596,7 +619,12 @@ class ConnectedJourneyFlowTest {
 
         override suspend fun create(uid: String, draft: ConnectedJourneyDraft) {
             val id = "journey-${journeys.size + 1}"
-            journeys[id] = ConnectedJourney(id, uid, draft.originArea, draft.destinationArea, draft.departureEpochMillis, draft.seats, draft.seats)
+            journeys[id] = ConnectedJourney(
+                id, uid, draft.originArea, draft.destinationArea, draft.departureEpochMillis,
+                draft.seats, draft.seats,
+                originCoordinate = draft.originCoordinate,
+                destinationCoordinate = draft.destinationCoordinate,
+            )
             guards[id] = ConnectedJourneyAcceptanceGuard(uid, 0, null)
         }
 

@@ -5,7 +5,7 @@ import uk.rydeapp.ryde.data.connected.ConnectedJourneyLifecycle
 import uk.rydeapp.ryde.data.connected.ConnectedJourneySnapshot
 import uk.rydeapp.ryde.ui.home.ConnectedHomeJourney
 import uk.rydeapp.ryde.ui.map.JourneyMapPresentation
-import uk.rydeapp.ryde.ui.map.broadAreaJourneyMap
+import uk.rydeapp.ryde.ui.map.journeyMap
 
 /** A selection of existing presentation records, never a second journey store or lifecycle. */
 internal data class ConnectedTripDetailsContent(
@@ -71,7 +71,12 @@ internal fun connectedTripDetailsContent(
             connectedOfferedJourneyStatusText(it, nowEpochMillis)
         },
         if (!origin.isNullOrBlank() && !destination.isNullOrBlank()) {
-            broadAreaJourneyMap(origin, destination)
+            journeyMap(
+                origin,
+                destination,
+                journey?.originCoordinate,
+                journey?.destinationCoordinate,
+            )
         } else null,
     )
 }
