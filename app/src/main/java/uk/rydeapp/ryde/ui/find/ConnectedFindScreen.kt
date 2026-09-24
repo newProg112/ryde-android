@@ -39,6 +39,9 @@ import uk.rydeapp.ryde.ui.components.ConnectedJourneyCard
 import uk.rydeapp.ryde.ui.components.InfoCard
 import uk.rydeapp.ryde.ui.components.RouteMark
 import uk.rydeapp.ryde.ui.home.ConnectedHomeJourney
+import uk.rydeapp.ryde.ui.place.BroadAreaEndpoint
+import uk.rydeapp.ryde.ui.place.BroadAreaPlaceSelectionDialog
+import uk.rydeapp.ryde.ui.place.BroadAreaPlaceSelectionPrompt
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -57,15 +60,27 @@ internal fun ConnectedFindScreen(
     onManageRequests: () -> Unit,
     modifier: Modifier = Modifier,
     onOpenJourney: (String) -> Unit = {},
+    resolvedCriteria: ConnectedFindCriteria? = null,
+    onResolveCriteria: (ConnectedFindCriteria) -> Unit = {},
+    onPlaceDraftChanged: () -> Unit = {},
+    placeSelectionPrompt: BroadAreaPlaceSelectionPrompt? = null,
+    onPlaceSelected: (BroadAreaEndpoint, uk.rydeapp.ryde.domain.PlaceMatch) -> Unit = { _, _ -> },
+    onDismissPlaceSelection: () -> Unit = {},
 ) {
     var origin by rememberSaveable { mutableStateOf("") }
     var destination by rememberSaveable { mutableStateOf("") }
     var dateEpochDay by rememberSaveable { mutableStateOf<Long?>(null) }
     var pickDate by remember { mutableStateOf(false) }
-    val criteria = ConnectedFindCriteria(origin, destination, dateEpochDay?.let(LocalDate::ofEpochDay))
+    val draftCriteria = ConnectedFindCriteria(origin, destination, dateEpochDay?.let(LocalDate::ofEpochDay))
+    val matchingResolution = resolvedCriteria?.takeIf { it.sameTypedAreasAs(draftCriteria) }
+    val criteria = draftCriteria.copy(
+        originCoordinate = matchingResolution?.originCoordinate,
+        destinationCoordinate = matchingResolution?.destinationCoordinate,
+    )
     val matches = filterConnectedFindJourneys(journeys, criteria)
 
     fun clearFilters() {
+        onPlaceDraftChanged()
         origin = ""
         destination = ""
         dateEpochDay = null
@@ -92,7 +107,10 @@ internal fun ConnectedFindScreen(
         item {
             OutlinedTextField(
                 value = origin,
-                onValueChange = { origin = it },
+                onValueChange = {
+                    onPlaceDraftChanged()
+                    origin = it
+                },
                 label = { Text(stringResource(R.string.connected_find_origin)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth().testTag("connected-find-origin"),
@@ -100,17 +118,26 @@ internal fun ConnectedFindScreen(
         }
         item {
             OutlinedButton(onClick = {
+                onPlaceDraftChanged()
                 val previousOrigin = origin
                 origin = destination
                 destination = previousOrigin
             }) { Text(stringResource(R.string.connected_find_swap)) }
             OutlinedTextField(
                 value = destination,
-                onValueChange = { destination = it },
+                onValueChange = {
+                    onPlaceDraftChanged()
+                    destination = it
+                },
                 label = { Text(stringResource(R.string.connected_find_destination)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth().testTag("connected-find-destination"),
             )
+            OutlinedButton(
+                onClick = { onResolveCriteria(draftCriteria) },
+                enabled = !busy && (origin.isNotBlank() || destination.isNotBlank()),
+                modifier = Modifier.fillMaxWidth().testTag("connected-find-search"),
+            ) { Text(stringResource(R.string.connected_find_search_areas)) }
         }
         item {
             Text(stringResource(R.string.connected_find_departure_date), style = MaterialTheme.typography.titleMedium)
@@ -209,5 +236,21 @@ internal fun ConnectedFindScreen(
                 TextButton(onClick = { pickDate = false }) { Text(stringResource(R.string.connected_picker_cancel)) }
             },
         ) { DatePicker(state = state) }
+    }
+    placeSelectionPrompt?.let { prompt ->
+        BroadAreaPlaceSelectionDialog(
+            prompt = prompt,
+            busy = busy,
+            question = stringResource(
+                if (prompt.endpoint == BroadAreaEndpoint.FROM) {
+                    R.string.connected_find_choose_origin
+                } else {
+                    R.string.connected_find_choose_destination
+                },
+                prompt.typedBroadArea,
+            ),
+            onPlaceSelected = onPlaceSelected,
+            onDismiss = onDismissPlaceSelection,
+        )
     }
 }

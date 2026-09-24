@@ -14,7 +14,11 @@ import org.junit.Test
 import uk.rydeapp.ryde.data.connected.ConnectedJourney
 import uk.rydeapp.ryde.data.connected.ConnectedRequestStatus
 import uk.rydeapp.ryde.data.connected.ConnectedSeatRequest
+import uk.rydeapp.ryde.domain.PlaceMatch
+import uk.rydeapp.ryde.domain.model.GeographicCoordinate
 import uk.rydeapp.ryde.ui.home.ConnectedHomeJourney
+import uk.rydeapp.ryde.ui.place.BroadAreaEndpoint
+import uk.rydeapp.ryde.ui.place.BroadAreaPlaceSelectionPrompt
 import uk.rydeapp.ryde.ui.theme.RydeTheme
 
 class ConnectedFindScreenUiTest {
@@ -107,6 +111,69 @@ class ConnectedFindScreenUiTest {
         scrollTo("Your request is pending").assertIsDisplayed()
         scrollTo("Manage requests").performClick()
         compose.runOnIdle { assertEquals(1, managed); assertEquals(1, requested.size) }
+    }
+
+    @Test fun searchActionCarriesBothTypedAreasToResolutionBoundary() {
+        var submitted: ConnectedFindCriteria? = null
+        compose.setContent { RydeTheme {
+            ConnectedFindScreen(
+                journeys = listOf(item("out", "Mansfield", "Nottingham")),
+                busy = false,
+                requestsEnabled = true,
+                message = null,
+                onRefresh = {},
+                onRequestSeat = {},
+                onManageRequests = {},
+                onResolveCriteria = { submitted = it },
+            )
+        } }
+
+        origin().performTextInput("Mansfield")
+        destination().performTextInput("Nottingham")
+        field("connected-find-search").performScrollTo().performClick()
+
+        compose.runOnIdle {
+            assertEquals("Mansfield", submitted?.origin)
+            assertEquals("Nottingham", submitted?.destination)
+        }
+    }
+
+    @Test fun ambiguousFromChoiceIsExplicitAndPreservesToDraft() {
+        val london = PlaceMatch("Richmond — Greater London", GeographicCoordinate(51.4613, -0.3037))
+        val yorkshire = PlaceMatch("Richmond — North Yorkshire", GeographicCoordinate(54.4037, -1.7375))
+        val prompt = mutableStateOf<BroadAreaPlaceSelectionPrompt?>(null)
+        var selected: PlaceMatch? = null
+        compose.setContent { RydeTheme {
+            ConnectedFindScreen(
+                journeys = emptyList(),
+                busy = false,
+                requestsEnabled = true,
+                message = null,
+                onRefresh = {},
+                onRequestSeat = {},
+                onManageRequests = {},
+                placeSelectionPrompt = prompt.value,
+                onPlaceSelected = { endpoint, match ->
+                    assertEquals(BroadAreaEndpoint.FROM, endpoint)
+                    selected = match
+                    prompt.value = null
+                },
+            )
+        } }
+        origin().performTextInput("Richmond")
+        destination().performTextInput("Nottingham")
+        compose.runOnIdle {
+            prompt.value = BroadAreaPlaceSelectionPrompt(
+                BroadAreaEndpoint.FROM,
+                "Richmond",
+                listOf(london, yorkshire),
+            )
+        }
+
+        compose.onNodeWithText("Which From area did you mean by “Richmond”?").assertIsDisplayed()
+        compose.onNodeWithText("Richmond — North Yorkshire").performClick()
+        destination().performScrollTo().assert(hasText("Nottingham"))
+        compose.runOnIdle { assertEquals(yorkshire, selected) }
     }
 
     private fun origin() = field("connected-find-origin")

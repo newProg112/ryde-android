@@ -9,7 +9,9 @@ import org.junit.Test
 import uk.rydeapp.ryde.data.connected.ConnectedJourney
 import uk.rydeapp.ryde.data.connected.ConnectedRequestStatus
 import uk.rydeapp.ryde.data.connected.ConnectedSeatRequest
+import uk.rydeapp.ryde.domain.model.GeographicCoordinate
 import uk.rydeapp.ryde.ui.home.ConnectedHomeJourney
+import uk.rydeapp.ryde.ui.place.BroadAreaCoordinates
 
 class ConnectedFindUiTest {
     private val first = item("first", "Mansfield Woodhouse", "Nottingham", "2026-09-18T08:00:00Z")
@@ -91,6 +93,29 @@ class ConnectedFindUiTest {
         }
         val full = first.copy(journey = first.journey.copy(seatsRemaining = 0), canRequest = false)
         assertSame(full, filterConnectedFindJourneys(listOf(full), ConnectedFindCriteria("mans")).single())
+    }
+
+    @Test fun resolvedCoordinatesReachSearchBoundaryWithoutChangingTextMatching() {
+        val origin = GeographicCoordinate(53.1432, -1.1984)
+        val destination = GeographicCoordinate(52.9548, -1.1581)
+        val typed = ConnectedFindCriteria("Mansfield", "Nottingham")
+        val resolved = typed.withResolvedBroadAreas(BroadAreaCoordinates(origin, destination))
+
+        assertEquals(origin, resolved.originCoordinate)
+        assertEquals(destination, resolved.destinationCoordinate)
+        assertTrue(resolved.sameTypedAreasAs(typed.copy(departureDate = LocalDate.of(2027, 1, 1))))
+        assertEquals(listOf(first), filterConnectedFindJourneys(journeys, resolved))
+    }
+
+    @Test fun independentlyUnresolvedEndpointReachesBoundaryAsNullWithoutChangingFilter() {
+        val destination = GeographicCoordinate(52.9548, -1.1581)
+        val resolved = ConnectedFindCriteria("Unknown", "Nottingham").withResolvedBroadAreas(
+            BroadAreaCoordinates(from = null, to = destination),
+        )
+
+        assertNull(resolved.originCoordinate)
+        assertEquals(destination, resolved.destinationCoordinate)
+        assertTrue(filterConnectedFindJourneys(journeys, resolved).isEmpty())
     }
 
     private fun item(id: String, origin: String, destination: String, departure: String) = ConnectedHomeJourney(

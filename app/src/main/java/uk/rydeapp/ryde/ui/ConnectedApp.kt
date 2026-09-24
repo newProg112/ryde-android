@@ -39,6 +39,9 @@ import uk.rydeapp.ryde.ui.account.ConnectedJourneySection
 import uk.rydeapp.ryde.ui.account.ConnectedProfileScreen
 import uk.rydeapp.ryde.ui.account.canCancelConnectedConfirmedSeat
 import uk.rydeapp.ryde.ui.find.ConnectedFindScreen
+import uk.rydeapp.ryde.ui.find.ConnectedFindCriteria
+import uk.rydeapp.ryde.ui.find.withResolvedBroadAreas
+import uk.rydeapp.ryde.ui.find.resolveConnectedFindPlaces
 import uk.rydeapp.ryde.ui.home.ConnectedHomeScreen
 import uk.rydeapp.ryde.ui.home.connectedHomeJourneys
 import uk.rydeapp.ryde.ui.trips.ConnectedTripsScreen
@@ -49,8 +52,8 @@ import uk.rydeapp.ryde.ui.trips.connectedTripDetailsContent
 import uk.rydeapp.ryde.ui.trips.connectedTripsContent
 import uk.rydeapp.ryde.ui.trips.canDecideConnectedRequest
 import uk.rydeapp.ryde.ui.offer.ConnectedOfferScreen
-import uk.rydeapp.ryde.ui.offer.OfferPlaceEndpoint
-import uk.rydeapp.ryde.ui.offer.OfferPlaceSelection
+import uk.rydeapp.ryde.ui.place.BroadAreaEndpoint
+import uk.rydeapp.ryde.ui.place.BroadAreaPlaceSelection
 
 private data class ConnectedNavigation(
     val destination: RydeDestination = RydeDestination.HOME,
@@ -65,7 +68,12 @@ private data class PendingConnectedOffer(
     val destination: String,
     val departure: String,
     val seats: String,
-    val places: OfferPlaceSelection,
+    val places: BroadAreaPlaceSelection,
+)
+
+private data class PendingConnectedFind(
+    val criteria: ConnectedFindCriteria,
+    val places: BroadAreaPlaceSelection,
 )
 
 /** The only new connected repository observation/command boundary; tabs receive data and callbacks. */
@@ -112,6 +120,8 @@ internal fun ConnectedReadyApp(
     var message by remember { mutableStateOf<String?>(null) }
     var createdVersion by rememberSaveable { mutableIntStateOf(0) }
     var pendingOffer by remember(session.accountId) { mutableStateOf<PendingConnectedOffer?>(null) }
+    var pendingFind by remember(session.accountId) { mutableStateOf<PendingConnectedFind?>(null) }
+    var resolvedFindCriteria by remember(session.accountId) { mutableStateOf<ConnectedFindCriteria?>(null) }
     var lifecycleNowEpochMillis by remember(session.accountId) {
         mutableLongStateOf(currentTimeMillis())
     }
@@ -245,13 +255,14 @@ internal fun ConnectedReadyApp(
 
     suspend fun finishOffer(pending: PendingConnectedOffer): String {
         val coordinates = pending.places.coordinates
+        val completePair = coordinates.takeIf { it.from != null && it.to != null }
         val result = repository.createConnectedJourneyFromPlaceSelection(
             pending.origin,
             pending.destination,
             pending.departure,
             pending.seats,
-            coordinates?.origin,
-            coordinates?.destination,
+            completePair?.from,
+            completePair?.to,
         )
         if (result == ConnectedJourneyCommandResult.Success) {
             createdVersion++
@@ -292,7 +303,7 @@ internal fun ConnectedReadyApp(
                     destination = destination,
                     departure = departure,
                     seats = seats,
-                    places = OfferPlaceSelection.from(
+                    places = BroadAreaPlaceSelection.from(
                         origin,
                         destination,
                         repository.resolveConnectedPlace(origin),
@@ -302,7 +313,7 @@ internal fun ConnectedReadyApp(
             } else message = resources.getString(R.string.connected_trips_refresh_required)
         }
     }
-    val selectOfferPlace: (OfferPlaceEndpoint, PlaceMatch) -> Unit = { endpoint, match ->
+    val selectOfferPlace: (BroadAreaEndpoint, PlaceMatch) -> Unit = { endpoint, match ->
         pendingOffer?.let { pending ->
             val selected = pending.copy(places = pending.places.select(endpoint, match))
             if (selected.places.isComplete) {
@@ -314,6 +325,44 @@ internal fun ConnectedReadyApp(
         }
     }
     val dismissOfferPlaceSelection: () -> Unit = { if (!busy) pendingOffer = null }
+
+    fun finishFind(pending: PendingConnectedFind) {
+        resolvedFindCriteria = pending.criteria.withResolvedBroadAreas(pending.places.coordinates)
+        pendingFind = null
+    }
+
+    val resolveFind: (ConnectedFindCriteria) -> Unit = { criteria ->
+        if (!busy) {
+            busy = true
+            message = null
+            scope.launch {
+                try {
+                    val pending = PendingConnectedFind(
+                        criteria = criteria,
+                        places = resolveConnectedFindPlaces(criteria, repository::resolveConnectedPlace),
+                    )
+                    if (pending.places.isComplete) finishFind(pending) else pendingFind = pending
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Throwable) {
+                    message = resources.getString(R.string.connected_find_resolution_failed)
+                } finally {
+                    busy = false
+                }
+            }
+        }
+    }
+    val selectFindPlace: (BroadAreaEndpoint, PlaceMatch) -> Unit = { endpoint, match ->
+        pendingFind?.let { pending ->
+            val selected = pending.copy(places = pending.places.select(endpoint, match))
+            if (selected.places.isComplete) finishFind(selected) else pendingFind = selected
+        }
+    }
+    val dismissFindPlaceSelection: () -> Unit = { if (!busy) pendingFind = null }
+    val clearResolvedFindPlaces: () -> Unit = {
+        pendingFind = null
+        resolvedFindCriteria = null
+    }
     val decideRequest: (String, Boolean) -> Unit = { requestId, accept ->
         if (!busy) {
             val current = repository.journeyState.value
@@ -416,6 +465,12 @@ internal fun ConnectedReadyApp(
                     onManageRequests = { navigation = navigation.copy(destination = RydeDestination.TRIPS) },
                     modifier = modifier,
                     onOpenJourney = openJourney,
+                    resolvedCriteria = resolvedFindCriteria,
+                    onResolveCriteria = resolveFind,
+                    onPlaceDraftChanged = clearResolvedFindPlaces,
+                    placeSelectionPrompt = pendingFind?.places?.prompt,
+                    onPlaceSelected = selectFindPlace,
+                    onDismissPlaceSelection = dismissFindPlaceSelection,
                 )
                 RydeDestination.OFFER -> ConnectedOfferScreen(
                     busy = busy, actionsEnabled = !refreshRequired, message = message, createdVersion = createdVersion,
