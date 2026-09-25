@@ -179,7 +179,13 @@ class FirestoreConnectedJourneyStore(private val firestore: FirebaseFirestore) :
         firestore.runTransaction { transaction ->
             val trip = FirestoreJourneyMapper.confirmedTrip(tripId, transaction.get(tripRef).data.orEmpty())
                 ?: error("Trip unavailable")
-            check(trip.riderUid == uid && trip.status == ConnectedTripStatus.CONFIRMED)
+            check(trip.riderUid == uid)
+            // A committed cancellation may be retried when the caller did not
+            // receive the first result. Treat the rider's terminal state as a
+            // successful no-op so capacity can only be restored by the original
+            // CONFIRMED -> CANCELLED_BY_RIDER transaction.
+            if (trip.status == ConnectedTripStatus.CANCELLED_BY_RIDER) return@runTransaction
+            check(trip.status == ConnectedTripStatus.CONFIRMED)
             val requestRef = firestore.collection(REQUESTS).document(trip.acceptedRequestId)
             val journeyRef = firestore.collection(JOURNEYS).document(trip.journeyId)
             val request = FirestoreJourneyMapper.request(trip.acceptedRequestId, transaction.get(requestRef).data.orEmpty())

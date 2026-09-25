@@ -238,6 +238,7 @@ const cancelConfirmedLikeGateway = (db, journeyId, requestId) => runTransaction(
   const tripSnapshot = await transaction.get(tripRef);
   const requestSnapshot = await transaction.get(requestRef);
   const journeySnapshot = await transaction.get(journeyRef);
+  if (tripSnapshot.data().status === "CANCELLED_BY_RIDER") return;
   if (tripSnapshot.data().status !== "CONFIRMED" || requestSnapshot.data().status !== "ACCEPTED") {
     throw new Error("Booking is terminal");
   }
@@ -295,7 +296,9 @@ test("rider releases exactly one allocation and both participants retain private
     ...guard("driver", 0, "j1_rider"), lastCancelledRequestId: "j1_rider",
   });
   await assertFails(cancelConfirmedBatch(rider, "j1", "j1_rider", 1));
-  await assert.rejects(cancelConfirmedLikeGateway(rider, "j1", "j1_rider"), /Booking is terminal/);
+  await assertSucceeds(cancelConfirmedLikeGateway(rider, "j1", "j1_rider"));
+  assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().seatsRemaining, 1);
+  assert.equal((await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data().acceptanceCount, 0);
   await assertFails(requestSeatLikeGateway(rider, "j1", "rider"));
   await assertFails(updateDoc(doc(rider, "seatRequests/j1_rider"), { status: "CANCELLED" }));
   await assertFails(getDoc(doc(rider, "journeyAcceptanceGuards/j1")));
@@ -382,12 +385,15 @@ test("a rider can cancel an earlier acceptance without changing other trips or o
   assert.equal((await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data().acceptanceCount, 0);
 });
 
-test("simultaneous duplicate cancellation releases exactly once", async () => {
+test("simultaneous duplicate cancellation releases exactly once and a retry is idempotent", async () => {
   const { driver, rider } = await acceptedCancellationFixture();
   const outcomes = await Promise.allSettled([
     cancelConfirmedLikeGateway(rider, "j1", "j1_rider"), cancelConfirmedLikeGateway(rider, "j1", "j1_rider"),
   ]);
   assert.equal(outcomes.filter(result => result.status === "fulfilled").length, 1);
+  assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().seatsRemaining, 2);
+  assert.equal((await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data().acceptanceCount, 0);
+  await assertSucceeds(cancelConfirmedLikeGateway(rider, "j1", "j1_rider"));
   assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().seatsRemaining, 2);
   assert.equal((await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data().acceptanceCount, 0);
 });

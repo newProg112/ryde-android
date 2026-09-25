@@ -219,7 +219,7 @@ class ConnectedJourneyFlowTest {
     }
 
     @Test
-    fun `committed confirmed cancellation survives failed refresh and becomes visible on retry`() = runBlocking {
+    fun `committed confirmed cancellation retry succeeds without restoring another seat`() = runBlocking {
         val backing = MemoryJourneyStore()
         var failLoad = false
         val store = object : ConnectedJourneyStore by backing {
@@ -239,7 +239,10 @@ class ConnectedJourneyFlowTest {
             rider.cancelConnectedConfirmedSeat("journey-1_rider"))
         assertEquals(ConnectedTripStatus.CONFIRMED, rider.journeyState.value.confirmedTrips.single().status)
         failLoad = false
-        rider.refresh()
+        assertEquals(
+            ConnectedJourneyCommandResult.Success,
+            rider.cancelConnectedConfirmedSeat("journey-1_rider"),
+        )
         assertEquals(ConnectedTripStatus.CANCELLED_BY_RIDER, rider.journeyState.value.confirmedTrips.single().status)
         assertEquals(1, rider.journeyState.value.journeys.single().seatsRemaining)
         assertEquals(0, backing.guards.getValue("journey-1").acceptanceCount)
@@ -268,7 +271,7 @@ class ConnectedJourneyFlowTest {
         assertEquals(ConnectedJourneyAcceptanceGuard("driver", 0, before.id, before.id), store.guards.getValue("journey-1"))
         driver.refresh()
         assertEquals(after, driver.journeyState.value.confirmedTrips.single())
-        assertTrue(rider.cancelConnectedConfirmedSeat(before.id) is ConnectedJourneyCommandResult.Failure)
+        assertEquals(ConnectedJourneyCommandResult.Success, rider.cancelConnectedConfirmedSeat(before.id))
         assertTrue(rider.requestConnectedSeat("journey-1") is ConnectedJourneyCommandResult.Failure)
         assertEquals(1, store.load("driver").journeys.single().seatsRemaining)
         assertEquals(0, store.guards.getValue("journey-1").acceptanceCount)
@@ -736,11 +739,13 @@ class ConnectedJourneyFlowTest {
 
         override suspend fun cancelConfirmedSeat(uid: String, tripId: String) {
             val trip = checkNotNull(confirmedTrips[tripId])
+            check(trip.riderUid == uid)
+            if (trip.status == ConnectedTripStatus.CANCELLED_BY_RIDER) return
             val request = checkNotNull(requests[tripId])
             val journey = checkNotNull(journeys[trip.journeyId])
             check(journey.status == ConnectedJourneyStatus.OPEN)
             val guard = checkNotNull(guards[journey.id])
-            check(trip.riderUid == uid && trip.status == ConnectedTripStatus.CONFIRMED)
+            check(trip.status == ConnectedTripStatus.CONFIRMED)
             check(request.status == ConnectedRequestStatus.ACCEPTED && journey.departureEpochMillis > nowMillis())
             check(guard.acceptanceCount == journey.seatCapacity - journey.seatsRemaining && guard.acceptanceCount > 0)
             requests[tripId] = request.copy(status = ConnectedRequestStatus.CANCELLED_AFTER_ACCEPTANCE)
