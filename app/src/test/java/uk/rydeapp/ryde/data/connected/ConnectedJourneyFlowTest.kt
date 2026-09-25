@@ -157,7 +157,8 @@ class ConnectedJourneyFlowTest {
         assertTrue(rider.cancelConnectedConfirmedSeat("journey-1_rider") is ConnectedJourneyCommandResult.Failure)
         assertTrue(withdrew.requestConnectedSeat("journey-1") is ConnectedJourneyCommandResult.Failure)
         assertTrue(repository("new", store).requestConnectedSeat("journey-1") is ConnectedJourneyCommandResult.Failure)
-        assertTrue(driver.cancelConnectedJourney("journey-1") is ConnectedJourneyCommandResult.Failure)
+        assertEquals(ConnectedJourneyCommandResult.Success, driver.cancelConnectedJourney("journey-1"))
+        assertTrue(rider.cancelConnectedJourney("journey-1") is ConnectedJourneyCommandResult.Failure)
         assertEquals(after, store.load("driver"))
     }
 
@@ -756,6 +757,8 @@ class ConnectedJourneyFlowTest {
 
         override suspend fun cancelJourney(uid: String, journeyId: String) {
             val journey = checkNotNull(journeys[journeyId])
+            check(journey.driverUid == uid)
+            if (journey.status == ConnectedJourneyStatus.CANCELLED) return
             check(ConnectedJourneyLifecycle.canCancelJourney(journey, uid, nowMillis()))
             val guard = guards.getValue(journeyId)
             check(guard.driverUid == uid && guard.acceptanceCount == journey.seatCapacity - journey.seatsRemaining)

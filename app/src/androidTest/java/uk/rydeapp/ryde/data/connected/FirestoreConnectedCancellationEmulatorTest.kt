@@ -149,7 +149,9 @@ class FirestoreConnectedCancellationEmulatorTest {
             assertEquals(ConnectedTripStatus.CONFIRMED, otherConfirmed.status)
             assertEquals(ConnectedTripLifecycle.CANCELLED_BY_DRIVER, ConnectedJourneyLifecycle.trip(otherConfirmed, closed))
             assertFalse(runCatching { other.cancelConfirmedSeat(otherUid, otherConfirmed.id) }.isSuccess)
-            assertFalse(runCatching { driver.cancelJourney(driverUid, journey.id) }.isSuccess)
+            driver.cancelJourney(driverUid, journey.id)
+            assertEquals(closed, driver.load(driverUid).journeys.single { it.id == journey.id })
+            assertFalse(runCatching { other.cancelJourney(otherUid, journey.id) }.isSuccess)
             assertEquals(guardBeforeClosure, driverGuard.get(Source.SERVER).await().data)
 
             driver.create(driverUid, ConnectedJourneyDraft("Mansfield", "Nottingham", System.currentTimeMillis() + 86_400_000, 2))

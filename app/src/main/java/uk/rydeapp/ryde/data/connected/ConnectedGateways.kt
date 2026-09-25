@@ -214,6 +214,11 @@ class FirestoreConnectedJourneyStore(private val firestore: FirebaseFirestore) :
         firestore.runTransaction { transaction ->
             val journey = FirestoreJourneyMapper.journey(journeyId, transaction.get(journeyRef).data.orEmpty())
                 ?: error("Journey unavailable")
+            check(journey.driverUid == uid)
+            // A committed cancellation may be retried when the caller did not
+            // receive the first result. Only the owning driver's identical
+            // terminal command is a successful no-op.
+            if (journey.status == ConnectedJourneyStatus.CANCELLED) return@runTransaction
             check(ConnectedJourneyLifecycle.canCancelJourney(journey, uid, System.currentTimeMillis()))
             val guard = FirestoreJourneyMapper.acceptanceGuard(
                 transaction.get(firestore.collection(ACCEPTANCE_GUARDS).document(journeyId)).data.orEmpty())

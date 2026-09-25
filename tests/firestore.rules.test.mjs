@@ -469,6 +469,7 @@ test("acceptance cannot piggyback capacity or guard changes on an unrelated jour
 const cancelJourneyLikeGateway = (db, journeyId) => runTransaction(db, async (transaction) => {
   const journeyRef = doc(db, `journeys/${journeyId}`);
   const source = (await transaction.get(journeyRef)).data();
+  if (source.status === "CANCELLED") return;
   const sourceGuard = (await transaction.get(doc(db, `journeyAcceptanceGuards/${journeyId}`))).data();
   if (source.status !== "OPEN") throw new Error("Journey is terminal");
   assert.equal(sourceGuard.acceptanceCount, source.seatCapacity - source.seatsRemaining);
@@ -548,6 +549,8 @@ test("driver cancels an empty offer once with server time and frozen capacity an
   assert.ok(closed.cancelledAt instanceof Timestamp);
   assert.deepEqual(closed, { ...before, status: "CANCELLED", cancelledAt: closed.cancelledAt });
   assert.deepEqual((await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data(), guard("driver"));
+  await assertSucceeds(cancelJourneyLikeGateway(driver, "j1"));
+  assert.deepEqual((await getDoc(doc(driver, "journeys/j1"))).data(), closed);
   await assertFails(updateDoc(doc(driver, "journeys/j1"), { status: "CANCELLED", cancelledAt: serverTimestamp() }));
   await assertFails(updateDoc(doc(driver, "journeys/j1"), { status: "OPEN" }));
   await assertFails(deleteDoc(doc(driver, "journeys/j1")));
@@ -672,10 +675,11 @@ test("driver cancellation fails closed for departed unguarded and inconsistent j
   }
 });
 
-test("simultaneous driver cancellations close once without changing allocation counts", async () => {
+test("simultaneous driver cancellations commit once without changing allocation counts", async () => {
   const { driver } = await acceptedCancellationFixture(1);
   const results = await Promise.allSettled([cancelJourneyLikeGateway(driver, "j1"), cancelJourneyLikeGateway(driver, "j1")]);
   assert.equal(results.filter(result => result.status === "fulfilled").length, 1);
+  assert.equal(results.filter(result => result.status === "rejected").length, 1);
   assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().status, "CANCELLED");
   assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().seatsRemaining, 0);
   assert.equal((await getDoc(doc(driver, "journeyAcceptanceGuards/j1"))).data().acceptanceCount, 1);
