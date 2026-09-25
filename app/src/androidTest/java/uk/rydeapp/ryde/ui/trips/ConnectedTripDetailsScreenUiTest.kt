@@ -219,6 +219,25 @@ class ConnectedTripDetailsScreenUiTest {
         }
     }
 
+    @Test fun driverDetailsShowConfirmedSeatSummaryFromExistingCapacity() {
+        compose.setContent { RydeTheme {
+            ConnectedTripDetailsScreen(
+                content(
+                    ConnectedJourneySnapshot(
+                        listOf(journey),
+                        listOf(request.copy(status = ConnectedRequestStatus.ACCEPTED)),
+                        listOf(trip),
+                    ),
+                    journey.driverUid,
+                ),
+                false, true, null, {}, {}, {}, { _, _ -> }, {}, {},
+            )
+        } }
+
+        text("Confirmed seats: 1/3").assertIsDisplayed()
+        text("Seats remaining: 2/3").assertIsDisplayed()
+    }
+
     @Test fun lifecycleChangeClosesArmedCancellationWithoutSendingCommand() {
         val current = mutableStateOf(journey)
         compose.setContent { RydeTheme {

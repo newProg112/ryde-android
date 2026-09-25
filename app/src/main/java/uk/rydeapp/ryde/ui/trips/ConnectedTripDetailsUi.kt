@@ -14,6 +14,8 @@ internal data class ConnectedTripDetailsContent(
     val canRequest: Boolean = false,
     val unrequestedStatusText: Int? = null,
     val routeMap: JourneyMapPresentation? = null,
+    /** Driver-only summary derived from the journey's guarded capacity invariant. */
+    val confirmedSeatCount: Int? = null,
 )
 
 internal fun connectedTripDetailsContent(
@@ -63,14 +65,15 @@ internal fun connectedTripDetailsContent(
     val origin = safeSummary?.origin ?: journey?.originArea
     val destination = safeSummary?.destination ?: journey?.destinationArea
     return ConnectedTripDetailsContent(
-        safeSummary, journey,
-        journey != null && trip == null && discovery.any {
+        summary = safeSummary,
+        journey = journey,
+        canRequest = journey != null && trip == null && discovery.any {
             it.journey.id == journeyId && (it.canRequest || it.canRerequest)
         },
-        journey?.takeIf { safeSummary == null }?.let {
+        unrequestedStatusText = journey?.takeIf { safeSummary == null }?.let {
             connectedOfferedJourneyStatusText(it, nowEpochMillis)
         },
-        if (!origin.isNullOrBlank() && !destination.isNullOrBlank()) {
+        routeMap = if (!origin.isNullOrBlank() && !destination.isNullOrBlank()) {
             journeyMap(
                 origin,
                 destination,
@@ -78,5 +81,9 @@ internal fun connectedTripDetailsContent(
                 journey?.destinationCoordinate,
             )
         } else null,
+        confirmedSeatCount = journey?.takeIf {
+            safeSummary?.roleText == uk.rydeapp.ryde.R.string.connected_trips_driver &&
+                it.driverUid == uid && it.status == uk.rydeapp.ryde.data.connected.ConnectedJourneyStatus.OPEN
+        }?.let { it.seatCapacity - it.seatsRemaining },
     )
 }

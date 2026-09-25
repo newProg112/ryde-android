@@ -88,7 +88,12 @@ internal fun ConnectedTripDetailsScreen(
                 content.unrequestedStatusText?.let { Text(stringResource(it)) }
                 Text(stringResource(R.string.connected_trip_details_no_request))
             }
-            journey?.let { Text(stringResource(R.string.connected_seats, it.seatsRemaining, it.seatCapacity)) }
+            journey?.let {
+                content.confirmedSeatCount?.let { count ->
+                    Text(stringResource(R.string.connected_trip_details_confirmed_seats, count, it.seatCapacity))
+                }
+                Text(stringResource(R.string.connected_seats, it.seatsRemaining, it.seatCapacity))
+            }
             summary?.messageTarget?.let { target ->
                 Button(
                     onClick = { onOpenMessages(target) },

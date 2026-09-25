@@ -17,6 +17,7 @@
     <string name="connected_trip_details_back">Back</string>
     <string name="connected_trip_details_no_request">You have not requested a seat on this journey.</string>
     <string name="connected_trip_details_unavailable">Journey details are unavailable. Refresh to check again. Any available booking history is shown below.</string>
+    <string name="connected_trip_details_confirmed_seats">Confirmed seats: %1$d/%2$d</string>
     <string name="connected_home_intro">Find a journey heading your way. Only broad areas are shared here.</string>
     <string name="connected_find_shortcut">Find a Ryde</string>
     <string name="connected_offer_shortcut">Offer a Ryde</string>

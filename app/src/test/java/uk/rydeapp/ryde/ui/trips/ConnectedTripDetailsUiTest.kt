@@ -95,6 +95,25 @@ class ConnectedTripDetailsUiTest {
         assertFalse(cancelled.canRequest)
     }
 
+    @Test fun driverDetailsSummariseGuardedSeatAllocationWithoutAddingRiderMetadata() {
+        val accepted = request.copy(status = ConnectedRequestStatus.ACCEPTED)
+        val snapshot = ConnectedJourneySnapshot(listOf(journey), listOf(accepted), listOf(trip))
+
+        assertEquals(1, details(snapshot, uid = journey.driverUid).confirmedSeatCount)
+        assertNull(details(snapshot).confirmedSeatCount)
+
+        val released = snapshot.copy(
+            journeys = listOf(journey.copy(seatsRemaining = journey.seatCapacity)),
+            requests = listOf(accepted.copy(status = ConnectedRequestStatus.CANCELLED_AFTER_ACCEPTANCE)),
+            confirmedTrips = listOf(trip.copy(status = ConnectedTripStatus.CANCELLED_BY_RIDER, cancelledAtEpochMillis = 2)),
+        )
+        assertEquals(0, details(released, uid = journey.driverUid).confirmedSeatCount)
+        assertNull(details(
+            snapshot.copy(journeys = listOf(journey.copy(status = ConnectedJourneyStatus.CANCELLED))),
+            uid = journey.driverUid,
+        ).confirmedSeatCount)
+    }
+
     @Test fun persistedJourneyCoordinatesReachRouteWhileLegacyJourneyRemainsAreaOnly() {
         val origin = GeographicCoordinate(53.1432, -1.1984)
         val destination = GeographicCoordinate(52.9548, -1.1581)
