@@ -200,13 +200,17 @@ service cloud.firestore {
     function journeyDecrementsOnce(journeyId, driverUid) {
       let before = get(journeyPath(journeyId)).data;
       let after = getAfter(journeyPath(journeyId)).data;
-      // Unchanged fields retain their validated types; the exact integer delta
-      // from positive remaining capacity also proves all after-state bounds.
-      return validJourney(before)
-        && before.status == 'OPEN' && after.status == 'OPEN'
+      // Route, departure and participant fields are validated again through the
+      // linked confirmed-trip proof below. Re-running the full journey validator
+      // here exceeds Firestore's expression budget for coordinate-bearing offers.
+      // The exact diff keeps those already-authorized fields immutable.
+      return before.status == 'OPEN' && after.status == 'OPEN'
         && before.driverUid == driverUid
         && after.driverUid == driverUid
+        && before.seatCapacity is int && before.seatsRemaining is int
         && after.seatCapacity is int && after.seatsRemaining is int
+        && before.seatCapacity >= 1 && before.seatCapacity <= 8
+        && before.seatsRemaining <= before.seatCapacity
         && after.diff(before).affectedKeys().hasOnly(['seatsRemaining'])
         && before.seatsRemaining > 0
         && before.departureAt > request.time

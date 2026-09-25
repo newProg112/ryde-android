@@ -1103,6 +1103,37 @@ test("only the driver may decide and acceptance requires an atomic one-seat decr
   assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().seatsRemaining, 1);
 });
 
+test("driver can accept a request for a coordinate-bearing journey", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  const rider = environment.authenticatedContext("rider").firestore();
+  await assertSucceeds(createJourney(
+    driver,
+    "coordinate-acceptance",
+    "driver",
+    3,
+    guard("driver"),
+    journeyWithCoordinates("driver", 3),
+  ));
+  await assertSucceeds(requestSeatLikeGateway(rider, "coordinate-acceptance", "rider"));
+
+  await assertSucceeds(acceptRequest(
+    driver,
+    "coordinate-acceptance",
+    "coordinate-acceptance_rider",
+    2,
+    1,
+  ));
+
+  assert.equal(
+    (await getDoc(doc(driver, "journeys/coordinate-acceptance"))).data().seatsRemaining,
+    2,
+  );
+  assert.equal(
+    (await getDoc(doc(driver, "seatRequests/coordinate-acceptance_rider"))).data().status,
+    "ACCEPTED",
+  );
+});
+
 test("confirmed trip is created once and remains private and immutable", async () => {
   const driver = environment.authenticatedContext("driver").firestore();
   const rider = environment.authenticatedContext("rider").firestore();

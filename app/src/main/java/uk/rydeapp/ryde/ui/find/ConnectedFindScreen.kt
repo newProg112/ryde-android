@@ -200,20 +200,22 @@ internal fun ConnectedFindScreen(
         }
         items(results, key = { it.item.journey.id }) { result ->
             val item = result.item
-            Column {
-                ConnectedJourneyCard(
-                    item, busy, requestsEnabled, onRequestSeat, allowRerequest = true,
-                    onManageRequests = onManageRequests,
-                    additionalContent = {
-                        result.geographicMatchExplanation?.let { explanation ->
-                            ConnectedFindGeographicMatchSummary(explanation)
-                        }
-                    },
-                )
-                TextButton(onClick = { onOpenJourney(item.journey.id) }) {
-                    Text(stringResource(R.string.connected_view_trip_details))
-                }
-            }
+            ConnectedJourneyCard(
+                item, busy, requestsEnabled, onRequestSeat,
+                modifier = Modifier.testTag("connected-find-result-${item.journey.id}"),
+                allowRerequest = true,
+                onManageRequests = onManageRequests,
+                additionalContent = {
+                    result.geographicMatchExplanation?.let { explanation ->
+                        ConnectedFindGeographicMatchSummary(explanation)
+                    }
+                },
+                footerContent = {
+                    TextButton(onClick = { onOpenJourney(item.journey.id) }) {
+                        Text(stringResource(R.string.connected_view_trip_details))
+                    }
+                },
+            )
         }
         item {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {

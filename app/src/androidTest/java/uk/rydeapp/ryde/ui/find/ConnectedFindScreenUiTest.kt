@@ -114,6 +114,39 @@ class ConnectedFindScreenUiTest {
         compose.runOnIdle { assertEquals(1, managed); assertEquals(1, requested.size) }
     }
 
+    @Test fun resultCardGroupsJourneySummaryAndExistingActions() {
+        val opened = mutableListOf<String>()
+        val requested = mutableListOf<String>()
+        compose.setContent { RydeTheme {
+            ConnectedFindScreen(
+                journeys = listOf(item("available", "Mansfield", "Nottingham")),
+                busy = false,
+                requestsEnabled = true,
+                message = null,
+                onRefresh = {},
+                onRequestSeat = { requested += it },
+                onManageRequests = {},
+                onOpenJourney = { opened += it },
+            )
+        } }
+
+        val card = compose.onNodeWithTag("connected-find-result-available")
+        card.performScrollTo().assert(
+            hasAnyDescendant(hasText("Mansfield", substring = true)) and
+                hasAnyDescendant(hasText("at 12:00", substring = true)) and
+                hasAnyDescendant(hasText("seat", substring = true)) and
+                hasAnyDescendant(hasText("Request one seat")) and
+                hasAnyDescendant(hasText("View trip details")),
+        )
+        compose.onNodeWithText("View trip details").performClick()
+        compose.onNodeWithText("Request one seat").performClick()
+
+        compose.runOnIdle {
+            assertEquals(listOf("available"), opened)
+            assertEquals(listOf("available"), requested)
+        }
+    }
+
     @Test fun searchActionCarriesBothTypedAreasToResolutionBoundary() {
         var submitted: ConnectedFindCriteria? = null
         compose.setContent { RydeTheme {

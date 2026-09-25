@@ -34,6 +34,7 @@ internal fun ConnectedJourneyCard(
     allowRerequest: Boolean = false,
     onManageRequests: (() -> Unit)? = null,
     additionalContent: @Composable (() -> Unit)? = null,
+    footerContent: @Composable (() -> Unit)? = null,
 ) {
     Card(
         modifier = modifier.fillMaxWidth(),
@@ -79,6 +80,7 @@ internal fun ConnectedJourneyCard(
             } else {
                 Text(stringResource(R.string.connected_no_seats))
             }
+            footerContent?.invoke()
         }
     }
 }
