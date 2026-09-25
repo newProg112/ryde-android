@@ -51,17 +51,17 @@ internal data class ConnectedFindJourneyResult(
     val geographicScore: GeographicJourneyMatchScore?
         get() = (geographicMatch as? GeographicJourneyMatch.Compatible)?.combinedEndpointScore()
 
-    val geographicMatchInfo: ConnectedFindGeographicMatchInfo?
+    val geographicMatchExplanation: ConnectedFindGeographicMatchExplanation?
         get() = (geographicMatch as? GeographicJourneyMatch.Compatible)?.let { compatible ->
-            ConnectedFindGeographicMatchInfo(
+            ConnectedFindGeographicMatchExplanation(
                 pickupAreaKilometres = compatible.originDistance.kilometres.roundToInt(),
                 dropOffAreaKilometres = compatible.destinationDistance.kilometres.roundToInt(),
             )
         }
 }
 
-/** Whole-kilometre broad-area context for rider-facing Find presentation. */
-internal data class ConnectedFindGeographicMatchInfo(
+/** Compact rider-facing explanation derived from an already-compatible geographic match. */
+internal data class ConnectedFindGeographicMatchExplanation(
     val pickupAreaKilometres: Int,
     val dropOffAreaKilometres: Int,
 )

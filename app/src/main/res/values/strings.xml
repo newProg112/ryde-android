@@ -63,8 +63,7 @@
     <string name="connected_find_no_matches">No journeys match your filters</string>
     <string name="connected_find_no_matches_body">Try another area or date, or clear your filters to browse all upcoming journeys.</string>
     <string name="connected_find_resolution_failed">Ryde could not check those broad areas. Text matching is still available.</string>
-    <string name="connected_find_pickup_area_distance">Pickup area ~%1$d km from your search</string>
-    <string name="connected_find_drop_off_area_distance">Drop-off area ~%1$d km from your search</string>
+    <string name="connected_find_geographic_match_explanation">Close area match · pickup ~%1$d km away · drop-off ~%2$d km away</string>
     <plurals name="connected_find_matching_count">
         <item quantity="one">%d matching journey</item>
         <item quantity="other">%d matching journeys</item>

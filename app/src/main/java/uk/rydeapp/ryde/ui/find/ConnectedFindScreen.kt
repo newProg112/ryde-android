@@ -205,8 +205,8 @@ internal fun ConnectedFindScreen(
                     item, busy, requestsEnabled, onRequestSeat, allowRerequest = true,
                     onManageRequests = onManageRequests,
                     additionalContent = {
-                        result.geographicMatchInfo?.let { matchInfo ->
-                            ConnectedFindGeographicMatchSummary(matchInfo)
+                        result.geographicMatchExplanation?.let { explanation ->
+                            ConnectedFindGeographicMatchSummary(explanation)
                         }
                     },
                 )
@@ -263,24 +263,15 @@ internal fun ConnectedFindScreen(
 
 @Composable
 private fun ConnectedFindGeographicMatchSummary(
-    matchInfo: ConnectedFindGeographicMatchInfo,
+    explanation: ConnectedFindGeographicMatchExplanation,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(
-            stringResource(
-                R.string.connected_find_pickup_area_distance,
-                matchInfo.pickupAreaKilometres,
-            ),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-            stringResource(
-                R.string.connected_find_drop_off_area_distance,
-                matchInfo.dropOffAreaKilometres,
-            ),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
+    Text(
+        stringResource(
+            R.string.connected_find_geographic_match_explanation,
+            explanation.pickupAreaKilometres,
+            explanation.dropOffAreaKilometres,
+        ),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }

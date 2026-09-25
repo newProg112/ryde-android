@@ -184,8 +184,9 @@ class ConnectedFindScreenUiTest {
         val fartherTop = compose.onNodeWithText("Farther origin", substring = true)
             .fetchSemanticsNode().boundsInRoot.top
         assertTrue(closerTop < fartherTop)
-        compose.onNodeWithText("Pickup area ~3 km from your search").assertIsDisplayed()
-        compose.onNodeWithText("Drop-off area ~5 km from your search").assertIsDisplayed()
+        compose.onNodeWithText(
+            "Close area match · pickup ~3 km away · drop-off ~5 km away",
+        ).assertIsDisplayed()
     }
 
     @Test fun legacyTextOnlyResultDoesNotInventGeographicMatchInformation() {
@@ -202,8 +203,7 @@ class ConnectedFindScreenUiTest {
         } }
 
         scrollTo("Request one seat").assertIsDisplayed()
-        compose.onAllNodes(hasText("Pickup area", substring = true)).assertCountEquals(0)
-        compose.onAllNodes(hasText("Drop-off area", substring = true)).assertCountEquals(0)
+        compose.onAllNodes(hasText("Close area match", substring = true)).assertCountEquals(0)
     }
 
     @Test fun ambiguousFromChoiceIsExplicitAndPreservesToDraft() {

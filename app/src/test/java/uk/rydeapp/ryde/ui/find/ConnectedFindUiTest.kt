@@ -173,7 +173,7 @@ class ConnectedFindUiTest {
         assertTrue(result.geographicMatch is GeographicJourneyMatch.Compatible)
     }
 
-    @Test fun geographicMatchInfoRoundsEachBroadAreaDistanceToWholeKilometres() {
+    @Test fun geographicMatchExplanationUsesRoundedCompatibleEndpointDistances() {
         val result = ConnectedFindJourneyResult(
             item = first,
             geographicMatch = GeographicJourneyMatch.Compatible(
@@ -183,15 +183,15 @@ class ConnectedFindUiTest {
         )
 
         assertEquals(
-            ConnectedFindGeographicMatchInfo(
+            ConnectedFindGeographicMatchExplanation(
                 pickupAreaKilometres = 2,
                 dropOffAreaKilometres = 5,
             ),
-            result.geographicMatchInfo,
+            result.geographicMatchExplanation,
         )
     }
 
-    @Test fun unavailableGeographicDistancesProduceNoMatchInfo() {
+    @Test fun unavailableGeographicDistancesProduceNoMatchExplanation() {
         val legacy = ConnectedFindJourneyResult(
             item = first,
             geographicMatch = GeographicJourneyMatch.InsufficientGeographicData,
@@ -204,8 +204,8 @@ class ConnectedFindUiTest {
             ),
         )
 
-        assertNull(legacy.geographicMatchInfo)
-        assertNull(incompatible.geographicMatchInfo)
+        assertNull(legacy.geographicMatchExplanation)
+        assertNull(incompatible.geographicMatchExplanation)
     }
 
     @Test fun actualConnectedFindResultsRankTheCloserJourneyAtBothEndsFirst() {
@@ -226,10 +226,10 @@ class ConnectedFindUiTest {
         assertEquals(listOf(5.0, 11.0), results.map { it.geographicScore!!.combinedEndpointDistance.kilometres })
         assertEquals(
             listOf(
-                ConnectedFindGeographicMatchInfo(2, 3),
-                ConnectedFindGeographicMatchInfo(5, 6),
+                ConnectedFindGeographicMatchExplanation(2, 3),
+                ConnectedFindGeographicMatchExplanation(5, 6),
             ),
-            results.map { it.geographicMatchInfo },
+            results.map { it.geographicMatchExplanation },
         )
     }
 
