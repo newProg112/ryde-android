@@ -44,7 +44,7 @@
     <string name="connected_request_seat">Request one seat</string>
     <string name="connected_manage_requests">Manage requests</string>
     <string name="connected_no_seats">No seats available</string>
-    <string name="connected_refresh_hint">Availability updates when you refresh. A seat is confirmed only after the driver accepts.</string>
+    <string name="connected_refresh_hint">Journey updates appear automatically. Refresh if something looks out of date. A seat is confirmed only after the driver accepts.</string>
     <string name="connected_refresh_failed">Ryde could not refresh. Please try again.</string>
     <string name="connected_refreshed">Journeys refreshed</string>
     <string name="connected_requested">Seat requested. Waiting for the driver.</string>
@@ -160,7 +160,7 @@
     <string name="connected_trips_keep_seat">Keep my seat</string>
     <string name="connected_trips_refresh_required">Refresh before making any changes.</string>
     <string name="connected_trips_changed">This trip has changed. Refresh before cancelling your seat.</string>
-    <string name="connected_trips_refresh_hint">Trip and request status updates when you refresh. A seat is confirmed only after the driver accepts.</string>
+    <string name="connected_trips_refresh_hint">Trip and request updates appear automatically. Refresh if something looks out of date. A seat is confirmed only after the driver accepts.</string>
     <string name="app_name">Ryde</string>
     <string name="demo_badge">Demo</string>
     <string name="route_mark_description">Ryde merging route mark</string>

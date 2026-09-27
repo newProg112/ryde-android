@@ -48,8 +48,9 @@ internal data class ConnectedTripsContent(
 /** Mirrors existing gateway preconditions; transactions remain authoritative. */
 internal fun canDecideConnectedRequest(
     request: ConnectedSeatRequest, journey: ConnectedJourney?, uid: String, accept: Boolean,
-    nowEpochMillis: Long,
+    nowEpochMillis: Long, confirmedTrip: ConnectedConfirmedTrip? = null,
 ): Boolean = request.driverUid == uid && request.riderUid != uid &&
+    confirmedTrip == null &&
     request.status == ConnectedRequestStatus.PENDING &&
     ConnectedJourneyLifecycle.requestJourneyOpen(request, journey) &&
     (!accept || (journey!!.seatsRemaining > 0 && journey.departureEpochMillis > nowEpochMillis))
@@ -71,8 +72,8 @@ private fun incomingRequest(
         ConnectedRequestLifecycle.CANCELLED_BY_DRIVER -> R.string.connected_trips_offer_cancelled
         ConnectedRequestLifecycle.UNAVAILABLE -> R.string.connected_trips_unavailable
     },
-    canDecideConnectedRequest(request, journey, uid, true, now),
-    canDecideConnectedRequest(request, journey, uid, false, now),
+    canDecideConnectedRequest(request, journey, uid, true, now, trip),
+    canDecideConnectedRequest(request, journey, uid, false, now, trip),
     trip?.takeIf {
         request.status in setOf(ConnectedRequestStatus.ACCEPTED, ConnectedRequestStatus.CANCELLED_AFTER_ACCEPTANCE) &&
         it.id == request.id && it.acceptedRequestId == request.id &&

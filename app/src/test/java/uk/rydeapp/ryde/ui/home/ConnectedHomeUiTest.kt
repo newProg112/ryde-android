@@ -4,12 +4,14 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import uk.rydeapp.ryde.data.connected.ConnectedConfirmedTrip
 import uk.rydeapp.ryde.data.connected.ConnectedJourney
 import uk.rydeapp.ryde.data.connected.ConnectedJourneyLifecycle
 import uk.rydeapp.ryde.data.connected.ConnectedJourneySnapshot
 import uk.rydeapp.ryde.data.connected.ConnectedJourneyStatus
 import uk.rydeapp.ryde.data.connected.ConnectedRequestStatus
 import uk.rydeapp.ryde.data.connected.ConnectedSeatRequest
+import uk.rydeapp.ryde.data.connected.ConnectedTripStatus
 import uk.rydeapp.ryde.ui.account.ConnectedRiderRequestItem
 import uk.rydeapp.ryde.ui.account.canRerequestConnectedSeat
 
@@ -49,6 +51,30 @@ class ConnectedHomeUiTest {
             assertFalse(item.canRequest)
             assertEquals(status == ConnectedRequestStatus.CANCELLED, item.canRerequest)
         }
+    }
+
+    @Test
+    fun `confirmed trip suppresses request action during cross-query reconciliation`() {
+        val trip = ConnectedConfirmedTrip(
+            id = "${journey.id}_viewer",
+            journeyId = journey.id,
+            acceptedRequestId = "${journey.id}_viewer",
+            driverUid = journey.driverUid,
+            riderUid = "viewer",
+            originArea = journey.originArea,
+            destinationArea = journey.destinationArea,
+            departureEpochMillis = journey.departureEpochMillis,
+            status = ConnectedTripStatus.CONFIRMED,
+        )
+
+        val item = connectedHomeJourneys(
+            ConnectedJourneySnapshot(journeys = listOf(journey), confirmedTrips = listOf(trip)),
+            "viewer",
+            0,
+        ).single()
+
+        assertFalse(item.canRequest)
+        assertFalse(item.canRerequest)
     }
 
     @Test

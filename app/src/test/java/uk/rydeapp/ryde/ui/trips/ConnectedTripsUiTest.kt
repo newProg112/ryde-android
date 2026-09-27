@@ -249,6 +249,8 @@ class ConnectedTripsUiTest {
         assertFalse(canDecideConnectedRequest(request, journey.copy(seatsRemaining = 0), journey.driverUid, true, 0))
         assertFalse(canDecideConnectedRequest(request, journey, journey.driverUid, true, 1000))
         assertTrue(canDecideConnectedRequest(request, journey.copy(seatsRemaining = 0), journey.driverUid, false, 1000))
+        assertFalse(canDecideConnectedRequest(request, journey, journey.driverUid, true, 0, trip))
+        assertFalse(canDecideConnectedRequest(request, journey, journey.driverUid, false, 0, trip))
     }
 
     @Test fun `driver lifecycle retains request history without invalid actions`() {

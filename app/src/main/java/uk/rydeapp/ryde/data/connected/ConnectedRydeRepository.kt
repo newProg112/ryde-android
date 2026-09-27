@@ -10,7 +10,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.takeWhile
-import kotlinx.coroutines.flow.update
 import uk.rydeapp.ryde.data.AccountCommandResult
 import uk.rydeapp.ryde.data.AccountSession
 import uk.rydeapp.ryde.data.AsyncState
@@ -187,21 +186,19 @@ class ConnectedRydeRepository(
     suspend fun decideConnectedRequest(requestId: String, accept: Boolean): ConnectedJourneyCommandResult =
         journeyCommand { store, uid -> store.decide(uid, requestId, accept) }
 
-    /** Keeps only remote journey closure authoritative between explicit full refreshes. */
-    suspend fun synchronizeConnectedJourneyLifecycles() {
+    /** Publishes committed account-scoped journey state; Refresh remains the recovery path. */
+    suspend fun synchronizeConnectedJourneyState() {
         val store = journeys ?: return
         val uid = auth.currentUserId ?: return
         try {
-            combine(store.observeJourneys(uid), sessionState) { observed, session -> observed to session }
+            combine(store.observeSnapshot(uid), sessionState) { observed, session -> observed to session }
                 .takeWhile { (_, session) ->
                     auth.currentUserId == uid &&
                         session is AccountSession.Authenticated && session.accountId == uid
                 }
                 .collect { (observed, _) ->
                     if (auth.currentUserId != uid) return@collect
-                    mutableJourneyState.update { current ->
-                        current.reconcileRemoteJourneyClosures(observed)
-                    }
+                    mutableJourneyState.value = observed.accountScopedTo(uid)
                 }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -444,25 +441,9 @@ private fun ConnectedConversationSnapshot.readOnlyReason(): ConnectedConversatio
     else -> ConnectedConversationReadOnlyReason.UNAVAILABLE
 }
 
-internal fun ConnectedJourneySnapshot.reconcileRemoteJourneyClosures(
-    observed: List<ConnectedJourney>,
-): ConnectedJourneySnapshot {
-    val observedById = observed.associateBy(ConnectedJourney::id)
-    val reconciled = journeys.map { current ->
-        val remote = observedById[current.id]
-        if (
-            current.status == ConnectedJourneyStatus.OPEN &&
-            remote != null &&
-            remote.status in setOf(ConnectedJourneyStatus.CANCELLED, ConnectedJourneyStatus.COMPLETED) &&
-            current.sameImmutableJourney(remote)
-        ) remote else current
-    }
-    return if (reconciled == journeys) this else copy(journeys = reconciled)
-}
-
-private fun ConnectedJourney.sameImmutableJourney(other: ConnectedJourney): Boolean =
-    id == other.id && driverUid == other.driverUid &&
-        originArea == other.originArea && destinationArea == other.destinationArea &&
-        departureEpochMillis == other.departureEpochMillis && seatCapacity == other.seatCapacity
+internal fun ConnectedJourneySnapshot.accountScopedTo(uid: String): ConnectedJourneySnapshot = copy(
+    requests = requests.filter { it.driverUid == uid || it.riderUid == uid },
+    confirmedTrips = confirmedTrips.filter { it.driverUid == uid || it.riderUid == uid },
+)
 
 private class FirebaseOperationTimedOutException : Exception()

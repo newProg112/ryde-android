@@ -27,7 +27,7 @@ interface ConnectedProfileStore {
 
 interface ConnectedJourneyStore {
     suspend fun load(uid: String): ConnectedJourneySnapshot
-    fun observeJourneys(uid: String): Flow<List<ConnectedJourney>> = emptyFlow()
+    fun observeSnapshot(uid: String): Flow<ConnectedJourneySnapshot> = emptyFlow()
     suspend fun create(uid: String, draft: ConnectedJourneyDraft)
     suspend fun requestSeat(uid: String, journeyId: String)
     suspend fun cancelRequest(uid: String, requestId: String)
@@ -95,6 +95,8 @@ class FirestoreConnectedJourneyStore(private val firestore: FirebaseFirestore) :
         val requests = (asDriver.documents + asRider.documents)
             .distinctBy { it.id }
             .mapNotNull { FirestoreJourneyMapper.request(it.id, it.data.orEmpty()) }
+            .filter { it.driverUid == uid || it.riderUid == uid }
+            .sortedBy { it.id }
         val tripsAsDriver = firestore.collection(CONFIRMED_TRIPS)
             .whereEqualTo("driverUid", uid).get(Source.SERVER).await()
         val tripsAsRider = firestore.collection(CONFIRMED_TRIPS)
@@ -102,6 +104,7 @@ class FirestoreConnectedJourneyStore(private val firestore: FirebaseFirestore) :
         val confirmedTrips = (tripsAsDriver.documents + tripsAsRider.documents)
             .distinctBy { it.id }
             .mapNotNull { FirestoreJourneyMapper.confirmedTrip(it.id, it.data.orEmpty()) }
+            .filter { it.driverUid == uid || it.riderUid == uid }
             .sortedBy { it.departureEpochMillis }
         // Read lifecycle authority last, so a journey closed during the private
         // queries is reflected in this refresh. Queries are still not one snapshot.
@@ -111,25 +114,122 @@ class FirestoreConnectedJourneyStore(private val firestore: FirebaseFirestore) :
         return ConnectedJourneySnapshot(journeys, requests, confirmedTrips)
     }
 
-    override fun observeJourneys(uid: String): Flow<List<ConnectedJourney>> = callbackFlow {
+    override fun observeSnapshot(uid: String): Flow<ConnectedJourneySnapshot> = callbackFlow {
         if (uid.isBlank()) {
             close(IllegalArgumentException("Authenticated account required"))
             return@callbackFlow
         }
-        val registration = firestore.collection(JOURNEYS)
-            .addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error ->
-                if (error != null) {
-                    close(error)
-                    return@addSnapshotListener
-                }
-                if (snapshot == null || snapshot.metadata.hasPendingWrites()) return@addSnapshotListener
-                trySend(
-                    snapshot.documents
-                        .mapNotNull { FirestoreJourneyMapper.journey(it.id, it.data.orEmpty()) }
+
+        val lock = Any()
+        var observedJourneys: List<ConnectedJourney>? = null
+        var requestsAsDriver: List<ConnectedSeatRequest>? = null
+        var requestsAsRider: List<ConnectedSeatRequest>? = null
+        var tripsAsDriver: List<ConnectedConfirmedTrip>? = null
+        var tripsAsRider: List<ConnectedConfirmedTrip>? = null
+
+        fun committedServerSnapshot(snapshot: com.google.firebase.firestore.QuerySnapshot?): Boolean =
+            snapshot != null && !snapshot.metadata.hasPendingWrites() && !snapshot.metadata.isFromCache
+
+        val registrations = listOf(
+            firestore.collection(JOURNEYS)
+                .addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error ->
+                    if (error != null) {
+                        close(error)
+                        return@addSnapshotListener
+                    }
+                    synchronized(lock) {
+                        observedJourneys = if (committedServerSnapshot(snapshot)) {
+                            snapshot!!.documents
+                                .mapNotNull { FirestoreJourneyMapper.journey(it.id, it.data.orEmpty()) }
+                                .sortedBy { it.departureEpochMillis }
+                        } else null
+                    }
+                },
+            firestore.collection(REQUESTS).whereEqualTo("driverUid", uid)
+                .addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error ->
+                    if (error != null) {
+                        close(error)
+                        return@addSnapshotListener
+                    }
+                    synchronized(lock) {
+                        requestsAsDriver = if (committedServerSnapshot(snapshot)) {
+                            snapshot!!.documents
+                                .mapNotNull { FirestoreJourneyMapper.request(it.id, it.data.orEmpty()) }
+                                .filter { it.driverUid == uid }
+                        } else null
+                    }
+                },
+            firestore.collection(REQUESTS).whereEqualTo("riderUid", uid)
+                .addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error ->
+                    if (error != null) {
+                        close(error)
+                        return@addSnapshotListener
+                    }
+                    synchronized(lock) {
+                        requestsAsRider = if (committedServerSnapshot(snapshot)) {
+                            snapshot!!.documents
+                                .mapNotNull { FirestoreJourneyMapper.request(it.id, it.data.orEmpty()) }
+                                .filter { it.riderUid == uid }
+                        } else null
+                    }
+                },
+            firestore.collection(CONFIRMED_TRIPS).whereEqualTo("driverUid", uid)
+                .addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error ->
+                    if (error != null) {
+                        close(error)
+                        return@addSnapshotListener
+                    }
+                    synchronized(lock) {
+                        tripsAsDriver = if (committedServerSnapshot(snapshot)) {
+                            snapshot!!.documents
+                                .mapNotNull { FirestoreJourneyMapper.confirmedTrip(it.id, it.data.orEmpty()) }
+                                .filter { it.driverUid == uid }
+                        } else null
+                    }
+                },
+            firestore.collection(CONFIRMED_TRIPS).whereEqualTo("riderUid", uid)
+                .addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error ->
+                    if (error != null) {
+                        close(error)
+                        return@addSnapshotListener
+                    }
+                    synchronized(lock) {
+                        tripsAsRider = if (committedServerSnapshot(snapshot)) {
+                            snapshot!!.documents
+                                .mapNotNull { FirestoreJourneyMapper.confirmedTrip(it.id, it.data.orEmpty()) }
+                                .filter { it.riderUid == uid }
+                        } else null
+                    }
+                },
+        )
+        val inSyncRegistration = firestore.addSnapshotsInSyncListener {
+            val ready = synchronized(lock) {
+                val journeyValues = observedJourneys
+                val requestDriverValues = requestsAsDriver
+                val requestRiderValues = requestsAsRider
+                val tripDriverValues = tripsAsDriver
+                val tripRiderValues = tripsAsRider
+                if (
+                    journeyValues == null || requestDriverValues == null || requestRiderValues == null ||
+                    tripDriverValues == null || tripRiderValues == null
+                ) null else ConnectedJourneySnapshot(
+                    journeys = journeyValues,
+                    requests = (requestDriverValues + requestRiderValues)
+                        .distinctBy { it.id }
+                        .filter { it.driverUid == uid || it.riderUid == uid }
+                        .sortedBy { it.id },
+                    confirmedTrips = (tripDriverValues + tripRiderValues)
+                        .distinctBy { it.id }
+                        .filter { it.driverUid == uid || it.riderUid == uid }
                         .sortedBy { it.departureEpochMillis },
                 )
             }
-        awaitClose { registration.remove() }
+            ready?.let { trySend(it) }
+        }
+        awaitClose {
+            inSyncRegistration.remove()
+            registrations.forEach { it.remove() }
+        }
     }
 
     override suspend fun create(uid: String, draft: ConnectedJourneyDraft) {

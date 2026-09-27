@@ -5,7 +5,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flow
@@ -32,41 +31,60 @@ import uk.rydeapp.ryde.ui.trips.connectedTripsContent
 
 class ConnectedRydeRepositoryTest {
     @Test
-    fun `remote journey closure updates normal snapshot and stops observing on sign out`() = runBlocking {
-        val uid = "rider"
+    fun `remote participant lifecycle updates normal snapshot and stops observing on sign out`() = runBlocking {
+        val uid = "driver"
         val auth = FakeAuth(initialUid = uid)
         val profiles = FakeProfiles().apply {
-            saved = ConnectedProfile(ConnectedUserProfile(uid, "Riley"), emptyList())
+            saved = ConnectedProfile(ConnectedUserProfile(uid, "Morgan"), emptyList())
         }
-        val journey = ConnectedJourney("journey", "driver", "Derby", "Nottingham", 4_070_908_800_000L, 2, 1)
-        val request = ConnectedSeatRequest("journey_rider", journey.id, journey.driverUid, uid,
-            ConnectedRequestStatus.ACCEPTED, "Riley")
-        val trip = ConnectedConfirmedTrip(request.id, journey.id, request.id, journey.driverUid, uid,
+        val journey = ConnectedJourney("journey", uid, "Derby", "Nottingham", 4_070_908_800_000L, 2, 2)
+        val request = ConnectedSeatRequest("journey_rider", journey.id, uid, "rider",
+            ConnectedRequestStatus.PENDING, "Riley")
+        val trip = ConnectedConfirmedTrip(request.id, journey.id, request.id, uid, request.riderUid,
             journey.originArea, journey.destinationArea, journey.departureEpochMillis,
             ConnectedTripStatus.CONFIRMED, driverDisplayName = "Morgan")
-        val store = ObservingJourneys(ConnectedJourneySnapshot(listOf(journey), listOf(request), listOf(trip)))
+        val store = ObservingJourneys(ConnectedJourneySnapshot(listOf(journey)))
         val repository = ConnectedRydeRepository(auth, profiles, journeys = store)
         repository.refresh()
-        val observation = launch { repository.synchronizeConnectedJourneyLifecycles() }
+        val observation = launch { repository.synchronizeConnectedJourneyState() }
         withTimeout(1_000) { while (store.activeObservers == 0) yield() }
 
-        store.publish(listOf(journey.copy(
-            seatsRemaining = 0,
-            status = ConnectedJourneyStatus.CANCELLED,
+        store.publish(ConnectedJourneySnapshot(listOf(journey), listOf(request)))
+        withTimeout(1_000) { while (repository.journeyState.value.requests.isEmpty()) yield() }
+        assertEquals(ConnectedRequestStatus.PENDING, repository.journeyState.value.requests.single().status)
+
+        val acceptedRequest = request.copy(status = ConnectedRequestStatus.ACCEPTED)
+        store.publish(ConnectedJourneySnapshot(
+            journeys = listOf(journey.copy(seatsRemaining = 1)),
+            requests = listOf(acceptedRequest),
+            confirmedTrips = listOf(trip),
+        ))
+        withTimeout(1_000) { while (repository.journeyState.value.confirmedTrips.isEmpty()) yield() }
+        assertEquals(ConnectedRequestStatus.ACCEPTED, repository.journeyState.value.requests.single().status)
+        assertEquals(trip, repository.journeyState.value.confirmedTrips.single())
+        assertEquals(1, repository.journeyState.value.journeys.single().seatsRemaining)
+
+        val cancelledRequest = acceptedRequest.copy(status = ConnectedRequestStatus.CANCELLED_AFTER_ACCEPTANCE)
+        val cancelledTrip = trip.copy(
+            status = ConnectedTripStatus.CANCELLED_BY_RIDER,
             cancelledAtEpochMillis = 100,
-        )))
+        )
+        store.publish(ConnectedJourneySnapshot(
+            journeys = listOf(journey.copy(seatsRemaining = 2)),
+            requests = listOf(cancelledRequest),
+            confirmedTrips = listOf(cancelledTrip),
+        ))
         withTimeout(1_000) {
-            while (repository.journeyState.value.journeys.single().status == ConnectedJourneyStatus.OPEN) yield()
+            while (repository.journeyState.value.confirmedTrips.single().status == ConnectedTripStatus.CONFIRMED) yield()
         }
 
         val updated = repository.journeyState.value
-        assertEquals(ConnectedJourneyStatus.CANCELLED, updated.journeys.single().status)
-        assertEquals(listOf(request), updated.requests)
-        assertEquals(listOf(trip), updated.confirmedTrips)
-        val rider = connectedTripsContent(updated, uid, 0).rider.single()
-        assertEquals(R.string.connected_trips_driver_cancelled, rider.statusText)
-        assertEquals(null, rider.cancellableTripId)
-        assertEquals(trip.id, rider.messageTarget?.tripId)
+        assertEquals(2, updated.journeys.single().seatsRemaining)
+        assertEquals(listOf(cancelledRequest), updated.requests)
+        assertEquals(listOf(cancelledTrip), updated.confirmedTrips)
+        val driver = connectedTripsContent(updated, uid, 0).driver.single()
+        assertEquals(R.string.connected_incoming_seat_cancelled, driver.incoming.single().statusText)
+        assertEquals(trip.id, driver.incoming.single().messageTarget?.tripId)
 
         repository.signOut()
         observation.join()
@@ -75,30 +93,74 @@ class ConnectedRydeRepositoryTest {
     }
 
     @Test
-    fun `journey lifecycle reconciliation ignores additions reopen and changed identity`() {
+    fun `rider observes accepted and declined request state without refresh`() = runBlocking {
+        val uid = "rider"
+        val auth = FakeAuth(initialUid = uid)
+        val profiles = FakeProfiles().apply {
+            saved = ConnectedProfile(ConnectedUserProfile(uid, "Riley"), emptyList())
+        }
+        val journey = ConnectedJourney("journey", "driver", "Derby", "Nottingham", 4_070_908_800_000L, 2, 2)
+        val request = ConnectedSeatRequest("journey_rider", journey.id, journey.driverUid, uid,
+            ConnectedRequestStatus.PENDING, "Riley")
+        val store = ObservingJourneys(ConnectedJourneySnapshot(listOf(journey), listOf(request)))
+        val repository = ConnectedRydeRepository(auth, profiles, journeys = store)
+        repository.refresh()
+        val observation = launch { repository.synchronizeConnectedJourneyState() }
+        withTimeout(1_000) { while (store.activeObservers == 0) yield() }
+
+        store.publish(ConnectedJourneySnapshot(listOf(journey), listOf(request.copy(status = ConnectedRequestStatus.DECLINED))))
+        withTimeout(1_000) {
+            while (repository.journeyState.value.requests.single().status == ConnectedRequestStatus.PENDING) yield()
+        }
+        assertEquals(ConnectedRequestStatus.DECLINED, repository.journeyState.value.requests.single().status)
+
+        val accepted = request.copy(status = ConnectedRequestStatus.ACCEPTED)
+        val trip = ConnectedConfirmedTrip(request.id, journey.id, request.id, journey.driverUid, uid,
+            journey.originArea, journey.destinationArea, journey.departureEpochMillis,
+            ConnectedTripStatus.CONFIRMED, driverDisplayName = "Morgan")
+        store.publish(ConnectedJourneySnapshot(listOf(journey.copy(seatsRemaining = 1)), listOf(accepted), listOf(trip)))
+        withTimeout(1_000) { while (repository.journeyState.value.confirmedTrips.isEmpty()) yield() }
+        assertEquals(accepted, repository.journeyState.value.requests.single())
+        assertEquals(trip, repository.journeyState.value.confirmedTrips.single())
+
+        repository.signOut()
+        observation.join()
+    }
+
+    @Test
+    fun `observed participant state removes unrelated private records defensively`() {
         val open = ConnectedJourney("journey", "driver", "Derby", "Nottingham", 100, 2, 1)
         val request = ConnectedSeatRequest("journey_rider", open.id, open.driverUid, "rider", ConnectedRequestStatus.ACCEPTED)
         val trip = ConnectedConfirmedTrip(request.id, open.id, request.id, open.driverUid, "rider",
             open.originArea, open.destinationArea, open.departureEpochMillis, ConnectedTripStatus.CONFIRMED)
-        val snapshot = ConnectedJourneySnapshot(listOf(open), listOf(request), listOf(trip))
+        val unrelatedRequest = request.copy(id = "journey_other", riderUid = "other")
+        val unrelatedTrip = trip.copy(id = unrelatedRequest.id, acceptedRequestId = unrelatedRequest.id, riderUid = "other")
 
-        assertEquals(snapshot, snapshot.reconcileRemoteJourneyClosures(listOf(
-            open.copy(driverUid = "other", status = ConnectedJourneyStatus.CANCELLED, cancelledAtEpochMillis = 1),
-            open.copy(id = "new", status = ConnectedJourneyStatus.CANCELLED, cancelledAtEpochMillis = 1),
-        )))
-        val closed = open.copy(status = ConnectedJourneyStatus.CANCELLED, cancelledAtEpochMillis = 1)
-        assertEquals(snapshot.copy(journeys = listOf(closed)), snapshot.reconcileRemoteJourneyClosures(listOf(closed)))
-        val completed = open.copy(status = ConnectedJourneyStatus.COMPLETED, completedAtEpochMillis = 2)
-        assertEquals(snapshot.copy(journeys = listOf(completed)), snapshot.reconcileRemoteJourneyClosures(listOf(completed)))
-        val declined = snapshot.copy(requests = listOf(request.copy(status = ConnectedRequestStatus.DECLINED)))
         assertEquals(
-            declined.copy(journeys = listOf(closed)),
-            declined.reconcileRemoteJourneyClosures(listOf(closed)),
+            ConnectedJourneySnapshot(listOf(open), listOf(request), listOf(trip)),
+            ConnectedJourneySnapshot(
+                listOf(open), listOf(request, unrelatedRequest), listOf(trip, unrelatedTrip),
+            ).accountScopedTo("rider"),
         )
-        assertEquals(
-            snapshot.copy(journeys = listOf(closed)),
-            snapshot.copy(journeys = listOf(closed)).reconcileRemoteJourneyClosures(listOf(open)),
-        )
+    }
+
+    @Test
+    fun `listener failure retains last safe snapshot and cleans up`() = runBlocking {
+        val uid = "rider"
+        val auth = FakeAuth(initialUid = uid)
+        val profiles = FakeProfiles().apply {
+            saved = ConnectedProfile(ConnectedUserProfile(uid, "Riley"), emptyList())
+        }
+        val journey = ConnectedJourney("journey", "driver", "Derby", "Nottingham", 4_070_908_800_000L, 2, 2)
+        val initial = ConnectedJourneySnapshot(listOf(journey))
+        val store = FailingObservationStore(initial)
+        val repository = ConnectedRydeRepository(auth, profiles, journeys = store)
+        repository.refresh()
+
+        repository.synchronizeConnectedJourneyState()
+
+        assertEquals(initial, repository.journeyState.value)
+        assertEquals(0, store.activeObservers)
     }
 
     @Test
@@ -208,7 +270,9 @@ class ConnectedRydeRepositoryTest {
             CoroutineScope(SupervisorJob() + Dispatchers.Unconfined),
         )
 
-        delay(150)
+        withTimeout(1_000) {
+            while (holder.uiState.value !is RydeAppUiState.Error) yield()
+        }
 
         val error = holder.uiState.value as RydeAppUiState.Error
         assertEquals(RydeAppStateHolder.SAFE_LOAD_ERROR, error.userMessage)
@@ -278,21 +342,46 @@ class ConnectedRydeRepositoryTest {
     }
 
     private class ObservingJourneys(initial: ConnectedJourneySnapshot) : ConnectedJourneyStore {
-        private val updates = MutableStateFlow(initial.journeys)
+        private val updates = MutableStateFlow(initial)
         private var snapshot = initial
         var activeObservers = 0
 
-        suspend fun publish(journeys: List<ConnectedJourney>) {
-            snapshot = snapshot.copy(journeys = journeys)
-            updates.emit(journeys)
+        suspend fun publish(value: ConnectedJourneySnapshot) {
+            snapshot = value
+            updates.emit(value)
         }
 
         override suspend fun load(uid: String): ConnectedJourneySnapshot = snapshot
 
-        override fun observeJourneys(uid: String): Flow<List<ConnectedJourney>> = flow {
+        override fun observeSnapshot(uid: String): Flow<ConnectedJourneySnapshot> = flow {
             activeObservers++
             try {
                 updates.collect { emit(it) }
+            } finally {
+                activeObservers--
+            }
+        }
+
+        override suspend fun create(uid: String, draft: ConnectedJourneyDraft) = Unit
+        override suspend fun requestSeat(uid: String, journeyId: String) = Unit
+        override suspend fun cancelRequest(uid: String, requestId: String) = Unit
+        override suspend fun cancelConfirmedSeat(uid: String, tripId: String) = Unit
+        override suspend fun cancelJourney(uid: String, journeyId: String) = Unit
+        override suspend fun completeJourney(uid: String, journeyId: String) = Unit
+        override suspend fun decide(uid: String, requestId: String, accept: Boolean) = Unit
+    }
+
+    private class FailingObservationStore(
+        private val snapshot: ConnectedJourneySnapshot,
+    ) : ConnectedJourneyStore {
+        var activeObservers = 0
+
+        override suspend fun load(uid: String): ConnectedJourneySnapshot = snapshot
+
+        override fun observeSnapshot(uid: String): Flow<ConnectedJourneySnapshot> = flow {
+            activeObservers++
+            try {
+                throw IllegalStateException("listener failed")
             } finally {
                 activeObservers--
             }

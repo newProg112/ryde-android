@@ -239,20 +239,25 @@ is supported as described below. There is no private pickup/drop-off, exact/live
 location, pricing/payment, notification, Circle, trust, rating, Function or Storage data in
 connected mode.
 
-### Remote journey lifecycle synchronization
+### Realtime participant journey synchronization
 
-While the normal connected app is authenticated, one scoped listener observes committed journey
-documents. Repository reconciliation accepts only an existing structurally matching journey's
-`OPEN -> CANCELLED|COMPLETED` transition. It does not add or remove journeys, reopen terminal states, or
-realtime-update requests and confirmed trips. Those private records remain historical, and
-`CANCELLED_BY_DRIVER` continues to be derived from the linked journey. Sign-out, account change,
-or leaving the connected ready app removes the listener; explicit Refresh remains available if
-the listener fails.
+While the normal connected app is authenticated, one repository observation owns the existing
+committed journey listener plus four account-scoped queries: requests as driver/rider and confirmed
+trips as driver/rider. Firestore's snapshots-in-sync boundary publishes only after every query has a
+committed server snapshot, so request, trip and capacity transaction writes are not exposed one query
+callback at a time. Client filtering repeats the participant check defensively; malformed records
+continue to be discarded by the exact-schema mappers.
+
+New requests, decisions, confirmed trips, restored capacity, rider cancellation, driver cancellation
+and completion therefore update without manual Refresh. Sign-out, account change or leaving the
+connected ready app removes every listener. A listener failure retains the last safe snapshot and
+ends that observation; explicit Refresh remains available as recovery. Request and decision actions
+also fail closed when a confirmed trip is already present during any transient presentation state.
 
 ### Confirmed-trip messaging Phase 1
 
 Messaging is a dedicated connected coordination capability; it does not use the local-demo
-coordination records and does not make the whole connected repository realtime. The open
+coordination records and remains independent from journey snapshot synchronization. The open
 conversation observes its parent confirmed trip, linked journey and the latest 100 messages.
 The message query is ordered by server `sentAt`, with document ID as the deterministic client
 tie-break. Pending local timestamp writes are not rendered as optimistic messages. Cancelling,
@@ -286,12 +291,12 @@ editing/deleting, moderation or location sharing.
    `.\gradlew.bat installDebug -PrydeAppMode=CONNECTED` (select each emulator as needed).
 3. On emulator A create/sign into a driver account, create an offer using town/district areas,
    a future `YYYY-MM-DD HH:mm` departure, and 1..8 seats.
-4. On emulator B create/sign into a different rider account, tap **Refresh**, find the offer,
+4. On emulator B create/sign into a different rider account, find the offer,
    and request one seat. The driver's own offer is never requestable.
-5. On B open **Your requests**, cancel the pending request, and confirm it remains Cancelled after
-   refresh or relaunch. Re-request it while the journey is upcoming and still has capacity.
-6. On A tap **Refresh**, then accept or decline the pending request. On B tap **Refresh** and
-   confirm the same status. Accepted bookings can be cancelled from Trips, but neither accepted
+5. On B open **Your requests**, cancel the pending request, and confirm A updates automatically.
+   Re-request it while the journey is upcoming and still has capacity.
+6. On A accept or decline the incoming request without Refresh. Confirm B updates automatically.
+   Accepted bookings can be cancelled from Trips, but neither accepted
    nor declined requests can be withdrawn using the pending-request action or re-requested.
 7. After acceptance, open **Trips** on both A and B. Confirm each sees exactly one private
    confirmed trip with the genuine broad-area route, departure, `Status: CONFIRMED`, and the

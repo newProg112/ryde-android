@@ -1195,12 +1195,22 @@ class RydeAppNavigationUiTest {
             }
             lifecycleChanges.tryEmit(Unit)
         }
-        override fun observeJourneys(uid: String): Flow<List<ConnectedJourney>> = flow {
+        override fun observeSnapshot(uid: String): Flow<ConnectedJourneySnapshot> = flow {
             activeLifecycleObservers++
             lifecycleObserverUids += uid
             try {
-                emit(journeys)
-                lifecycleChanges.collect { emit(journeys) }
+                emit(ConnectedJourneySnapshot(
+                    journeys,
+                    requests.filter { it.riderUid == uid || it.driverUid == uid },
+                    trips.filter { it.riderUid == uid || it.driverUid == uid },
+                ))
+                lifecycleChanges.collect {
+                    emit(ConnectedJourneySnapshot(
+                        journeys,
+                        requests.filter { request -> request.riderUid == uid || request.driverUid == uid },
+                        trips.filter { trip -> trip.riderUid == uid || trip.driverUid == uid },
+                    ))
+                }
             } finally {
                 activeLifecycleObservers--
             }

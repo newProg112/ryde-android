@@ -21,6 +21,9 @@ internal fun connectedHomeJourneys(
     nowEpochMillis: Long,
 ): List<ConnectedHomeJourney> {
     val requests = snapshot.requests.filter { it.riderUid == viewerUid }.associateBy { it.journeyId }
+    val confirmedJourneyIds = snapshot.confirmedTrips
+        .filter { it.riderUid == viewerUid }
+        .mapTo(mutableSetOf()) { it.journeyId }
     return snapshot.journeys
         .filter { ConnectedJourneyLifecycle.discoverable(it, viewerUid, nowEpochMillis) }
         .sortedBy { it.departureEpochMillis }
@@ -29,7 +32,7 @@ internal fun connectedHomeJourneys(
             ConnectedHomeJourney(
                 journey = journey,
                 request = request,
-                canRequest = journey.seatsRemaining > 0 && request == null,
+                canRequest = journey.seatsRemaining > 0 && request == null && journey.id !in confirmedJourneyIds,
                 canRerequest = request != null && canRerequestConnectedSeat(
                     ConnectedRiderRequestItem(request, journey), nowEpochMillis,
                 ),

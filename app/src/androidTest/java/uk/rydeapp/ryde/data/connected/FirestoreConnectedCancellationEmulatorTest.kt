@@ -7,6 +7,7 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.Source
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -49,15 +50,35 @@ class FirestoreConnectedCancellationEmulatorTest {
             val (otherUid, otherDb, other) = account("Shared Rider Label")
             driver.create(driverUid, ConnectedJourneyDraft("Mansfield", "Nottingham", System.currentTimeMillis() + 86_400_000, 1))
             val journey = driver.load(driverUid).journeys.single { it.driverUid == driverUid }
+            val observedPending = async {
+                withTimeout(10_000) {
+                    driver.observeSnapshot(driverUid).first { snapshot ->
+                        snapshot.requests.any { it.journeyId == journey.id && it.riderUid == riderUid }
+                    }
+                }
+            }
             rider.requestSeat(riderUid, journey.id)
             val requestId = "${journey.id}_$riderUid"
+            assertEquals(requestId, observedPending.await().requests.single { it.id == requestId }.id)
             val driverRequest = driver.load(driverUid).requests.single { it.id == requestId }
             assertEquals("Shared Rider Label", driverRequest.riderDisplayName)
             assertEquals(driverRequest, rider.load(riderUid).requests.single { it.id == requestId })
             assertFalse(runCatching {
                 driverDb.collection("users").document(riderUid).get(Source.SERVER).await()
             }.isSuccess)
+            val observedAcceptance = async {
+                withTimeout(10_000) {
+                    rider.observeSnapshot(riderUid).first { snapshot ->
+                        snapshot.requests.any {
+                            it.id == requestId && it.status == ConnectedRequestStatus.ACCEPTED
+                        } && snapshot.confirmedTrips.any { it.id == requestId } &&
+                            snapshot.journeys.any { it.id == journey.id && it.seatsRemaining == 0 }
+                    }
+                }
+            }
             driver.decide(driverUid, requestId, true)
+            val acceptedSnapshot = observedAcceptance.await()
+            assertEquals(ConnectedTripStatus.CONFIRMED, acceptedSnapshot.confirmedTrips.single().status)
             val accepted = rider.load(riderUid).confirmedTrips.single()
             assertEquals("Driver Label", accepted.driverDisplayName)
             val driverCoordination = FirestoreConnectedCoordinationStore(driverDb)
@@ -94,7 +115,20 @@ class FirestoreConnectedCancellationEmulatorTest {
             assertTrue(denied is FirebaseFirestoreException)
             assertEquals(FirebaseFirestoreException.Code.PERMISSION_DENIED, (denied as FirebaseFirestoreException).code)
             assertFalse(runCatching { driver.cancelConfirmedSeat(driverUid, requestId) }.isSuccess)
+            val observedCancellation = async {
+                withTimeout(10_000) {
+                    driver.observeSnapshot(driverUid).first { snapshot ->
+                        snapshot.requests.any {
+                            it.id == requestId && it.status == ConnectedRequestStatus.CANCELLED_AFTER_ACCEPTANCE
+                        } && snapshot.confirmedTrips.any {
+                            it.id == requestId && it.status == ConnectedTripStatus.CANCELLED_BY_RIDER
+                        } && snapshot.journeys.any { it.id == journey.id && it.seatsRemaining == 1 }
+                    }
+                }
+            }
             rider.cancelConfirmedSeat(riderUid, requestId)
+            val driverCancellation = observedCancellation.await()
+            assertEquals(ConnectedTripStatus.CANCELLED_BY_RIDER, driverCancellation.confirmedTrips.single().status)
             val cancelled = rider.load(riderUid)
             val trip = cancelled.confirmedTrips.single()
             assertEquals(ConnectedTripStatus.CANCELLED_BY_RIDER, trip.status)

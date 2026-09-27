@@ -88,7 +88,7 @@ internal fun ConnectedReadyApp(
 ) {
     val snapshot by repository.journeyState.collectAsState()
     LaunchedEffect(session.accountId, repository) {
-        repository.synchronizeConnectedJourneyLifecycles()
+        repository.synchronizeConnectedJourneyState()
     }
     val resources = LocalResources.current
     // Include the owner in saved values: rememberSaveable inputs alone do not validate restored state.
@@ -368,8 +368,9 @@ internal fun ConnectedReadyApp(
             val current = repository.journeyState.value
             val request = current.requests.firstOrNull { it.id == requestId }
             val journey = current.journeys.firstOrNull { it.id == request?.journeyId }
+            val confirmedTrip = current.confirmedTrips.firstOrNull { it.acceptedRequestId == requestId }
             if (!refreshRequired && request != null && canDecideConnectedRequest(
-                    request, journey, session.accountId, accept, currentTimeMillis(),
+                    request, journey, session.accountId, accept, currentTimeMillis(), confirmedTrip,
                 )) runCommand {
                 driverResult(repository.decideConnectedRequest(requestId, accept),
                     if (accept) R.string.connected_accept_success else R.string.connected_decline_success)
