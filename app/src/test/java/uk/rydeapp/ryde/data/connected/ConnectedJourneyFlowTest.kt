@@ -79,6 +79,41 @@ class ConnectedJourneyFlowTest {
     }
 
     @Test
+    fun `resolved Via is stored as one broad route waypoint`() = runBlocking {
+        val store = MemoryJourneyStore()
+        val origin = GeographicCoordinate(53.1432, -1.1984)
+        val via = GeographicCoordinate(53.0380, -1.2034)
+        val destination = GeographicCoordinate(52.9548, -1.1581)
+
+        assertEquals(
+            ConnectedJourneyCommandResult.Success,
+            repository("driver", store).createConnectedJourneyFromPlaceSelection(
+                "Mansfield", "Nottingham", "2099-01-01 10:00", "1",
+                origin, destination, "Hucknall", via,
+            ),
+        )
+
+        assertEquals(
+            listOf(ConnectedRouteWaypoint("Hucknall", via)),
+            store.load("driver").journeys.single().routeWaypoints,
+        )
+    }
+
+    @Test
+    fun `unresolved Via fails safely and creates no journey`() = runBlocking {
+        val store = MemoryJourneyStore()
+        val result = repository("driver", store).createConnectedJourneyFromPlaceSelection(
+            "Mansfield", "Nottingham", "2099-01-01 10:00", "1",
+            GeographicCoordinate(53.1432, -1.1984),
+            GeographicCoordinate(52.9548, -1.1581),
+            "Unknown Via", null,
+        )
+
+        assertTrue(result is ConnectedJourneyCommandResult.InvalidInput)
+        assertTrue(store.load("driver").journeys.isEmpty())
+    }
+
+    @Test
     fun `automatic ambiguous resolution never silently creates a journey`() = runBlocking {
         val store = MemoryJourneyStore()
         val result = repository("driver", store, DevelopmentFixturePlaceResolver()).createConnectedJourney(
@@ -716,6 +751,7 @@ class ConnectedJourneyFlowTest {
                 draft.seats, draft.seats,
                 originCoordinate = draft.originCoordinate,
                 destinationCoordinate = draft.destinationCoordinate,
+                routeWaypoints = draft.routeWaypoints,
             )
             guards[id] = ConnectedJourneyAcceptanceGuard(uid, 0, null)
         }

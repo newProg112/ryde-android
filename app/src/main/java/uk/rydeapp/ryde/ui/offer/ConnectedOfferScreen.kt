@@ -32,7 +32,7 @@ internal fun ConnectedOfferScreen(
     actionsEnabled: Boolean,
     message: String?,
     createdVersion: Int,
-    onCreate: (String, String, String, String) -> Unit,
+    onCreate: (String, String, String, String, String) -> Unit,
     onRefresh: () -> Unit,
     onManageOffers: () -> Unit,
     modifier: Modifier = Modifier,
@@ -42,6 +42,7 @@ internal fun ConnectedOfferScreen(
 ) {
     var origin by rememberSaveable { mutableStateOf("") }
     var destination by rememberSaveable { mutableStateOf("") }
+    var via by rememberSaveable { mutableStateOf("") }
     var seats by rememberSaveable { mutableStateOf("1") }
     val default = remember { defaultConnectedDeparture() }
     var date by rememberSaveable { mutableLongStateOf(default.dateEpochDay) }
@@ -54,6 +55,7 @@ internal fun ConnectedOfferScreen(
         if (createdVersion != appliedVersion) {
             origin = ""
             destination = ""
+            via = ""
             seats = "1"
             validationMessage = null
             appliedVersion = createdVersion
@@ -76,6 +78,8 @@ internal fun ConnectedOfferScreen(
         if (!actionsEnabled) Text(stringResource(R.string.connected_trips_refresh_required), color = MaterialTheme.colorScheme.error)
         OutlinedTextField(origin, { origin = it; validationMessage = null }, enabled = !busy,
             label = { Text(stringResource(R.string.connected_offer_origin)) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(via, { via = it; validationMessage = null }, enabled = !busy,
+            label = { Text(stringResource(R.string.connected_offer_via)) }, singleLine = true, modifier = Modifier.fillMaxWidth())
         OutlinedTextField(destination, { destination = it; validationMessage = null }, enabled = !busy,
             label = { Text(stringResource(R.string.connected_offer_destination)) }, singleLine = true, modifier = Modifier.fillMaxWidth())
         Text(stringResource(R.string.connected_find_privacy), style = MaterialTheme.typography.bodySmall)
@@ -95,8 +99,13 @@ internal fun ConnectedOfferScreen(
             when (val validation = ConnectedJourneyValidator.offer(origin, destination, submission, seats)) {
                 is ValidationResult.Invalid -> validationMessage = validation.userMessage
                 is ValidationResult.Valid -> {
-                    validationMessage = null
-                    onCreate(origin, destination, submission, seats)
+                    val viaValidation = ConnectedJourneyValidator.routeWaypointArea(origin, destination, via)
+                    if (viaValidation is ValidationResult.Invalid) {
+                        validationMessage = viaValidation.userMessage
+                    } else {
+                        validationMessage = null
+                        onCreate(origin, destination, via, submission, seats)
+                    }
                 }
             }
         }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.connected_create_offer)) }
@@ -134,11 +143,11 @@ internal fun ConnectedOfferScreen(
             prompt = prompt,
             busy = busy,
             question = stringResource(
-                if (prompt.endpoint == BroadAreaEndpoint.FROM) {
-                    R.string.connected_offer_choose_origin
-                } else {
-                    R.string.connected_offer_choose_destination
-                },
+                    when (prompt.endpoint) {
+                        BroadAreaEndpoint.FROM -> R.string.connected_offer_choose_origin
+                        BroadAreaEndpoint.VIA -> R.string.connected_offer_choose_via
+                        BroadAreaEndpoint.TO -> R.string.connected_offer_choose_destination
+                    },
                 prompt.typedBroadArea,
             ),
             onPlaceSelected = onPlaceSelected,

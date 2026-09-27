@@ -4,7 +4,7 @@ import uk.rydeapp.ryde.domain.PlaceMatch
 import uk.rydeapp.ryde.domain.PlaceResolution
 import uk.rydeapp.ryde.domain.model.GeographicCoordinate
 
-internal enum class BroadAreaEndpoint { FROM, TO }
+internal enum class BroadAreaEndpoint { FROM, VIA, TO }
 
 internal data class BroadAreaPlaceSelectionPrompt(
     val endpoint: BroadAreaEndpoint,
@@ -12,14 +12,15 @@ internal data class BroadAreaPlaceSelectionPrompt(
     val candidates: List<PlaceMatch>,
 )
 
-/** Find may resolve either optional endpoint; Offer persists coordinates only when both are set. */
+/** Find resolves endpoints; Offer may additionally resolve one privacy-preserving Via area. */
 internal data class BroadAreaCoordinates(
     val from: GeographicCoordinate?,
     val to: GeographicCoordinate?,
+    val via: GeographicCoordinate? = null,
 )
 
 /**
- * Shared provider-neutral state for two broad-area fields. Ambiguous results remain incomplete
+ * Shared provider-neutral state for broad-area endpoint fields and Offer's optional Via. Ambiguous results remain incomplete
  * until the user chooses one of the supplied matches. Missing, blank and failed endpoints remain
  * safely coordinate-less.
  */
@@ -28,12 +29,16 @@ internal class BroadAreaPlaceSelection private constructor(
     private val toArea: String,
     private val from: EndpointSelection,
     private val to: EndpointSelection,
+    private val viaArea: String? = null,
+    private val via: EndpointSelection? = null,
 ) {
     val prompt: BroadAreaPlaceSelectionPrompt?
         get() = from.prompt(BroadAreaEndpoint.FROM, fromArea)
+            ?: via?.prompt(BroadAreaEndpoint.VIA, checkNotNull(viaArea))
             ?: to.prompt(BroadAreaEndpoint.TO, toArea)
 
     val isComplete: Boolean get() = prompt == null
+    val hasUnavailableVia: Boolean get() = via is EndpointSelection.Unavailable
 
     val coordinates: BroadAreaCoordinates
         get() {
@@ -41,19 +46,24 @@ internal class BroadAreaPlaceSelection private constructor(
             return BroadAreaCoordinates(
                 from = (from as? EndpointSelection.Selected)?.match?.coordinate,
                 to = (to as? EndpointSelection.Selected)?.match?.coordinate,
+                via = (via as? EndpointSelection.Selected)?.match?.coordinate,
             )
         }
 
     fun select(endpoint: BroadAreaEndpoint, match: PlaceMatch): BroadAreaPlaceSelection {
-        val current = if (endpoint == BroadAreaEndpoint.FROM) from else to
+        val current = when (endpoint) {
+            BroadAreaEndpoint.FROM -> from
+            BroadAreaEndpoint.VIA -> via
+            BroadAreaEndpoint.TO -> to
+        }
         require(current is EndpointSelection.Ambiguous && match in current.matches) {
             "The selected broad area must be one of the offered candidates."
         }
         val selected = EndpointSelection.Selected(match)
-        return if (endpoint == BroadAreaEndpoint.FROM) {
-            BroadAreaPlaceSelection(fromArea, toArea, selected, to)
-        } else {
-            BroadAreaPlaceSelection(fromArea, toArea, from, selected)
+        return when (endpoint) {
+            BroadAreaEndpoint.FROM -> BroadAreaPlaceSelection(fromArea, toArea, selected, to, viaArea, via)
+            BroadAreaEndpoint.VIA -> BroadAreaPlaceSelection(fromArea, toArea, from, to, viaArea, selected)
+            BroadAreaEndpoint.TO -> BroadAreaPlaceSelection(fromArea, toArea, from, selected, viaArea, via)
         }
     }
 
@@ -81,6 +91,22 @@ internal class BroadAreaPlaceSelection private constructor(
             toArea = toArea,
             from = from.toEndpointSelection(),
             to = to.toEndpointSelection(),
+        )
+
+        fun forOffer(
+            fromArea: String,
+            viaArea: String,
+            toArea: String,
+            from: PlaceResolution,
+            via: PlaceResolution,
+            to: PlaceResolution,
+        ) = BroadAreaPlaceSelection(
+            fromArea = fromArea,
+            toArea = toArea,
+            from = from.toEndpointSelection(),
+            to = to.toEndpointSelection(),
+            viaArea = viaArea.takeIf(String::isNotBlank),
+            via = via.takeIf { viaArea.isNotBlank() }?.toEndpointSelection(),
         )
 
         private fun PlaceResolution.toEndpointSelection(): EndpointSelection = when (this) {

@@ -103,6 +103,13 @@ const journeyWithCoordinates = (driverUid, seats = 2) => ({
   originCoordinate: coordinate(53.1432, -1.1984),
   destinationCoordinate: coordinate(52.9548, -1.1581),
 });
+const journeyWithRoute = (driverUid, seats = 2) => ({
+  ...journeyWithCoordinates(driverUid, seats),
+  routeWaypoints: [{
+    area: "Hucknall",
+    coordinate: coordinate(53.0380, -1.2034),
+  }],
+});
 const request = (journeyId, driverUid, riderUid, status = "PENDING", riderDisplayName = displayNameFor(riderUid)) => ({
   journeyId, driverUid, riderUid, status, riderDisplayName,
 });
@@ -856,6 +863,60 @@ test("journeys accept validated coordinate pairs while legacy and missing-coordi
   assert.deepEqual(closed.destinationCoordinate, coordinate(52.9548, -1.1581));
 });
 
+test("journeys accept one immutable broad Via waypoint and reject malformed route metadata", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  const rider = environment.authenticatedContext("rider").firestore();
+  await assertSucceeds(createJourney(
+    driver,
+    "routed",
+    "driver",
+    2,
+    guard("driver"),
+    journeyWithRoute("driver"),
+  ));
+
+  const invalidRoutes = [
+    { routeWaypoints: [] },
+    { routeWaypoints: [{ area: "Hucknall" }] },
+    { routeWaypoints: [{ area: "12 Private Road", coordinate: coordinate(53.0380, -1.2034) }] },
+    { routeWaypoints: [{ area: "Mansfield", coordinate: coordinate(53.0380, -1.2034) }] },
+    { routeWaypoints: [{ area: "Hucknall", coordinate: coordinate(91, 0) }] },
+    { routeWaypoints: [
+      { area: "Hucknall", coordinate: coordinate(53.0380, -1.2034) },
+      { area: "Arnold", coordinate: coordinate(53.0058, -1.1278) },
+    ] },
+    { routeWaypoints: [{
+      area: "Hucknall",
+      coordinate: coordinate(53.0380, -1.2034),
+      exactAddress: "1 Private Road",
+    }] },
+  ];
+  for (const [index, routeFields] of invalidRoutes.entries()) {
+    await assertFails(createJourney(
+      driver,
+      `invalid-route-${index}`,
+      "driver",
+      2,
+      guard("driver"),
+      { ...journeyWithCoordinates("driver"), ...routeFields },
+    ));
+  }
+  await assertFails(createJourney(
+    driver,
+    "route-without-endpoints",
+    "driver",
+    2,
+    guard("driver"),
+    { ...journey("driver"), routeWaypoints: journeyWithRoute("driver").routeWaypoints },
+  ));
+  await assertFails(updateDoc(doc(rider, "journeys/routed"), {
+    routeWaypoints: [{ area: "Arnold", coordinate: coordinate(53.0058, -1.1278) }],
+  }));
+  await assertFails(updateDoc(doc(driver, "journeys/routed"), {
+    routeWaypoints: [{ area: "Arnold", coordinate: coordinate(53.0058, -1.1278) }],
+  }));
+});
+
 test("requests enforce real participants deterministic ownership and self-request denial", async () => {
   const driver = environment.authenticatedContext("driver").firestore();
   const rider = environment.authenticatedContext("rider").firestore();
@@ -1113,7 +1174,7 @@ test("only the driver may decide and acceptance requires an atomic one-seat decr
   assert.equal((await getDoc(doc(driver, "journeys/j1"))).data().seatsRemaining, 1);
 });
 
-test("driver can accept a request for a coordinate-bearing journey", async () => {
+test("driver can accept a request for a route-bearing journey", async () => {
   const driver = environment.authenticatedContext("driver").firestore();
   const rider = environment.authenticatedContext("rider").firestore();
   await assertSucceeds(createJourney(
@@ -1122,7 +1183,7 @@ test("driver can accept a request for a coordinate-bearing journey", async () =>
     "driver",
     3,
     guard("driver"),
-    journeyWithCoordinates("driver", 3),
+    journeyWithRoute("driver", 3),
   ));
   await assertSucceeds(requestSeatLikeGateway(rider, "coordinate-acceptance", "rider"));
 

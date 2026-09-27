@@ -199,10 +199,29 @@ class ConnectedJourneyLifecycleTest {
                 origin, destination,
             ),
         )
+        val via = ConnectedRouteWaypoint("Hucknall", GeographicCoordinate(53.0380, -1.2034))
+        val routeData = FirestoreJourneyMapper.journeyData(
+            "driver",
+            ConnectedJourneyDraft(
+                "Mansfield", "Nottingham", journey.departureEpochMillis, 2,
+                origin, destination, listOf(via),
+            ),
+        )
 
         assertNull(FirestoreJourneyMapper.journey("legacy", legacy)?.originCoordinate)
         assertEquals(origin, FirestoreJourneyMapper.journey("located", coordinateData)?.originCoordinate)
         assertEquals(destination, FirestoreJourneyMapper.journey("located", coordinateData)?.destinationCoordinate)
+        assertEquals(listOf(via), FirestoreJourneyMapper.journey("routed", routeData)?.routeWaypoints)
+        assertNull(FirestoreJourneyMapper.journey("route-without-endpoints", legacy + ("routeWaypoints" to routeData.getValue("routeWaypoints"))))
+        assertNull(FirestoreJourneyMapper.journey("empty-route", coordinateData + ("routeWaypoints" to emptyList<Any>())))
+        assertNull(FirestoreJourneyMapper.journey(
+            "private-route",
+            coordinateData + ("routeWaypoints" to listOf(mapOf(
+                "area" to "Hucknall",
+                "coordinate" to mapOf("latitude" to 53.0380, "longitude" to -1.2034),
+                "exactAddress" to "1 Private Road",
+            ))),
+        ))
         assertNull(FirestoreJourneyMapper.journey("partial", coordinateData - "destinationCoordinate"))
         assertNull(FirestoreJourneyMapper.journey(
             "invalid",

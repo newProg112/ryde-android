@@ -32,6 +32,16 @@ service cloud.firestore {
         && value.longitude >= -180 && value.longitude <= 180;
     }
 
+    function validRouteWaypoint(value, originArea, destinationArea) {
+      return value is map
+        && value.keys().hasOnly(['area', 'coordinate'])
+        && value.keys().hasAll(['area', 'coordinate'])
+        && validBroadArea(value.area)
+        && value.area != originArea
+        && value.area != destinationArea
+        && validCoordinate(value.coordinate);
+    }
+
     function signedIn() {
       return request.auth != null;
     }
@@ -72,7 +82,7 @@ service cloud.firestore {
       return data.keys().hasOnly([
           'driverUid', 'originArea', 'destinationArea', 'departureAt',
           'seatCapacity', 'seatsRemaining', 'status', 'cancelledAt', 'completedAt',
-          'originCoordinate', 'destinationCoordinate'
+          'originCoordinate', 'destinationCoordinate', 'routeWaypoints'
         ])
         && data.driverUid is string
         && validBroadArea(data.originArea)
@@ -82,6 +92,11 @@ service cloud.firestore {
           || ('originCoordinate' in data && 'destinationCoordinate' in data
             && validCoordinate(data.originCoordinate)
             && validCoordinate(data.destinationCoordinate)))
+        && (!('routeWaypoints' in data)
+          || ('originCoordinate' in data && 'destinationCoordinate' in data
+            && data.routeWaypoints is list
+            && data.routeWaypoints.size() == 1
+            && validRouteWaypoint(data.routeWaypoints[0], data.originArea, data.destinationArea)))
         && data.departureAt is timestamp
         && data.seatCapacity is int
         && data.seatCapacity >= 1 && data.seatCapacity <= 8
@@ -93,6 +108,22 @@ service cloud.firestore {
               && !('completedAt' in data))
           || (data.status == 'COMPLETED' && data.completedAt is timestamp
               && !('cancelledAt' in data)));
+    }
+
+    // Journey creation performs the full schema, coordinate and route validation above.
+    // Every lifecycle update has an exact affected-key allowlist, so immutable route fields
+    // cannot change later. Rechecking their nested shape inside multi-document operations can
+    // exceed Firestore's expression budget; this validates only lifecycle authority fields.
+    function validJourneyLifecycleCore(data) {
+      return data.driverUid is string
+        && data.originArea is string
+        && data.destinationArea is string
+        && data.departureAt is timestamp
+        && data.seatCapacity is int
+        && data.seatCapacity >= 1 && data.seatCapacity <= 8
+        && data.seatsRemaining is int
+        && data.seatsRemaining >= 0 && data.seatsRemaining <= data.seatCapacity
+        && (data.status == 'OPEN' || data.status == 'CANCELLED' || data.status == 'COMPLETED');
     }
 
     function validSeatRequest(data) {
@@ -170,7 +201,7 @@ service cloud.firestore {
       let journey = get(journeyPath(trip.journeyId)).data;
       return validConfirmedTripIdentity(tripId, trip)
         && trip.status == 'CONFIRMED'
-        && validJourney(journey)
+        && validJourneyLifecycleCore(journey)
         && journey.status == 'OPEN'
         && journey.driverUid == trip.driverUid
         && journey.originArea == trip.originArea
@@ -189,7 +220,7 @@ service cloud.firestore {
     function currentGuardMatchesJourney(journeyId, driverUid) {
       let journey = get(journeyPath(journeyId)).data;
       let guard = get(acceptanceGuardPath(journeyId)).data;
-      return validJourney(journey)
+      return validJourneyLifecycleCore(journey)
         && journey.status == 'OPEN'
         && validAcceptanceGuard(guard)
         && journey.driverUid == driverUid
@@ -309,7 +340,7 @@ service cloud.firestore {
         && validSeatRequest(requestBefore)
         && requestBefore.status == 'ACCEPTED' && requestAfter.status == 'CANCELLED_AFTER_ACCEPTANCE'
         && requestAfter.diff(requestBefore).affectedKeys().hasOnly(['status'])
-        && validJourney(journeyBefore)
+        && validJourneyLifecycleCore(journeyBefore)
         && journeyBefore.status == 'OPEN' && journeyAfter.status == 'OPEN'
         && journeyAfter.seatCapacity is int && journeyAfter.seatsRemaining is int
         && journeyBefore.departureAt > request.time

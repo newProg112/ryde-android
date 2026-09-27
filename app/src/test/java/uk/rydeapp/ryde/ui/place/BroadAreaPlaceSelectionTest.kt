@@ -108,4 +108,37 @@ class BroadAreaPlaceSelectionTest {
         assertNull(selection.coordinates.from)
         assertEquals(nottingham.coordinate, selection.coordinates.to)
     }
+
+    @Test
+    fun `offer Via ambiguity requires explicit broad area selection`() {
+        val selection = BroadAreaPlaceSelection.forOffer(
+            fromArea = "Mansfield",
+            viaArea = "Richmond",
+            toArea = "Nottingham",
+            from = PlaceResolution.Unique(mansfield),
+            via = PlaceResolution.Multiple(listOf(londonRichmond, yorkshireRichmond)),
+            to = PlaceResolution.Unique(nottingham),
+        )
+
+        assertEquals(BroadAreaEndpoint.VIA, selection.prompt?.endpoint)
+        val selected = selection.select(BroadAreaEndpoint.VIA, yorkshireRichmond)
+        assertTrue(selected.isComplete)
+        assertEquals(yorkshireRichmond.coordinate, selected.coordinates.via)
+    }
+
+    @Test
+    fun `unresolved optional Via is exposed without inventing a coordinate`() {
+        val selection = BroadAreaPlaceSelection.forOffer(
+            fromArea = "Mansfield",
+            viaArea = "Unknown",
+            toArea = "Nottingham",
+            from = PlaceResolution.Unique(mansfield),
+            via = PlaceResolution.NoMatches,
+            to = PlaceResolution.Unique(nottingham),
+        )
+
+        assertTrue(selection.isComplete)
+        assertTrue(selection.hasUnavailableVia)
+        assertNull(selection.coordinates.via)
+    }
 }

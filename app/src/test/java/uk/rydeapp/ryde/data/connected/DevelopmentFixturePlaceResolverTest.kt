@@ -21,6 +21,10 @@ class DevelopmentFixturePlaceResolverTest {
             PlaceResolution.Unique(PlaceMatch("Nottingham", GeographicCoordinate(52.9548, -1.1581))),
             resolver.resolve("Nottingham"),
         )
+        assertEquals(
+            PlaceResolution.Unique(PlaceMatch("Hucknall", GeographicCoordinate(53.0380, -1.2034))),
+            resolver.resolve("Hucknall"),
+        )
     }
 
     @Test

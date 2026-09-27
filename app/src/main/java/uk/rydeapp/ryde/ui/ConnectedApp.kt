@@ -34,6 +34,7 @@ import uk.rydeapp.ryde.data.connected.ConnectedJourneyCommandResult
 import uk.rydeapp.ryde.data.connected.ConnectedJourneyLifecycle
 import uk.rydeapp.ryde.data.connected.ConnectedRydeRepository
 import uk.rydeapp.ryde.domain.PlaceMatch
+import uk.rydeapp.ryde.domain.PlaceResolution
 import uk.rydeapp.ryde.domain.model.ProfileContent
 import uk.rydeapp.ryde.ui.account.ConnectedJourneyScreen
 import uk.rydeapp.ryde.ui.account.ConnectedJourneySection
@@ -68,6 +69,7 @@ private data class ConnectedNavigation(
 private data class PendingConnectedOffer(
     val origin: String,
     val destination: String,
+    val via: String,
     val departure: String,
     val seats: String,
     val places: BroadAreaPlaceSelection,
@@ -277,6 +279,8 @@ internal fun ConnectedReadyApp(
             pending.seats,
             completePair?.from,
             completePair?.to,
+            pending.via,
+            coordinates.via,
         )
         if (result == ConnectedJourneyCommandResult.Success) {
             createdVersion++
@@ -309,19 +313,22 @@ internal fun ConnectedReadyApp(
         }
     }
 
-    val createOffer: (String, String, String, String) -> Unit = { origin, destination, departure, seats ->
+    val createOffer: (String, String, String, String, String) -> Unit = { origin, destination, via, departure, seats ->
         if (!busy) {
             if (!refreshRequired) launchOffer {
                 PendingConnectedOffer(
                     origin = origin,
                     destination = destination,
+                    via = via,
                     departure = departure,
                     seats = seats,
-                    places = BroadAreaPlaceSelection.from(
-                        origin,
-                        destination,
-                        repository.resolveConnectedPlace(origin),
-                        repository.resolveConnectedPlace(destination),
+                    places = BroadAreaPlaceSelection.forOffer(
+                        fromArea = origin,
+                        viaArea = via,
+                        toArea = destination,
+                        from = repository.resolveConnectedPlace(origin),
+                        via = if (via.isBlank()) PlaceResolution.NoMatches else repository.resolveConnectedPlace(via),
+                        to = repository.resolveConnectedPlace(destination),
                     ),
                 )
             } else message = resources.getString(R.string.connected_trips_refresh_required)

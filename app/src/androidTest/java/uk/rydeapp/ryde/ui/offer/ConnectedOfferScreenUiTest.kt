@@ -19,13 +19,15 @@ class ConnectedOfferScreenUiTest {
     @Test fun formRestoresDraftAndUsesDateAndTimePickersWithoutSubmitting() {
         val restoration = StateRestorationTester(compose)
         restoration.setContent { RydeTheme {
-            ConnectedOfferScreen(false, true, null, 0, { _, _, _, _ -> error("No submission") }, {}, {})
+            ConnectedOfferScreen(false, true, null, 0, { _, _, _, _, _ -> error("No submission") }, {}, {})
         } }
         compose.onNodeWithText("From town or district").performTextInput("York")
         compose.onNodeWithText("To town or district").performTextInput("Leeds")
+        compose.onNodeWithText("Via broad area (optional)").performTextInput("Wakefield")
         restoration.emulateSavedInstanceStateRestore()
         compose.onNodeWithText("From town or district").assert(hasText("York"))
         compose.onNodeWithText("To town or district").assert(hasText("Leeds"))
+        compose.onNodeWithText("Via broad area (optional)").assert(hasText("Wakefield"))
         compose.onNodeWithText("Choose date").performScrollTo().performClick()
         compose.onNodeWithText("OK").performClick()
         compose.onNodeWithText("Choose time").performClick()
@@ -37,7 +39,7 @@ class ConnectedOfferScreenUiTest {
         val enabled = mutableStateOf(true)
         var calls = 0
         compose.setContent { RydeTheme {
-            ConnectedOfferScreen(false, enabled.value, null, 0, { _, _, _, _ -> calls++ }, {}, {})
+            ConnectedOfferScreen(false, enabled.value, null, 0, { _, _, _, _, _ -> calls++ }, {}, {})
         } }
         compose.onNodeWithText("From town or district").performTextInput("York")
         compose.onNodeWithText("To town or district").performTextInput("Leeds")
@@ -47,6 +49,23 @@ class ConnectedOfferScreenUiTest {
         compose.runOnIdle { assertEquals(0, calls); enabled.value = false }
         compose.onNodeWithText("Offer journey").assertIsNotEnabled()
         compose.onNodeWithText("Refresh").performScrollTo().assertIsEnabled()
+    }
+
+    @Test fun optionalViaIsSubmittedBetweenTheExistingEndpoints() {
+        var submitted: List<String>? = null
+        compose.setContent { RydeTheme {
+            ConnectedOfferScreen(
+                false, true, null, 0,
+                { origin, destination, via, _, _ -> submitted = listOf(origin, via, destination) },
+                {}, {},
+            )
+        } }
+        compose.onNodeWithText("From town or district").performTextInput("Mansfield")
+        compose.onNodeWithText("Via broad area (optional)").performTextInput("Hucknall")
+        compose.onNodeWithText("To town or district").performTextInput("Nottingham")
+        compose.onNodeWithText("Offer journey").performScrollTo().performClick()
+
+        compose.runOnIdle { assertEquals(listOf("Mansfield", "Hucknall", "Nottingham"), submitted) }
     }
 
     @Test fun ambiguousBroadAreaRequiresAndReportsExplicitCandidateSelection() {
@@ -59,7 +78,7 @@ class ConnectedOfferScreenUiTest {
                 actionsEnabled = true,
                 message = null,
                 createdVersion = 0,
-                onCreate = { _, _, _, _ -> error("Selection must happen first") },
+                onCreate = { _, _, _, _, _ -> error("Selection must happen first") },
                 onRefresh = {},
                 onManageOffers = {},
                 placeSelectionPrompt = BroadAreaPlaceSelectionPrompt(

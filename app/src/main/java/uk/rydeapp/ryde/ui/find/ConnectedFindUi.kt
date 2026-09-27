@@ -5,9 +5,11 @@ import java.time.LocalDate
 import java.time.ZoneId
 import kotlin.math.roundToInt
 import uk.rydeapp.ryde.domain.BroadAreaJourneyMatchPolicy
+import uk.rydeapp.ryde.domain.BroadAreaRouteOverlapPolicy
 import uk.rydeapp.ryde.domain.GeographicJourneyMatch
 import uk.rydeapp.ryde.domain.GeographicJourneyMatchScore
 import uk.rydeapp.ryde.domain.JourneyGeographicEndpoints
+import uk.rydeapp.ryde.domain.JourneyGeographicRoute
 import uk.rydeapp.ryde.domain.combinedEndpointScore
 import uk.rydeapp.ryde.domain.model.GeographicCoordinate
 import uk.rydeapp.ryde.ui.home.ConnectedHomeJourney
@@ -80,6 +82,7 @@ internal fun matchConnectedFindJourneys(
     criteria: ConnectedFindCriteria,
     zoneId: ZoneId = ZoneId.systemDefault(),
     policy: BroadAreaJourneyMatchPolicy = BroadAreaJourneyMatchPolicy(),
+    routePolicy: BroadAreaRouteOverlapPolicy = BroadAreaRouteOverlapPolicy(),
 ): List<ConnectedFindJourneyResult> {
     val riderEndpoints = geographicEndpoints(
         criteria.originCoordinate,
@@ -87,13 +90,24 @@ internal fun matchConnectedFindJourneys(
     )
     return journeys.mapNotNull { item ->
         if (!dateMatches(item, criteria, zoneId)) return@mapNotNull null
-        val geographicMatch = policy.assess(
-            rider = riderEndpoints,
-            offeredJourney = geographicEndpoints(
-                item.journey.originCoordinate,
-                item.journey.destinationCoordinate,
-            ),
+        val offeredEndpoints = geographicEndpoints(
+            item.journey.originCoordinate,
+            item.journey.destinationCoordinate,
         )
+        val geographicMatch = if (item.journey.routeWaypoints.isNotEmpty()) {
+            routePolicy.assess(
+                rider = riderEndpoints,
+                offeredRoute = offeredEndpoints?.let { endpoints ->
+                    JourneyGeographicRoute(
+                        listOf(endpoints.origin) +
+                            item.journey.routeWaypoints.map { it.coordinate } +
+                            endpoints.destination,
+                    )
+                },
+            )
+        } else {
+            policy.assess(rider = riderEndpoints, offeredJourney = offeredEndpoints)
+        }
         val routeMatches = when (geographicMatch) {
             is GeographicJourneyMatch.Compatible -> true
             is GeographicJourneyMatch.Incompatible -> false

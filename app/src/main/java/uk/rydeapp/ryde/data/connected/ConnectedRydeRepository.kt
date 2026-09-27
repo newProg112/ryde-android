@@ -150,6 +150,8 @@ class ConnectedRydeRepository(
         seats: String,
         originCoordinate: GeographicCoordinate? = null,
         destinationCoordinate: GeographicCoordinate? = null,
+        viaArea: String = "",
+        viaCoordinate: GeographicCoordinate? = null,
     ): ConnectedJourneyCommandResult {
         val draft = when (val validated = ConnectedJourneyValidator.offer(originArea, destinationArea, departure, seats)) {
             is ValidationResult.Invalid -> return ConnectedJourneyCommandResult.InvalidInput(validated.userMessage)
@@ -158,9 +160,21 @@ class ConnectedRydeRepository(
         if ((originCoordinate == null) != (destinationCoordinate == null)) {
             return ConnectedJourneyCommandResult.InvalidInput("Both journey coordinates are required together.")
         }
+        val waypoint = when (val validated = ConnectedJourneyValidator.routeWaypoint(
+            originArea, destinationArea, viaArea, viaCoordinate,
+        )) {
+            is ValidationResult.Invalid -> return ConnectedJourneyCommandResult.InvalidInput(validated.userMessage)
+            is ValidationResult.Valid -> validated.value
+        }
+        if (waypoint != null && originCoordinate == null) {
+            return ConnectedJourneyCommandResult.InvalidInput(
+                "Ryde needs broad-area coordinates for the whole route when Via is used.",
+            )
+        }
         val coordinateDraft = draft.copy(
             originCoordinate = originCoordinate,
             destinationCoordinate = destinationCoordinate,
+            routeWaypoints = listOfNotNull(waypoint),
         )
         return createConnectedJourney(coordinateDraft)
     }

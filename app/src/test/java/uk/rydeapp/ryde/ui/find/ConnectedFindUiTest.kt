@@ -10,6 +10,7 @@ import uk.rydeapp.ryde.data.connected.ConnectedJourney
 import uk.rydeapp.ryde.data.connected.ConnectedJourneySnapshot
 import uk.rydeapp.ryde.data.connected.ConnectedJourneyStatus
 import uk.rydeapp.ryde.data.connected.ConnectedRequestStatus
+import uk.rydeapp.ryde.data.connected.ConnectedRouteWaypoint
 import uk.rydeapp.ryde.data.connected.ConnectedSeatRequest
 import uk.rydeapp.ryde.domain.BroadAreaJourneyMatchPolicy
 import uk.rydeapp.ryde.domain.GeographicDistance
@@ -328,6 +329,61 @@ class ConnectedFindUiTest {
         )
 
         assertTrue(matchConnectedFindJourneys(listOf(located), criteria).isEmpty())
+    }
+
+    @Test fun riderCanMatchFromDeclaredViaToDriverDestination() {
+        val origin = GeographicCoordinate(53.1432, -1.1984)
+        val via = GeographicCoordinate(53.0380, -1.2034)
+        val destination = GeographicCoordinate(52.9548, -1.1581)
+        val routed = first.copy(journey = first.journey.copy(
+            originCoordinate = origin,
+            destinationCoordinate = destination,
+            routeWaypoints = listOf(ConnectedRouteWaypoint("Hucknall", via)),
+        ))
+        val criteria = ConnectedFindCriteria(
+            origin = "Hucknall",
+            destination = "Nottingham",
+            originCoordinate = via,
+            destinationCoordinate = destination,
+        )
+
+        assertEquals("first", matchConnectedFindJourneys(listOf(routed), criteria).single().item.journey.id)
+    }
+
+    @Test fun riderCannotMatchDeclaredRouteInReverse() {
+        val origin = GeographicCoordinate(53.1432, -1.1984)
+        val via = GeographicCoordinate(53.0380, -1.2034)
+        val destination = GeographicCoordinate(52.9548, -1.1581)
+        val routed = first.copy(journey = first.journey.copy(
+            originCoordinate = origin,
+            destinationCoordinate = destination,
+            routeWaypoints = listOf(ConnectedRouteWaypoint("Hucknall", via)),
+        ))
+        val criteria = ConnectedFindCriteria(
+            origin = "Nottingham",
+            destination = "Hucknall",
+            originCoordinate = destination,
+            destinationCoordinate = via,
+        )
+
+        assertTrue(matchConnectedFindJourneys(listOf(routed), criteria).isEmpty())
+    }
+
+    @Test fun journeyWithoutViaRetainsEndpointMatcher() {
+        val origin = GeographicCoordinate(53.1432, -1.1984)
+        val destination = GeographicCoordinate(52.9548, -1.1581)
+        val noVia = first.copy(journey = first.journey.copy(
+            originCoordinate = origin,
+            destinationCoordinate = destination,
+        ))
+        val criteria = ConnectedFindCriteria(
+            origin = "Nearby Mansfield",
+            destination = "Nearby Nottingham",
+            originCoordinate = GeographicCoordinate(53.18, -1.20),
+            destinationCoordinate = GeographicCoordinate(52.99, -1.15),
+        )
+
+        assertTrue(matchConnectedFindJourneys(listOf(noVia), criteria).single().geographicMatch is GeographicJourneyMatch.Compatible)
     }
 
     @Test fun missingCoordinatesFallBackToTextWithoutWideningTheSearch() {

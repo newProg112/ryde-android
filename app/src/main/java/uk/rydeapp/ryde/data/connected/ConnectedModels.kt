@@ -81,6 +81,12 @@ enum class ConnectedTripStatus { CONFIRMED, CANCELLED_BY_RIDER }
 
 enum class ConnectedJourneyStatus { OPEN, CANCELLED, COMPLETED }
 
+/** A privacy-preserving broad area declared between a journey's existing endpoints. */
+data class ConnectedRouteWaypoint(
+    val area: String,
+    val coordinate: GeographicCoordinate,
+)
+
 data class ConnectedJourney(
     val id: String,
     val driverUid: String,
@@ -94,10 +100,17 @@ data class ConnectedJourney(
     val completedAtEpochMillis: Long? = null,
     val originCoordinate: GeographicCoordinate? = null,
     val destinationCoordinate: GeographicCoordinate? = null,
+    val routeWaypoints: List<ConnectedRouteWaypoint> = emptyList(),
 ) {
     init {
         require((originCoordinate == null) == (destinationCoordinate == null)) {
             "Journey coordinates must contain both origin and destination or neither."
+        }
+        require(routeWaypoints.size <= ConnectedJourneyValidator.MAX_ROUTE_WAYPOINTS) {
+            "Journey route contains too many broad-area waypoints."
+        }
+        require(routeWaypoints.isEmpty() || originCoordinate != null) {
+            "Journey route waypoints require both endpoint coordinates."
         }
     }
 }
@@ -147,11 +160,14 @@ data class ConnectedJourneyDraft(
     val seats: Int,
     val originCoordinate: GeographicCoordinate? = null,
     val destinationCoordinate: GeographicCoordinate? = null,
+    val routeWaypoints: List<ConnectedRouteWaypoint> = emptyList(),
 ) {
     init {
         require((originCoordinate == null) == (destinationCoordinate == null)) {
             "Journey coordinates must contain both origin and destination or neither."
         }
+        require(routeWaypoints.size <= ConnectedJourneyValidator.MAX_ROUTE_WAYPOINTS)
+        require(routeWaypoints.isEmpty() || originCoordinate != null)
     }
 }
 
@@ -162,6 +178,7 @@ sealed interface ConnectedJourneyCommandResult {
 }
 
 object ConnectedJourneyValidator {
+    const val MAX_ROUTE_WAYPOINTS = 1
     private val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
 
     fun offer(
@@ -195,12 +212,46 @@ object ConnectedJourneyValidator {
 
     fun isBroadArea(value: String): Boolean = value.isNotBlank() && value.length <= 60 &&
         value.none { it.isDigit() || it == ',' || it.isISOControl() }
+
+    fun routeWaypoint(
+        originArea: String,
+        destinationArea: String,
+        viaArea: String,
+        coordinate: GeographicCoordinate?,
+    ): ValidationResult<ConnectedRouteWaypoint?> {
+        val via = when (val validated = routeWaypointArea(originArea, destinationArea, viaArea)) {
+            is ValidationResult.Invalid -> return validated
+            is ValidationResult.Valid -> validated.value
+        } ?: return ValidationResult.Valid(null)
+        if (coordinate == null) {
+            return ValidationResult.Invalid("Ryde couldn't resolve that Via broad area. Choose another broad area.")
+        }
+        return ValidationResult.Valid(ConnectedRouteWaypoint(via, coordinate))
+    }
+
+    fun routeWaypointArea(
+        originArea: String,
+        destinationArea: String,
+        viaArea: String,
+    ): ValidationResult<String?> {
+        val via = viaArea.trim()
+        if (via.isEmpty()) return ValidationResult.Valid(null)
+        if (!isBroadArea(via)) {
+            return ValidationResult.Invalid("Use a broad Via town or district only, without digits or commas.")
+        }
+        if (via.equals(originArea.trim(), true) || via.equals(destinationArea.trim(), true)) {
+            return ValidationResult.Invalid("Via must be different from the origin and destination.")
+        }
+        return ValidationResult.Valid(via)
+    }
 }
 
 object FirestoreJourneyMapper {
     private val legacyJourneyFields = setOf("driverUid", "originArea", "destinationArea", "departureAt", "seatCapacity", "seatsRemaining", "status")
     private val coordinateJourneyFields = legacyJourneyFields + setOf("originCoordinate", "destinationCoordinate")
+    private val routeJourneyFields = coordinateJourneyFields + "routeWaypoints"
     private val coordinateFields = setOf("latitude", "longitude")
+    private val routeWaypointFields = setOf("area", "coordinate")
     private val legacyRequestFields = setOf("journeyId", "driverUid", "riderUid", "status")
     private val requestFields = legacyRequestFields + "riderDisplayName"
     private val acceptanceGuardFields = setOf("driverUid", "acceptanceCount", "lastAcceptedRequestId")
@@ -228,6 +279,9 @@ object FirestoreJourneyMapper {
         ))
         draft.originCoordinate?.let { put("originCoordinate", coordinateData(it)) }
         draft.destinationCoordinate?.let { put("destinationCoordinate", coordinateData(it)) }
+        if (draft.routeWaypoints.isNotEmpty()) {
+            put("routeWaypoints", draft.routeWaypoints.map(::routeWaypointData))
+        }
     }
 
     fun requestData(
@@ -267,6 +321,8 @@ object FirestoreJourneyMapper {
     fun journey(id: String, data: Map<String, Any?>): ConnectedJourney? {
         val status = runCatching { ConnectedJourneyStatus.valueOf(data["status"] as? String ?: return null) }.getOrNull() ?: return null
         val baseFields = when {
+            "routeWaypoints" in data && "originCoordinate" in data && "destinationCoordinate" in data -> routeJourneyFields
+            "routeWaypoints" in data -> return null
             "originCoordinate" in data && "destinationCoordinate" in data -> coordinateJourneyFields
             "originCoordinate" !in data && "destinationCoordinate" !in data -> legacyJourneyFields
             else -> return null
@@ -287,12 +343,18 @@ object FirestoreJourneyMapper {
         val remaining = (data["seatsRemaining"] as? Number)?.toInt() ?: return null
         val originCoordinate = data["originCoordinate"]?.let(::coordinate) ?: if ("originCoordinate" in data) return null else null
         val destinationCoordinate = data["destinationCoordinate"]?.let(::coordinate) ?: if ("destinationCoordinate" in data) return null else null
+        val routeWaypoints = if ("routeWaypoints" in data) {
+            val values = data["routeWaypoints"] as? List<*> ?: return null
+            if (values.size !in 1..ConnectedJourneyValidator.MAX_ROUTE_WAYPOINTS) return null
+            values.map { routeWaypoint(it) ?: return null }
+        } else emptyList()
         return ConnectedJourney(
             id, data["driverUid"] as? String ?: return null,
             data["originArea"] as? String ?: return null,
             data["destinationArea"] as? String ?: return null,
             (data["departureAt"] as? Timestamp)?.toDate()?.time ?: return null,
             capacity, remaining, status, cancelledAt, completedAt, originCoordinate, destinationCoordinate,
+            routeWaypoints,
         ).takeIf { isValidJourney(it) }
     }
 
@@ -366,7 +428,12 @@ object FirestoreJourneyMapper {
         journey.driverUid.isNotBlank() && ConnectedJourneyValidator.isBroadArea(journey.originArea) &&
             ConnectedJourneyValidator.isBroadArea(journey.destinationArea) &&
             !journey.originArea.equals(journey.destinationArea, true) &&
-            journey.seatCapacity in 1..8 && journey.seatsRemaining in 0..journey.seatCapacity
+            journey.seatCapacity in 1..8 && journey.seatsRemaining in 0..journey.seatCapacity &&
+            journey.routeWaypoints.all {
+                ConnectedJourneyValidator.isBroadArea(it.area) &&
+                    !it.area.equals(journey.originArea, true) &&
+                    !it.area.equals(journey.destinationArea, true)
+            }
 
     private fun isSafeDisplayName(value: String): Boolean =
         value.isNotBlank() && value.length <= 60 && value.none(Char::isISOControl)
@@ -375,6 +442,20 @@ object FirestoreJourneyMapper {
         "latitude" to coordinate.latitude,
         "longitude" to coordinate.longitude,
     )
+
+    private fun routeWaypointData(waypoint: ConnectedRouteWaypoint): Map<String, Any> = mapOf(
+        "area" to waypoint.area,
+        "coordinate" to coordinateData(waypoint.coordinate),
+    )
+
+    private fun routeWaypoint(value: Any?): ConnectedRouteWaypoint? {
+        val data = value as? Map<*, *> ?: return null
+        if (data.keys != routeWaypointFields) return null
+        val area = data["area"] as? String ?: return null
+        val waypointCoordinate = coordinate(data["coordinate"] ?: return null) ?: return null
+        return ConnectedRouteWaypoint(area, waypointCoordinate)
+            .takeIf { ConnectedJourneyValidator.isBroadArea(it.area) }
+    }
 
     private fun coordinate(value: Any): GeographicCoordinate? {
         val data = value as? Map<*, *> ?: return null

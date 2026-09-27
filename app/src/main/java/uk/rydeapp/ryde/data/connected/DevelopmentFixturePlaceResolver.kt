@@ -22,6 +22,9 @@ internal class DevelopmentFixturePlaceResolver : PlaceResolver {
             "nottingham" to PlaceResolution.Unique(
                 PlaceMatch("Nottingham", GeographicCoordinate(52.9548, -1.1581)),
             ),
+            "hucknall" to PlaceResolution.Unique(
+                PlaceMatch("Hucknall", GeographicCoordinate(53.0380, -1.2034)),
+            ),
             "richmond" to PlaceResolution.Multiple(
                 listOf(
                     PlaceMatch("Richmond — Greater London", GeographicCoordinate(51.4613, -0.3037)),

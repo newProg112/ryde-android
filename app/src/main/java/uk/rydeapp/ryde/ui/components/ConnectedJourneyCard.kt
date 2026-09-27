@@ -46,6 +46,13 @@ internal fun ConnectedJourneyCard(
                 stringResource(R.string.connected_route, item.journey.originArea, item.journey.destinationArea),
                 style = MaterialTheme.typography.titleMedium,
             )
+            item.journey.routeWaypoints.singleOrNull()?.let { waypoint ->
+                Text(
+                    stringResource(R.string.connected_route_via, waypoint.area),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Text(formatConnectedJourneyDeparture(item.journey.departureEpochMillis))
             Text(
                 stringResource(R.string.connected_seats, item.journey.seatsRemaining, item.journey.seatCapacity),

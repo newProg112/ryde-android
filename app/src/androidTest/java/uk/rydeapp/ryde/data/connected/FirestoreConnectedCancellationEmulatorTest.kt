@@ -18,6 +18,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.UUID
+import uk.rydeapp.ryde.domain.model.GeographicCoordinate
 
 /** Opt-in only: demo namespace and ports never overlap the manual Firebase emulators. */
 class FirestoreConnectedCancellationEmulatorTest {
@@ -48,8 +49,15 @@ class FirestoreConnectedCancellationEmulatorTest {
             val (driverUid, driverDb, driver) = account("Driver Label")
             val (riderUid, riderDb, rider) = account("Shared Rider Label")
             val (otherUid, otherDb, other) = account("Shared Rider Label")
-            driver.create(driverUid, ConnectedJourneyDraft("Mansfield", "Nottingham", System.currentTimeMillis() + 86_400_000, 1))
+            val routeWaypoint = ConnectedRouteWaypoint("Hucknall", GeographicCoordinate(53.0380, -1.2034))
+            driver.create(driverUid, ConnectedJourneyDraft(
+                "Mansfield", "Nottingham", System.currentTimeMillis() + 86_400_000, 1,
+                GeographicCoordinate(53.1432, -1.1984),
+                GeographicCoordinate(52.9548, -1.1581),
+                listOf(routeWaypoint),
+            ))
             val journey = driver.load(driverUid).journeys.single { it.driverUid == driverUid }
+            assertEquals(listOf(routeWaypoint), journey.routeWaypoints)
             val observedPending = async {
                 withTimeout(10_000) {
                     driver.observeSnapshot(driverUid).first { snapshot ->
@@ -175,6 +183,7 @@ class FirestoreConnectedCancellationEmulatorTest {
             assertEquals(ConnectedJourneyStatus.CANCELLED, closed.status)
             assertTrue(closed.cancelledAtEpochMillis != null)
             assertEquals(0, closed.seatsRemaining)
+            assertEquals(listOf(routeWaypoint), closed.routeWaypoints)
             assertEquals(guardBeforeClosure, driverGuard.get(Source.SERVER).await().data)
             assertEquals(trip, rider.load(riderUid).confirmedTrips.single())
             assertEquals(ConnectedTripLifecycle.CANCELLED_BY_RIDER, ConnectedJourneyLifecycle.trip(trip, closed))
