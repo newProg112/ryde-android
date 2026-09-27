@@ -62,6 +62,7 @@ fun RydeApp(
     repository: RydeRepository? = null,
     appMode: AppMode = AppMode.LOCAL_DEMO,
     connectedNowEpochMillis: () -> Long = System::currentTimeMillis,
+    connectedLifecycleWait: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
 ) {
     val appRepository = remember(repository, appMode) {
         RydeAppComposition.repository(appMode, repository)
@@ -90,6 +91,7 @@ fun RydeApp(
                     onSave = controller::updateConnectedProfile,
                     onSignOut = controller::signOut,
                     currentTimeMillis = connectedNowEpochMillis,
+                    waitForLifecycleBoundary = connectedLifecycleWait,
                 )
             }
         } else {

@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import uk.rydeapp.ryde.R
 import uk.rydeapp.ryde.data.AccountCommandResult
@@ -51,6 +52,7 @@ import uk.rydeapp.ryde.ui.trips.ConnectedTripDetailsScreen
 import uk.rydeapp.ryde.ui.trips.connectedTripDetailsContent
 import uk.rydeapp.ryde.ui.trips.connectedTripsContent
 import uk.rydeapp.ryde.ui.trips.canDecideConnectedRequest
+import uk.rydeapp.ryde.ui.trips.keepsPendingRequestNotice
 import uk.rydeapp.ryde.ui.offer.ConnectedOfferScreen
 import uk.rydeapp.ryde.ui.place.BroadAreaEndpoint
 import uk.rydeapp.ryde.ui.place.BroadAreaPlaceSelection
@@ -85,6 +87,7 @@ internal fun ConnectedReadyApp(
     onSave: suspend (String, String, String) -> AccountCommandResult?,
     onSignOut: suspend () -> AccountCommandResult?,
     currentTimeMillis: () -> Long = System::currentTimeMillis,
+    waitForLifecycleBoundary: suspend (Long) -> Unit = { delay(it) },
 ) {
     val snapshot by repository.journeyState.collectAsState()
     LaunchedEffect(session.accountId, repository) {
@@ -124,6 +127,17 @@ internal fun ConnectedReadyApp(
     var resolvedFindCriteria by remember(session.accountId) { mutableStateOf<ConnectedFindCriteria?>(null) }
     var lifecycleNowEpochMillis by remember(session.accountId) {
         mutableLongStateOf(currentTimeMillis())
+    }
+    LaunchedEffect(session.accountId, snapshot.journeys) {
+        while (true) {
+            // Lifecycle presentation must not regress if the device clock is adjusted backwards.
+            lifecycleNowEpochMillis = maxOf(lifecycleNowEpochMillis, currentTimeMillis())
+            val waitMillis = ConnectedJourneyLifecycle.millisUntilNextOpenDeparture(
+                snapshot.journeys,
+                lifecycleNowEpochMillis,
+            ) ?: break
+            waitForLifecycleBoundary(waitMillis)
+        }
     }
     // This scope survives tab changes and opening the Lab, and is disposed on account change/sign-out.
     val scope = rememberCoroutineScope()
@@ -424,10 +438,17 @@ internal fun ConnectedReadyApp(
         }
         if (detailJourneyId != null) {
             tabStateHolder.SaveableStateProvider("${session.accountId}:details:$detailJourneyId") {
+                val detailsContent = connectedTripDetailsContent(
+                    snapshot, session.accountId, detailJourneyId,
+                    discoveryJourneys, tripsContent, nowEpochMillis,
+                )
+                val detailsMessage = message.takeUnless {
+                    it == resources.getString(R.string.connected_requested) &&
+                        !detailsContent.keepsPendingRequestNotice()
+                }
                 ConnectedTripDetailsScreen(
-                    content = connectedTripDetailsContent(snapshot, session.accountId, detailJourneyId,
-                        discoveryJourneys, tripsContent, nowEpochMillis),
-                    busy = busy, actionsEnabled = !refreshRequired, message = message,
+                    content = detailsContent,
+                    busy = busy, actionsEnabled = !refreshRequired, message = detailsMessage,
                     onBack = closeDetails, onRefresh = refresh, onRequestSeat = requestSeat,
                     onDecideRequest = decideRequest, onCancelSeat = cancelSeat, onCancelJourney = cancelJourney,
                     onWithdrawRequest = cancelRequest,

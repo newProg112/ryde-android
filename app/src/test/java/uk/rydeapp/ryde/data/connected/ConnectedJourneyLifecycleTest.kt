@@ -134,6 +134,30 @@ class ConnectedJourneyLifecycleTest {
     }
 
     @Test
+    fun `next departure wait selects only the nearest future open journey`() {
+        val now = journey.departureEpochMillis - 1_000
+        assertEquals(
+            250L,
+            ConnectedJourneyLifecycle.millisUntilNextOpenDeparture(
+                listOf(
+                    journey.copy(id = "later", departureEpochMillis = now + 900),
+                    journey.copy(id = "nearest", departureEpochMillis = now + 250),
+                    journey.copy(id = "departed", departureEpochMillis = now),
+                    cancelled.copy(id = "cancelled", departureEpochMillis = now + 100),
+                    completed.copy(id = "completed", departureEpochMillis = now + 50),
+                ),
+                now,
+            ),
+        )
+        assertNull(
+            ConnectedJourneyLifecycle.millisUntilNextOpenDeparture(
+                listOf(journey.copy(departureEpochMillis = now), cancelled, completed),
+                now,
+            ),
+        )
+    }
+
+    @Test
     fun `pending request cancellation requires rider ownership and a consistent open journey`() {
         assertTrue(ConnectedJourneyLifecycle.canCancelRequest(request, journey, "rider"))
         assertFalse(ConnectedJourneyLifecycle.canCancelRequest(request, journey, "driver"))

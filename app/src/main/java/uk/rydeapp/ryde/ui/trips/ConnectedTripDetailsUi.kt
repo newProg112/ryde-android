@@ -1,5 +1,6 @@
 package uk.rydeapp.ryde.ui.trips
 
+import uk.rydeapp.ryde.R
 import uk.rydeapp.ryde.data.connected.ConnectedJourney
 import uk.rydeapp.ryde.data.connected.ConnectedJourneyLifecycle
 import uk.rydeapp.ryde.data.connected.ConnectedJourneySnapshot
@@ -17,6 +18,9 @@ internal data class ConnectedTripDetailsContent(
     /** Driver-only summary derived from the journey's guarded capacity invariant. */
     val confirmedSeatCount: Int? = null,
 )
+
+internal fun ConnectedTripDetailsContent.keepsPendingRequestNotice(): Boolean =
+    summary?.statusText == R.string.connected_request_pending
 
 internal fun connectedTripDetailsContent(
     snapshot: ConnectedJourneySnapshot,

@@ -25,6 +25,14 @@ enum class ConnectedRequestLifecycle {
 }
 
 object ConnectedJourneyLifecycle {
+    fun millisUntilNextOpenDeparture(
+        journeys: List<ConnectedJourney>,
+        nowEpochMillis: Long,
+    ): Long? = journeys.asSequence()
+        .filter { it.status == ConnectedJourneyStatus.OPEN && it.departureEpochMillis > nowEpochMillis }
+        .map { it.departureEpochMillis - nowEpochMillis }
+        .minOrNull()
+
     fun trip(
         trip: ConnectedConfirmedTrip,
         journey: ConnectedJourney?,

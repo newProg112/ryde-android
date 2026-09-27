@@ -50,10 +50,18 @@ class RydeAppNavigationUiTest {
         auth, TestProfiles(), legacyCapabilities = legacy, journeys = store, coordination = coordination,
     )
 
-    private fun launchConnected(currentTimeMillis: () -> Long = System::currentTimeMillis) {
+    private fun launchConnected(
+        currentTimeMillis: () -> Long = System::currentTimeMillis,
+        waitForLifecycleBoundary: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
+    ) {
         compose.setContent {
             RydeTheme {
-                RydeApp(repository, AppMode.CONNECTED, connectedNowEpochMillis = currentTimeMillis)
+                RydeApp(
+                    repository,
+                    AppMode.CONNECTED,
+                    connectedNowEpochMillis = currentTimeMillis,
+                    connectedLifecycleWait = waitForLifecycleBoundary,
+                )
             }
         }
     }
@@ -451,19 +459,22 @@ class RydeAppNavigationUiTest {
     }
 
     @Test
-    fun confirmedJourneyRefreshesAcrossWallClockDepartureWithUnchangedSnapshot() {
+    fun confirmedJourneyAdvancesAcrossWallClockDepartureWithUnchangedSnapshot() {
         store.confirmSeat()
         val departure = store.journeys.single().departureEpochMillis
         var now = departure - 1
-        launchConnected { now }
+        val boundary = CompletableDeferred<Unit>()
+        launchConnected({ now }) { boundary.await() }
         tab("Trips").performClick()
         compose.onNodeWithText("Your seat is confirmed").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Cancel my seat").assertIsEnabled()
         val unchangedSnapshot = repository.journeyState.value
 
-        compose.runOnIdle { now = departure }
-        compose.onNodeWithText("Your seat is confirmed").assertIsDisplayed()
-        compose.onNodeWithText("Refresh").performScrollTo().performClick()
+        compose.runOnIdle {
+            now = departure
+            boundary.complete(Unit)
+        }
+        compose.waitForIdle()
         compose.onNodeWithText("Departure has passed").performScrollTo().assertIsDisplayed()
         compose.onAllNodesWithText("Your seat is confirmed").assertCountEquals(0)
         compose.onAllNodesWithText("Cancel my seat").assertCountEquals(0)
@@ -472,20 +483,23 @@ class RydeAppNavigationUiTest {
     }
 
     @Test
-    fun openDetailsRefreshesAcrossWallClockDepartureWithUnchangedSnapshot() {
+    fun openDetailsAdvancesAcrossWallClockDepartureWithUnchangedSnapshot() {
         store.confirmSeat()
         val departure = store.journeys.single().departureEpochMillis
         var now = departure - 1
-        launchConnected { now }
+        val boundary = CompletableDeferred<Unit>()
+        launchConnected({ now }) { boundary.await() }
         tab("Trips").performClick()
         openDetails()
         detailsText("Your seat is confirmed").assertIsDisplayed()
         detailsText("Cancel my seat").assertIsEnabled()
         val unchangedSnapshot = repository.journeyState.value
 
-        compose.runOnIdle { now = departure }
-        detailsText("Your seat is confirmed").assertIsDisplayed()
-        detailsText("Refresh").performClick()
+        compose.runOnIdle {
+            now = departure
+            boundary.complete(Unit)
+        }
+        compose.waitForIdle()
         detailsText("Departure has passed").assertIsDisplayed()
         detailsText("Sheffield \u2192 Leeds").assertIsDisplayed()
         compose.onAllNodesWithText("Cancel my seat").assertCountEquals(0)
@@ -494,19 +508,22 @@ class RydeAppNavigationUiTest {
     }
 
     @Test
-    fun unrequestedFindDetailsRefreshesAcrossDepartureWithUnchangedSnapshot() {
+    fun unrequestedFindDetailsAdvancesAcrossDepartureWithUnchangedSnapshot() {
         val departure = store.journeys.single().departureEpochMillis
         var now = departure - 1
-        launchConnected { now }
+        val boundary = CompletableDeferred<Unit>()
+        launchConnected({ now }) { boundary.await() }
         tab("Find").performClick()
         openDetails()
         detailsText("Journey open").assertIsDisplayed()
         detailsText("Request one seat").assertIsEnabled()
         val unchangedSnapshot = repository.journeyState.value
 
-        compose.runOnIdle { now = departure }
-        detailsText("Journey open").assertIsDisplayed()
-        detailsText("Refresh").performClick()
+        compose.runOnIdle {
+            now = departure
+            boundary.complete(Unit)
+        }
+        compose.waitForIdle()
         detailsText("Departure has passed").assertIsDisplayed()
         compose.onAllNodesWithText("Journey open").assertCountEquals(0)
         compose.onAllNodesWithText("Request one seat").assertCountEquals(0)
@@ -531,20 +548,23 @@ class RydeAppNavigationUiTest {
     }
 
     @Test
-    fun driverPendingRequestRefreshesAcrossDepartureButRetainsDeclineCleanup() {
+    fun driverPendingRequestAdvancesAcrossDepartureButRetainsDeclineCleanup() {
         pendingForDriver()
         val departure = store.journeys.single().departureEpochMillis
         var now = departure - 1
-        launchConnected { now }
+        val boundary = CompletableDeferred<Unit>()
+        launchConnected({ now }) { boundary.await() }
         tab("Trips").performClick()
         compose.onNodeWithText("Accept").performScrollTo().assertIsEnabled()
         compose.onNodeWithText("Decline").assertIsEnabled()
         compose.onNodeWithText("Cancel journey").assertIsEnabled()
         val unchangedSnapshot = repository.journeyState.value
 
-        compose.runOnIdle { now = departure }
-        compose.onNodeWithText("Accept").assertIsDisplayed()
-        compose.onNodeWithText("Refresh").performScrollTo().performClick()
+        compose.runOnIdle {
+            now = departure
+            boundary.complete(Unit)
+        }
+        compose.waitForIdle()
         compose.onNodeWithText("Departure has passed").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Departure has passed - this request can no longer be accepted")
             .assertIsDisplayed()
@@ -571,6 +591,24 @@ class RydeAppNavigationUiTest {
             assertEquals(ConnectedJourneyStatus.COMPLETED, repository.journeyState.value.journeys.single().status)
             assertEquals(0, legacyCommands)
         }
+    }
+
+    @Test
+    fun completedRiderDetailsDoNotKeepPendingRequestCommandNotice() {
+        launchConnected()
+        tab("Find").performClick()
+        scrollFindTo("Request one seat")
+        findText("Request one seat").performClick()
+        findText("Seat requested. Waiting for the driver.").assertIsDisplayed()
+
+        compose.runOnIdle { store.completeForRiderRemotely() }
+        tab("Trips").performClick()
+        compose.onNodeWithText("Journey completed").performScrollTo().assertIsDisplayed()
+        openDetails()
+
+        detailsText("Journey completed").assertIsDisplayed()
+        compose.onAllNodesWithText("Seat requested. Waiting for the driver.").assertCountEquals(0)
+        compose.onAllNodesWithText("Your seat is confirmed").assertCountEquals(0)
     }
 
     @Test
@@ -1180,6 +1218,13 @@ class RydeAppNavigationUiTest {
             trips += ConnectedConfirmedTrip(id, journey.id, id, journey.driverUid, "rider-private-uid",
                 journey.originArea, journey.destinationArea, journey.departureEpochMillis,
                 ConnectedTripStatus.CONFIRMED, driverDisplayName = "Morgan")
+        }
+        fun completeForRiderRemotely() {
+            confirmSeat()
+            journeys = journeys.map {
+                it.copy(status = ConnectedJourneyStatus.COMPLETED, completedAtEpochMillis = 1)
+            }
+            lifecycleChanges.tryEmit(Unit)
         }
         val requestCalls = mutableListOf<Pair<String, String>>()
         var requestGate: CompletableDeferred<Unit>? = null
