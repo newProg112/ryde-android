@@ -40,6 +40,16 @@ class ConnectedTripsUiTest {
         assertEquals(request.id, item.cancellableRequestId)
     }
 
+    @Test fun `pending request notice follows the exact journey and stops at accepted truth`() {
+        assertTrue(content().keepsPendingRequestNotice(journey.id))
+        assertFalse(content().keepsPendingRequestNotice("another-offer"))
+        assertFalse(content().keepsPendingRequestNotice(null))
+        assertFalse(content(r = listOf(request.copy(status = ConnectedRequestStatus.ACCEPTED)))
+            .keepsPendingRequestNotice(journey.id))
+        // A confirmed trip wins even if listeners briefly retain the old pending request record.
+        assertFalse(content(t = listOf(trip)).keepsPendingRequestNotice(journey.id))
+    }
+
     @Test fun `confirmed trip replaces linked request and uses persisted trip fields`() {
         val item = content(r = listOf(request.copy(status = ConnectedRequestStatus.ACCEPTED)),
             t = listOf(trip.copy(originArea = "Sheffield", departureEpochMillis = 999))).rider.single()

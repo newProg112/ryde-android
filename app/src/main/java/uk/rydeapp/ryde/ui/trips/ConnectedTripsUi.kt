@@ -45,6 +45,12 @@ internal data class ConnectedTripsContent(
     val unavailableIncoming: List<ConnectedIncomingRequest> = emptyList(),
 )
 
+/** Whether request-success feedback still agrees with the current rider projection. */
+internal fun ConnectedTripsContent.keepsPendingRequestNotice(journeyId: String?): Boolean =
+    journeyId != null && rider.any {
+        it.journeyId == journeyId && it.statusText == R.string.connected_request_pending
+    }
+
 /** Mirrors existing gateway preconditions; transactions remain authoritative. */
 internal fun canDecideConnectedRequest(
     request: ConnectedSeatRequest, journey: ConnectedJourney?, uid: String, accept: Boolean,

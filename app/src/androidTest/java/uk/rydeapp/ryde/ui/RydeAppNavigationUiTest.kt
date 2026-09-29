@@ -289,6 +289,23 @@ class RydeAppNavigationUiTest {
     }
 
     @Test
+    fun acceptedRealtimeUpdateClearsPendingFeedbackOnFindAndTrips() {
+        launchConnected()
+        tab("Find").performClick()
+        scrollFindTo("Request one seat")
+        findText("Request one seat").performClick()
+        findText("Seat requested. Waiting for the driver.").assertIsDisplayed()
+
+        compose.runOnIdle { store.acceptForRiderRemotely() }
+        findText("Your seat is confirmed").performScrollTo().assertIsDisplayed()
+        compose.onAllNodesWithText("Seat requested. Waiting for the driver.").assertCountEquals(0)
+
+        tab("Trips").performClick()
+        compose.onNodeWithText("Your seat is confirmed").performScrollTo().assertIsDisplayed()
+        compose.onAllNodesWithText("Seat requested. Waiting for the driver.").assertCountEquals(0)
+    }
+
+    @Test
     fun findRequestAndRefreshFailuresRecoverFromRepositoryTruth() {
         launchConnected()
         store.failNextRequest = true
@@ -1218,6 +1235,13 @@ class RydeAppNavigationUiTest {
             trips += ConnectedConfirmedTrip(id, journey.id, id, journey.driverUid, "rider-private-uid",
                 journey.originArea, journey.destinationArea, journey.departureEpochMillis,
                 ConnectedTripStatus.CONFIRMED, driverDisplayName = "Morgan")
+        }
+        fun acceptForRiderRemotely() {
+            confirmSeat()
+            journeys = journeys.map { journey ->
+                journey.copy(seatsRemaining = journey.seatsRemaining - 1)
+            }
+            lifecycleChanges.tryEmit(Unit)
         }
         fun completeForRiderRemotely() {
             confirmSeat()

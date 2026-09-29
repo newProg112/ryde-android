@@ -185,22 +185,21 @@ class ConnectedTripDetailsUiTest {
         assertEquals(R.string.connected_trips_driver_cancelled, declined.summary.journeyStatusText)
     }
 
-    @Test fun pendingRequestNoticeDoesNotOutliveResolvedOrTerminalLifecycleState() {
+    @Test fun pendingRequestProjectionDoesNotOutliveResolvedOrTerminalLifecycleState() {
         val pending = details(ConnectedJourneySnapshot(listOf(journey), listOf(request)))
-        assertTrue(pending.keepsPendingRequestNotice())
+        assertEquals(R.string.connected_request_pending, pending.summary!!.statusText)
 
         val accepted = request.copy(status = ConnectedRequestStatus.ACCEPTED)
         val confirmed = details(ConnectedJourneySnapshot(listOf(journey), listOf(accepted), listOf(trip)))
-        assertFalse(confirmed.keepsPendingRequestNotice())
+        assertEquals(R.string.connected_request_accepted, confirmed.summary!!.statusText)
 
         val completedJourney = journey.copy(status = ConnectedJourneyStatus.COMPLETED, completedAtEpochMillis = 2)
         val completed = details(ConnectedJourneySnapshot(listOf(completedJourney), listOf(accepted), listOf(trip)), now = 2)
         assertEquals(R.string.connected_trips_completed, completed.summary!!.statusText)
-        assertFalse(completed.keepsPendingRequestNotice())
 
         val cancelledJourney = journey.copy(status = ConnectedJourneyStatus.CANCELLED, cancelledAtEpochMillis = 2)
-        assertFalse(details(ConnectedJourneySnapshot(listOf(cancelledJourney), listOf(accepted), listOf(trip)))
-            .keepsPendingRequestNotice())
+        assertEquals(R.string.connected_trips_driver_cancelled,
+            details(ConnectedJourneySnapshot(listOf(cancelledJourney), listOf(accepted), listOf(trip))).summary!!.statusText)
     }
 
     @Test fun missingAndMismatchedJourneyLinksRetainSafeHistoryWithoutActionsOrBorrowedFields() {

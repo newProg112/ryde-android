@@ -123,6 +123,7 @@ internal fun ConnectedReadyApp(
     var labBusy by remember { mutableStateOf(false) }
     var refreshRequired by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
+    var pendingRequestNoticeJourneyId by remember(session.accountId) { mutableStateOf<String?>(null) }
     var createdVersion by rememberSaveable { mutableIntStateOf(0) }
     var pendingOffer by remember(session.accountId) { mutableStateOf<PendingConnectedOffer?>(null) }
     var pendingFind by remember(session.accountId) { mutableStateOf<PendingConnectedFind?>(null) }
@@ -209,14 +210,20 @@ internal fun ConnectedReadyApp(
         val canRequest = connectedHomeJourneys(
             repository.journeyState.value, session.accountId, currentTimeMillis(),
         ).any { it.journey.id == journeyId && (it.canRequest || it.canRerequest) }
-        if (canRequest && !refreshRequired) runCommand {
-            when (val result = repository.requestConnectedSeat(journeyId)) {
-                ConnectedJourneyCommandResult.Success -> resources.getString(R.string.connected_requested)
-                is ConnectedJourneyCommandResult.InvalidInput -> result.userMessage
-                is ConnectedJourneyCommandResult.Failure -> {
-                    // A write may have committed before refresh failed. Require a read before retrying.
-                    refreshRequired = true
-                    result.userMessage
+        if (canRequest && !refreshRequired) {
+            pendingRequestNoticeJourneyId = null
+            runCommand {
+                when (val result = repository.requestConnectedSeat(journeyId)) {
+                    ConnectedJourneyCommandResult.Success -> {
+                        pendingRequestNoticeJourneyId = journeyId
+                        resources.getString(R.string.connected_requested)
+                    }
+                    is ConnectedJourneyCommandResult.InvalidInput -> result.userMessage
+                    is ConnectedJourneyCommandResult.Failure -> {
+                        // A write may have committed before refresh failed. Require a read before retrying.
+                        refreshRequired = true
+                        result.userMessage
+                    }
                 }
             }
         } else message = resources.getString(R.string.connected_journey_changed)
@@ -418,6 +425,14 @@ internal fun ConnectedReadyApp(
             } else message = resources.getString(R.string.connected_driver_changed)
         }
     }
+    val currentMessage: (String?) -> String? = { displayedJourneyId ->
+        message.takeUnless {
+            it == resources.getString(R.string.connected_requested) &&
+                (displayedJourneyId != null && displayedJourneyId != pendingRequestNoticeJourneyId ||
+                    !tripsContent.keepsPendingRequestNotice(pendingRequestNoticeJourneyId))
+        }
+    }
+    val visibleMessage = currentMessage(null)
     val openJourney: (String) -> Unit = { id ->
         if (id.isNotBlank()) navigation = navigation.copy(detailJourneyId = id, labSection = null, conversationTripId = null, conversationName = null)
     }
@@ -449,13 +464,9 @@ internal fun ConnectedReadyApp(
                     snapshot, session.accountId, detailJourneyId,
                     discoveryJourneys, tripsContent, nowEpochMillis,
                 )
-                val detailsMessage = message.takeUnless {
-                    it == resources.getString(R.string.connected_requested) &&
-                        !detailsContent.keepsPendingRequestNotice()
-                }
                 ConnectedTripDetailsScreen(
                     content = detailsContent,
-                    busy = busy, actionsEnabled = !refreshRequired, message = detailsMessage,
+                    busy = busy, actionsEnabled = !refreshRequired, message = currentMessage(detailJourneyId),
                     onBack = closeDetails, onRefresh = refresh, onRequestSeat = requestSeat,
                     onDecideRequest = decideRequest, onCancelSeat = cancelSeat, onCancelJourney = cancelJourney,
                     onWithdrawRequest = cancelRequest,
@@ -475,7 +486,7 @@ internal fun ConnectedReadyApp(
                     journeys = discoveryJourneys.take(3),
                     busy = busy,
                     requestsEnabled = !refreshRequired,
-                    message = message,
+                    message = visibleMessage,
                     onFind = { navigation = navigation.copy(destination = RydeDestination.FIND) },
                     onOffer = { navigation = navigation.copy(destination = RydeDestination.OFFER) },
                     onRefresh = refresh,
@@ -488,7 +499,7 @@ internal fun ConnectedReadyApp(
                     journeys = discoveryJourneys,
                     busy = busy,
                     requestsEnabled = !refreshRequired,
-                    message = message,
+                    message = visibleMessage,
                     onRefresh = refresh,
                     onRequestSeat = requestSeat,
                     onManageRequests = { navigation = navigation.copy(destination = RydeDestination.TRIPS) },
@@ -502,7 +513,7 @@ internal fun ConnectedReadyApp(
                     onDismissPlaceSelection = dismissFindPlaceSelection,
                 )
                 RydeDestination.OFFER -> ConnectedOfferScreen(
-                    busy = busy, actionsEnabled = !refreshRequired, message = message, createdVersion = createdVersion,
+                    busy = busy, actionsEnabled = !refreshRequired, message = visibleMessage, createdVersion = createdVersion,
                     onCreate = createOffer, onRefresh = refresh,
                     onManageOffers = { navigation = navigation.copy(destination = RydeDestination.TRIPS) }, modifier = modifier,
                     placeSelectionPrompt = pendingOffer?.places?.prompt,
@@ -511,7 +522,7 @@ internal fun ConnectedReadyApp(
                 )
                 RydeDestination.TRIPS -> ConnectedTripsScreen(
                     content = tripsContent,
-                    busy = busy, actionsEnabled = !refreshRequired, message = message,
+                    busy = busy, actionsEnabled = !refreshRequired, message = visibleMessage,
                     onRefresh = refresh, onCancelSeat = cancelSeat, modifier = modifier,
                     onDecideRequest = decideRequest, onCancelJourney = cancelJourney,
                     onWithdrawRequest = cancelRequest,
