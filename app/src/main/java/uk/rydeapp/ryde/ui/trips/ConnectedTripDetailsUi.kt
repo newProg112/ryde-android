@@ -65,6 +65,9 @@ internal fun connectedTripDetailsContent(
     )
     val origin = safeSummary?.origin ?: journey?.originArea
     val destination = safeSummary?.destination ?: journey?.destinationArea
+    val routeWaypoint = journey?.routeWaypoints?.singleOrNull()?.takeIf { waypoint ->
+        safeSummary == null || safeSummary.viaArea == waypoint.area
+    }
     return ConnectedTripDetailsContent(
         summary = safeSummary,
         journey = journey,
@@ -80,6 +83,8 @@ internal fun connectedTripDetailsContent(
                 destination,
                 journey?.originCoordinate,
                 journey?.destinationCoordinate,
+                routeWaypoint?.area,
+                routeWaypoint?.coordinate,
             )
         } else null,
         confirmedSeatCount = journey?.takeIf {

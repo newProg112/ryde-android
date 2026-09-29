@@ -34,12 +34,18 @@ internal fun JourneyRouteVisualisation(
     modifier: Modifier = Modifier,
 ) {
     val start = route.points.first { it.role == JourneyMapPointRole.JOURNEY_START }
+    val via = route.points.singleOrNull { it.role == JourneyMapPointRole.JOURNEY_VIA }
     val destination = route.points.last { it.role == JourneyMapPointRole.JOURNEY_DESTINATION }
-    val description = stringResource(
-        R.string.connected_route_visual_description,
-        start.label,
-        destination.label,
-    )
+    val description = if (via == null) {
+        stringResource(R.string.connected_route_visual_description, start.label, destination.label)
+    } else {
+        stringResource(
+            R.string.connected_route_visual_description_via,
+            start.label,
+            via.label,
+            destination.label,
+        )
+    }
     val routeColor = MaterialTheme.colorScheme.primary
     val destinationColor = MaterialTheme.colorScheme.tertiary
     val trackColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .55f)
@@ -59,6 +65,7 @@ internal fun JourneyRouteVisualisation(
             ) {
                 val from = Offset(size.width * .12f, size.height * .72f)
                 val to = Offset(size.width * .88f, size.height * .28f)
+                val viaMarker = Offset(size.width * .49f, size.height * .49f)
                 val path = Path().apply {
                     moveTo(from.x, from.y)
                     cubicTo(
@@ -81,6 +88,10 @@ internal fun JourneyRouteVisualisation(
                 )
                 drawCircle(routeColor.copy(alpha = .20f), 13.dp.toPx(), from)
                 drawCircle(routeColor, 7.dp.toPx(), from)
+                if (via != null) {
+                    drawCircle(routeColor.copy(alpha = .20f), 13.dp.toPx(), viaMarker)
+                    drawCircle(routeColor, 7.dp.toPx(), viaMarker)
+                }
                 drawCircle(destinationColor.copy(alpha = .20f), 13.dp.toPx(), to)
                 drawCircle(destinationColor, 7.dp.toPx(), to)
             }
@@ -88,6 +99,22 @@ internal fun JourneyRouteVisualisation(
                 Column(Modifier.weight(1f).testTag("connected-route-start")) {
                     Text(stringResource(R.string.connected_route_start), style = MaterialTheme.typography.labelMedium)
                     Text(start.label, style = MaterialTheme.typography.bodyLarge)
+                }
+                via?.let {
+                    Column(Modifier.weight(1f).testTag("connected-route-via")) {
+                        Text(
+                            stringResource(R.string.connected_route_via_point),
+                            Modifier.fillMaxWidth(),
+                            style = MaterialTheme.typography.labelMedium,
+                            textAlign = TextAlign.Center,
+                        )
+                        Text(
+                            it.label,
+                            Modifier.fillMaxWidth(),
+                            style = MaterialTheme.typography.bodyLarge,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
                 }
                 Column(Modifier.weight(1f).testTag("connected-route-destination")) {
                     Text(

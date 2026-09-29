@@ -128,6 +128,43 @@ class ConnectedTripDetailsUiTest {
         }
     }
 
+    @Test fun declaredViaReachesDetailsAsOneOrderedRoutePointWithoutReplacingTripSnapshots() {
+        val origin = GeographicCoordinate(53.1432, -1.1984)
+        val via = GeographicCoordinate(53.0380, -1.2034)
+        val destination = GeographicCoordinate(52.9548, -1.1581)
+        val routed = journey.copy(
+            originCoordinate = origin,
+            destinationCoordinate = destination,
+            routeWaypoints = listOf(ConnectedRouteWaypoint("Hucknall", via)),
+        )
+        val alignedTrip = trip.copy(originArea = routed.originArea, destinationArea = routed.destinationArea)
+        val result = details(ConnectedJourneySnapshot(
+            listOf(routed),
+            listOf(request.copy(status = ConnectedRequestStatus.ACCEPTED)),
+            listOf(alignedTrip),
+        ))
+
+        assertEquals("Hucknall", result.summary!!.viaArea)
+        assertEquals(listOf("Mansfield", "Hucknall", "Sheffield"), result.routeMap!!.points.map { it.label })
+        assertEquals(listOf(origin, via, destination), result.routeMap.points.map { it.coordinate })
+        assertEquals(
+            listOf(
+                JourneyMapPointRole.JOURNEY_START,
+                JourneyMapPointRole.JOURNEY_VIA,
+                JourneyMapPointRole.JOURNEY_DESTINATION,
+            ),
+            result.routeMap.points.map { it.role },
+        )
+
+        val mismatched = details(ConnectedJourneySnapshot(
+            listOf(routed.copy(destinationArea = "Different destination")),
+            listOf(request.copy(status = ConnectedRequestStatus.ACCEPTED)),
+            listOf(alignedTrip),
+        ))
+        assertNull(mismatched.summary!!.viaArea)
+        assertEquals(listOf(routed.originArea, routed.destinationArea), mismatched.routeMap!!.points.map { it.label })
+    }
+
     @Test fun messageTargetsSurviveJourneyLossButMalformedTripIdentityFailsClosed() {
         val snapshot = ConnectedJourneySnapshot(
             emptyList(),

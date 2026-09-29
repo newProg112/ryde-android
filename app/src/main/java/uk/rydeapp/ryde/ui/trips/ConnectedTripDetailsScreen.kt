@@ -73,8 +73,17 @@ internal fun ConnectedTripDetailsScreen(
             val origin = if (summary != null) summary.origin else journey?.originArea
             val destination = if (summary != null) summary.destination else journey?.destinationArea
             val departure = if (summary != null) summary.departureEpochMillis else journey?.departureEpochMillis
+            val viaArea = summary?.viaArea
+                ?: journey?.routeWaypoints?.singleOrNull()?.area?.takeIf { summary == null }
             Text(if (origin != null && destination != null) stringResource(R.string.connected_route, origin, destination)
                 else stringResource(R.string.connected_trips_details_unavailable), style = MaterialTheme.typography.titleLarge)
+            viaArea?.let {
+                Text(
+                    stringResource(R.string.connected_route_via, it),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             departure?.let { Text(formatConnectedJourneyDeparture(it)) }
             if (summary != null) {
                 Text(stringResource(summary.roleText))

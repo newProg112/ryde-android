@@ -4,6 +4,7 @@ import uk.rydeapp.ryde.domain.model.GeographicCoordinate
 
 internal enum class JourneyMapPointRole {
     JOURNEY_START,
+    JOURNEY_VIA,
     RIDER_PICKUP,
     RIDER_DESTINATION,
     JOURNEY_DESTINATION,
@@ -42,17 +43,22 @@ internal data class JourneyMapPresentation(
     }
 }
 
-/** Builds a route boundary from persisted truth; two endpoints never imply road geometry. */
+/** Builds an ordered declared route from persisted truth; its points never imply road geometry. */
 internal fun journeyMap(
     originArea: String,
     destinationArea: String,
     originCoordinate: GeographicCoordinate? = null,
     destinationCoordinate: GeographicCoordinate? = null,
+    viaArea: String? = null,
+    viaCoordinate: GeographicCoordinate? = null,
 ): JourneyMapPresentation {
     require((originCoordinate == null) == (destinationCoordinate == null))
+    require((viaArea == null) == (viaCoordinate == null))
+    require(viaArea == null || viaArea.isNotBlank())
     return JourneyMapPresentation(
-        points = listOf(
+        points = listOfNotNull(
             JourneyMapPoint(originArea, JourneyMapPointRole.JOURNEY_START, originCoordinate),
+            viaArea?.let { JourneyMapPoint(it, JourneyMapPointRole.JOURNEY_VIA, viaCoordinate) },
             JourneyMapPoint(destinationArea, JourneyMapPointRole.JOURNEY_DESTINATION, destinationCoordinate),
         ),
         line = JourneyMapLine.VisualConnection,

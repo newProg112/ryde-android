@@ -205,6 +205,13 @@ private fun TripCard(
                 stringResource(R.string.connected_route, item.origin, item.destination)
                 else stringResource(R.string.connected_trips_details_unavailable),
                 style = MaterialTheme.typography.titleMedium)
+            item.viaArea?.let {
+                Text(
+                    stringResource(R.string.connected_route_via, it),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             item.departureEpochMillis?.let { Text(formatConnectedJourneyDeparture(it)) }
             Text(stringResource(item.roleText), color = MaterialTheme.colorScheme.onSurfaceVariant)
             item.driverDisplayName?.takeIf { item.roleText == R.string.connected_trips_rider }?.let {

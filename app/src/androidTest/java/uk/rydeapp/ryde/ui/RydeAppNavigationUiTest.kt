@@ -19,6 +19,7 @@ import uk.rydeapp.ryde.data.FakeRydeRepository
 import uk.rydeapp.ryde.data.RydeRepository
 import uk.rydeapp.ryde.data.connected.*
 import uk.rydeapp.ryde.domain.model.FindRideCriteria
+import uk.rydeapp.ryde.domain.model.GeographicCoordinate
 import uk.rydeapp.ryde.domain.model.OfferRideCriteria
 import uk.rydeapp.ryde.domain.model.SavedPlace
 import uk.rydeapp.ryde.ui.theme.RydeTheme
@@ -302,6 +303,41 @@ class RydeAppNavigationUiTest {
 
         tab("Trips").performClick()
         compose.onNodeWithText("Your seat is confirmed").performScrollTo().assertIsDisplayed()
+        compose.onAllNodesWithText("Seat requested. Waiting for the driver.").assertCountEquals(0)
+    }
+
+    @Test
+    fun routedJourneyRetainsDeclaredViaFromHomeThroughAcceptedTripsAndDetails() {
+        val journey = store.journeys.single()
+        store.journeys = listOf(journey.copy(
+            originArea = "Mansfield",
+            destinationArea = "Nottingham",
+            originCoordinate = GeographicCoordinate(53.1432, -1.1984),
+            destinationCoordinate = GeographicCoordinate(52.9548, -1.1581),
+            routeWaypoints = listOf(ConnectedRouteWaypoint(
+                "Hucknall", GeographicCoordinate(53.0380, -1.2034),
+            )),
+        ))
+        launchConnected()
+
+        compose.onNodeWithText("Via Hucknall").performScrollTo().assertIsDisplayed()
+        tab("Find").performClick()
+        findText("Via Hucknall").assertIsDisplayed()
+        findText("Request one seat").performClick()
+        findText("Your request is pending").assertIsDisplayed()
+
+        tab("Trips").performClick()
+        compose.onNodeWithText("Via Hucknall").performScrollTo().assertIsDisplayed()
+        compose.runOnIdle { store.acceptForRiderRemotely() }
+        compose.onNodeWithText("Your seat is confirmed").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Via Hucknall").assertIsDisplayed()
+
+        openDetails()
+        detailsText("Via Hucknall").assertIsDisplayed()
+        compose.onNodeWithTag("connected-route-via").assertIsDisplayed()
+        compose.onNodeWithContentDescription(
+            "Visual connection from Mansfield via Hucknall to Nottingham; this is not a geographic map",
+        ).assertIsDisplayed()
         compose.onAllNodesWithText("Seat requested. Waiting for the driver.").assertCountEquals(0)
     }
 

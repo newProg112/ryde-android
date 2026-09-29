@@ -9,6 +9,7 @@ import org.junit.Rule
 import org.junit.Test
 import uk.rydeapp.ryde.data.connected.*
 import uk.rydeapp.ryde.ui.home.connectedHomeJourneys
+import uk.rydeapp.ryde.domain.model.GeographicCoordinate
 import uk.rydeapp.ryde.ui.theme.RydeTheme
 
 class ConnectedTripDetailsScreenUiTest {
@@ -51,6 +52,33 @@ class ConnectedTripDetailsScreenUiTest {
     private fun text(label: String): SemanticsNodeInteraction {
         compose.onNodeWithTag("connected-trip-details-list").performScrollToNode(hasText(label))
         return compose.onNodeWithText(label)
+    }
+
+    @Test fun declaredViaRendersInDetailsAndAccessibleOrderedRoute() {
+        val routed = journey.copy(
+            originArea = "Mansfield",
+            destinationArea = "Nottingham",
+            originCoordinate = GeographicCoordinate(53.1432, -1.1984),
+            destinationCoordinate = GeographicCoordinate(52.9548, -1.1581),
+            routeWaypoints = listOf(ConnectedRouteWaypoint(
+                "Hucknall", GeographicCoordinate(53.0380, -1.2034),
+            )),
+        )
+        compose.setContent { RydeTheme {
+            ConnectedTripDetailsScreen(
+                content(ConnectedJourneySnapshot(listOf(routed))),
+                false, true, null, {}, {}, {}, { _, _ -> }, {}, {},
+            )
+        } }
+
+        text("Via Hucknall").assertIsDisplayed()
+        text("Hucknall").assertIsDisplayed()
+        compose.onNodeWithTag("connected-route-via").assertIsDisplayed()
+        compose.onNodeWithContentDescription(
+            "Visual connection from Mansfield via Hucknall to Nottingham; this is not a geographic map",
+        ).assertIsDisplayed()
+        text("Visual connection only — broad areas, not a road route or navigation.").assertIsDisplayed()
+        text("A separate rider pickup point is not stored for this journey.").assertIsDisplayed()
     }
 
     @Test fun requestAndRefreshForwardJourneyIdAndBusyBlocksRepeatActions() {

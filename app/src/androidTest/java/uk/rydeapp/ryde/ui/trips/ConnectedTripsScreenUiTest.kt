@@ -8,6 +8,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import uk.rydeapp.ryde.data.connected.*
+import uk.rydeapp.ryde.domain.model.GeographicCoordinate
 import uk.rydeapp.ryde.ui.theme.RydeTheme
 
 class ConnectedTripsScreenUiTest {
@@ -18,6 +19,38 @@ class ConnectedTripsScreenUiTest {
     private val trip = ConnectedConfirmedTrip("private-trip-id", journey.id, request.id, journey.driverUid,
         request.riderUid, journey.originArea, journey.destinationArea, journey.departureEpochMillis,
         ConnectedTripStatus.CONFIRMED, driverDisplayName = "Morgan Driver")
+
+    @Test fun declaredViaRendersForDriverPendingRiderAndConfirmedRiderWhileNoViaStaysUnchanged() {
+        val routed = journey.copy(
+            originCoordinate = GeographicCoordinate(53.1432, -1.1984),
+            destinationCoordinate = GeographicCoordinate(52.9548, -1.1581),
+            routeWaypoints = listOf(ConnectedRouteWaypoint(
+                "Hucknall", GeographicCoordinate(53.0380, -1.2034),
+            )),
+        )
+        val currentJourney = mutableStateOf(routed)
+        val viewer = mutableStateOf(journey.driverUid)
+        val accepted = mutableStateOf(false)
+        compose.setContent { RydeTheme {
+            val snapshot = ConnectedJourneySnapshot(
+                listOf(currentJourney.value),
+                listOf(request.copy(status = if (accepted.value) ConnectedRequestStatus.ACCEPTED else ConnectedRequestStatus.PENDING)),
+                if (accepted.value) listOf(trip) else emptyList(),
+            )
+            ConnectedTripsScreen(connectedTripsContent(snapshot, viewer.value, 0), false, true, null, {}, {})
+        } }
+
+        compose.onNodeWithText("Via Hucknall").performScrollTo().assertIsDisplayed()
+        compose.runOnIdle { viewer.value = request.riderUid }
+        compose.onNodeWithText("Via Hucknall").performScrollTo().assertIsDisplayed()
+        compose.runOnIdle { accepted.value = true }
+        compose.onNodeWithText("Your seat is confirmed").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Via Hucknall").assertIsDisplayed()
+
+        compose.runOnIdle { currentJourney.value = journey }
+        compose.onNodeWithText("Your seat is confirmed").performScrollTo().assertIsDisplayed()
+        compose.onAllNodesWithText("Via Hucknall").assertCountEquals(0)
+    }
 
     @Test fun riderSeesPrivateDriverSnapshotThroughoutHistoryAndLegacyFallsBackSafely() {
         val currentJourney = mutableStateOf(journey)

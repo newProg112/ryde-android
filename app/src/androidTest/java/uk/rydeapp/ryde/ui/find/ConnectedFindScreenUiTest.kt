@@ -14,6 +14,7 @@ import org.junit.Rule
 import org.junit.Test
 import uk.rydeapp.ryde.data.connected.ConnectedJourney
 import uk.rydeapp.ryde.data.connected.ConnectedRequestStatus
+import uk.rydeapp.ryde.data.connected.ConnectedRouteWaypoint
 import uk.rydeapp.ryde.data.connected.ConnectedSeatRequest
 import uk.rydeapp.ryde.domain.PlaceMatch
 import uk.rydeapp.ryde.domain.model.GeographicCoordinate
@@ -145,6 +146,24 @@ class ConnectedFindScreenUiTest {
             assertEquals(listOf("available"), opened)
             assertEquals(listOf("available"), requested)
         }
+    }
+
+    @Test fun resultCardRendersTheDriversDeclaredVia() {
+        val routed = item("routed", "Mansfield", "Nottingham").let { source ->
+            source.copy(journey = source.journey.copy(
+                originCoordinate = GeographicCoordinate(53.1432, -1.1984),
+                destinationCoordinate = GeographicCoordinate(52.9548, -1.1581),
+                routeWaypoints = listOf(ConnectedRouteWaypoint(
+                    "Hucknall", GeographicCoordinate(53.0380, -1.2034),
+                )),
+            ))
+        }
+        compose.setContent { RydeTheme {
+            ConnectedFindScreen(listOf(routed), false, true, null, {}, {}, {})
+        } }
+
+        scrollTo("Via Hucknall").assertIsDisplayed()
+        scrollTo("Mansfield → Nottingham").assertIsDisplayed()
     }
 
     @Test fun searchActionCarriesBothTypedAreasToResolutionBoundary() {

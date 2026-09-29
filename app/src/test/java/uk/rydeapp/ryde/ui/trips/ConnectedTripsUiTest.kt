@@ -4,6 +4,7 @@ import org.junit.Assert.*
 import org.junit.Test
 import uk.rydeapp.ryde.R
 import uk.rydeapp.ryde.data.connected.*
+import uk.rydeapp.ryde.domain.model.GeographicCoordinate
 
 class ConnectedTripsUiTest {
     private val journey = ConnectedJourney("offer", "private-driver", "York", "Leeds", 1000, 2, 1)
@@ -60,6 +61,29 @@ class ConnectedTripsUiTest {
         assertEquals(trip.id, item.cancellableTripId)
         assertEquals("Morgan Driver", item.driverDisplayName)
         assertNull(content(t = listOf(trip.copy(driverDisplayName = null))).rider.single().driverDisplayName)
+    }
+
+    @Test fun `declared Via reaches driver pending rider and confirmed rider only through a valid journey link`() {
+        val routed = journey.copy(
+            originCoordinate = GeographicCoordinate(53.1432, -1.1984),
+            destinationCoordinate = GeographicCoordinate(52.9548, -1.1581),
+            routeWaypoints = listOf(ConnectedRouteWaypoint(
+                "Hucknall", GeographicCoordinate(53.0380, -1.2034),
+            )),
+        )
+        val accepted = request.copy(status = ConnectedRequestStatus.ACCEPTED)
+
+        assertEquals("Hucknall", content(j = listOf(routed), uid = journey.driverUid).driver.single().viaArea)
+        assertEquals("Hucknall", content(j = listOf(routed)).rider.single().viaArea)
+        assertEquals("Hucknall", content(j = listOf(routed), r = listOf(accepted), t = listOf(trip)).rider.single().viaArea)
+
+        assertNull(content(j = emptyList(), r = listOf(accepted), t = listOf(trip)).rider.single().viaArea)
+        assertNull(content(
+            j = listOf(routed.copy(destinationArea = "Different destination")),
+            r = listOf(accepted),
+            t = listOf(trip),
+        ).rider.single().viaArea)
+        assertNull(content().rider.single().viaArea)
     }
 
     @Test fun `rider messaging target exists only for a structurally valid confirmed trip`() {

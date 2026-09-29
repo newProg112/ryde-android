@@ -23,6 +23,8 @@ internal data class ConnectedTripsItem(
     val journeyId: String? = null,
     val driverDisplayName: String? = null,
     val messageTarget: ConnectedMessageTarget? = null,
+    /** One immutable broad area on the driver's declared route, never a rider pickup. */
+    val viaArea: String? = null,
 )
 
 internal data class ConnectedMessageTarget(
@@ -139,6 +141,9 @@ internal fun connectedTripsContent(
             driverDisplayName = trip.driverDisplayName,
             messageTarget = ConnectedMessageTarget(trip.id, trip.driverDisplayName)
                 .takeIf { ConnectedJourneyLifecycle.canReadMessages(trip, uid) },
+            viaArea = journey
+                ?.takeIf { ConnectedJourneyLifecycle.coordinationJourneyMatches(trip, it) }
+                ?.routeWaypoints?.singleOrNull()?.area,
         )
     }
     val representedRequests = trips.map { it.acceptedRequestId }.toSet()
@@ -164,7 +169,8 @@ internal fun connectedTripsContent(
             // A terminal request remains historical even if its linked journey is later cancelled.
             journeyStatusText = R.string.connected_trips_driver_cancelled.takeIf {
                 journey?.status == ConnectedJourneyStatus.CANCELLED && status != R.string.connected_trips_driver_cancelled
-            }, journeyId = request.journeyId)
+            }, journeyId = request.journeyId,
+            viaArea = journey?.routeWaypoints?.singleOrNull()?.area)
     }
     val owned = snapshot.journeys.filter { it.driverUid == uid }
     val incoming = snapshot.requests.filter { it.driverUid == uid && it.riderUid != uid }
@@ -179,7 +185,8 @@ internal fun connectedTripsContent(
             incoming = incoming.filter { it.journeyId == journey.id }.map {
                 incomingRequest(it, journey, confirmedById[it.id], uid, nowEpochMillis)
             },
-            journeyId = journey.id)
+            journeyId = journey.id,
+            viaArea = journey.routeWaypoints.singleOrNull()?.area)
     }
     val missingDriverHistory = incoming
         .filter { request -> owned.none { it.id == request.journeyId } && confirmedById[request.id] != null }

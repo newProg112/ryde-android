@@ -36,6 +36,29 @@ class JourneyMapPresentationTest {
         assertSame(JourneyMapLine.VisualConnection, route.line)
     }
 
+    @Test
+    fun persistedViaProducesOneOrderedDeclaredRoutePoint() {
+        val origin = GeographicCoordinate(53.1432, -1.1984)
+        val via = GeographicCoordinate(53.0380, -1.2034)
+        val destination = GeographicCoordinate(52.9548, -1.1581)
+
+        val route = journeyMap(
+            "Mansfield", "Nottingham", origin, destination, "Hucknall", via,
+        )
+
+        assertEquals(
+            listOf(
+                JourneyMapPointRole.JOURNEY_START,
+                JourneyMapPointRole.JOURNEY_VIA,
+                JourneyMapPointRole.JOURNEY_DESTINATION,
+            ),
+            route.points.map(JourneyMapPoint::role),
+        )
+        assertEquals(listOf("Mansfield", "Hucknall", "Nottingham"), route.points.map(JourneyMapPoint::label))
+        assertEquals(listOf(origin, via, destination), route.points.map(JourneyMapPoint::coordinate))
+        assertSame(JourneyMapLine.VisualConnection, route.line)
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun roadRouteRequiresAtLeastTwoGeometryPoints() {
         JourneyMapLine.RoadRoute(listOf(GeographicCoordinate(53.0, -1.0)))
