@@ -49,6 +49,7 @@ class RydeAppNavigationUiTest {
     }
     private val repository = ConnectedRydeRepository(
         auth, TestProfiles(), legacyCapabilities = legacy, journeys = store, coordination = coordination,
+        placeResolver = DevelopmentFixturePlaceResolver(),
     )
 
     private fun launchConnected(
@@ -645,10 +646,9 @@ class RydeAppNavigationUiTest {
     }
 
     @Test
-    fun fullJourneyFindDetailsShowsFullWithoutRequestAction() {
+    fun fullJourneyHomeDetailsShowsFullWithoutRequestAction() {
         store.journeys = listOf(store.journeys.single().copy(seatsRemaining = 0))
         launchConnected()
-        tab("Find").performClick()
         openDetails()
         detailsText("Journey full").assertIsDisplayed()
         detailsText("Seats remaining: 0/2").assertIsDisplayed()
@@ -689,7 +689,7 @@ class RydeAppNavigationUiTest {
     fun driverCompletesDepartedJourneyThroughConnectedRepository() {
         pendingForDriver()
         val departure = store.journeys.single().departureEpochMillis
-        launchConnected { departure }
+        launchConnected(currentTimeMillis = { departure })
         tab("Trips").performClick()
         compose.onNodeWithText("Mark journey complete").performScrollTo().performClick()
         compose.onNodeWithText("Confirm journey completion").performClick()
@@ -1323,9 +1323,14 @@ class RydeAppNavigationUiTest {
         fun confirmSeat() {
             val journey = journeys.single()
             val id = "${journey.id}_rider-private-uid"
+            val acceptedRequest = requests.firstOrNull { it.id == id }
+                ?.copy(status = ConnectedRequestStatus.ACCEPTED)
+                ?: ConnectedSeatRequest(
+                    id, journey.id, journey.driverUid, "rider-private-uid",
+                    ConnectedRequestStatus.ACCEPTED, "Taylor",
+                )
             requests.clear()
-            requests += ConnectedSeatRequest(id, journey.id, journey.driverUid, "rider-private-uid",
-                ConnectedRequestStatus.ACCEPTED, "Taylor")
+            requests += acceptedRequest
             trips += ConnectedConfirmedTrip(id, journey.id, id, journey.driverUid, "rider-private-uid",
                 journey.originArea, journey.destinationArea, journey.departureEpochMillis,
                 ConnectedTripStatus.CONFIRMED, driverDisplayName = "Morgan")
