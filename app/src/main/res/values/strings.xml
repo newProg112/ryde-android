@@ -65,6 +65,8 @@
     <string name="connected_find_clear">Clear filters</string>
     <string name="connected_find_no_matches">No journeys match your filters</string>
     <string name="connected_find_no_matches_body">Try another area or date, or clear your filters to browse all upcoming journeys.</string>
+    <string name="connected_find_no_available">No seats currently available</string>
+    <string name="connected_find_no_available_body">Upcoming offers are fully booked right now. Refresh to check for newly available seats.</string>
     <string name="connected_find_resolution_failed">Ryde could not check those broad areas. Text matching is still available.</string>
     <string name="connected_find_geographic_match_explanation">Close area match · pickup ~%1$d km away · drop-off ~%2$d km away</string>
     <plurals name="connected_find_matching_count">

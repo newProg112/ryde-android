@@ -92,7 +92,12 @@ class ConnectedFindUiTest {
     @Test fun everyRequestStatusAndActionFlagIsPreservedIncludingFullJourneys() {
         ConnectedRequestStatus.entries.forEach { status ->
             val request = ConnectedSeatRequest("first_rider", "first", "driver", "rider", status)
-            val source = first.copy(request = request, canRequest = false, canRerequest = status == ConnectedRequestStatus.CANCELLED)
+            val source = first.copy(
+                journey = first.journey.copy(seatsRemaining = 0),
+                request = request,
+                canRequest = false,
+                canRerequest = false,
+            )
             val match = matchConnectedFindJourneys(
                 listOf(source), ConnectedFindCriteria("mans", "nott"),
             ).single().item
@@ -101,10 +106,10 @@ class ConnectedFindUiTest {
             assertFalse(match.canRequest)
             assertEquals(source.canRerequest, match.canRerequest)
         }
-        val full = first.copy(journey = first.journey.copy(seatsRemaining = 0), canRequest = false)
-        assertSame(full, matchConnectedFindJourneys(
-            listOf(full), ConnectedFindCriteria("mans"),
-        ).single().item)
+        val unrelatedFull = first.copy(journey = first.journey.copy(seatsRemaining = 0), canRequest = false)
+        assertTrue(matchConnectedFindJourneys(
+            listOf(unrelatedFull), ConnectedFindCriteria("mans"),
+        ).isEmpty())
     }
 
     @Test fun resolvedCoordinatesReachSearchBoundaryWithoutChangingTextMatching() {
@@ -472,9 +477,8 @@ class ConnectedFindUiTest {
 
         val results = matchConnectedFindJourneys(discoverable, criteria)
 
-        assertEquals(listOf("eligible", "full"), results.map { it.item.journey.id })
+        assertEquals(listOf("eligible"), results.map { it.item.journey.id })
         assertTrue(results.all { it.geographicMatch is GeographicJourneyMatch.Compatible })
-        assertFalse(results.single { it.item.journey.id == "full" }.item.canRequest)
     }
 
     private fun item(id: String, origin: String, destination: String, departure: String) = ConnectedHomeJourney(

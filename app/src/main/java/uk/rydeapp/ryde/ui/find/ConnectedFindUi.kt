@@ -102,34 +102,44 @@ internal fun matchConnectedFindJourneys(
         criteria.originCoordinate,
         criteria.destinationCoordinate,
     )
-    return journeys.mapNotNull { item ->
-        if (!dateMatches(item, criteria, zoneId)) return@mapNotNull null
-        val offeredEndpoints = geographicEndpoints(
-            item.journey.originCoordinate,
-            item.journey.destinationCoordinate,
-        )
-        val geographicMatch = if (item.journey.routeWaypoints.isNotEmpty()) {
-            routePolicy.assess(
-                rider = riderEndpoints,
-                offeredRoute = offeredEndpoints?.let { endpoints ->
-                    JourneyGeographicRoute(
-                        listOf(endpoints.origin) +
-                            item.journey.routeWaypoints.map { it.coordinate } +
-                            endpoints.destination,
-                    )
-                },
+    return journeys.asSequence()
+        // Find discovers seats the rider can act on. Keep an unavailable offer only when this
+        // rider already has a request to manage; unrelated fully-booked offers can reappear from
+        // the existing live snapshot if capacity is restored.
+        .filter(::isRelevantConnectedFindOffer)
+        .mapNotNull { item ->
+            if (!dateMatches(item, criteria, zoneId)) return@mapNotNull null
+            val offeredEndpoints = geographicEndpoints(
+                item.journey.originCoordinate,
+                item.journey.destinationCoordinate,
             )
-        } else {
-            policy.assess(rider = riderEndpoints, offeredJourney = offeredEndpoints)
+            val geographicMatch = if (item.journey.routeWaypoints.isNotEmpty()) {
+                routePolicy.assess(
+                    rider = riderEndpoints,
+                    offeredRoute = offeredEndpoints?.let { endpoints ->
+                        JourneyGeographicRoute(
+                            listOf(endpoints.origin) +
+                                item.journey.routeWaypoints.map { it.coordinate } +
+                                endpoints.destination,
+                        )
+                    },
+                )
+            } else {
+                policy.assess(rider = riderEndpoints, offeredJourney = offeredEndpoints)
+            }
+            val routeMatches = when (geographicMatch) {
+                is GeographicJourneyMatch.Compatible -> true
+                is GeographicJourneyMatch.Incompatible -> false
+                GeographicJourneyMatch.InsufficientGeographicData -> textRouteMatches(item, criteria)
+            }
+            if (routeMatches) ConnectedFindJourneyResult(item, geographicMatch) else null
         }
-        val routeMatches = when (geographicMatch) {
-            is GeographicJourneyMatch.Compatible -> true
-            is GeographicJourneyMatch.Incompatible -> false
-            GeographicJourneyMatch.InsufficientGeographicData -> textRouteMatches(item, criteria)
-        }
-        if (routeMatches) ConnectedFindJourneyResult(item, geographicMatch) else null
-    }.sortedWith(connectedFindResultRanking)
+        .sortedWith(connectedFindResultRanking)
+        .toList()
 }
+
+internal fun isRelevantConnectedFindOffer(item: ConnectedHomeJourney): Boolean =
+    item.canRequest || item.canRerequest || item.request != null
 
 private val connectedFindResultRanking =
     compareBy<ConnectedFindJourneyResult> { it.geographicScore == null }

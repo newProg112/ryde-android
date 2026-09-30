@@ -240,7 +240,28 @@ class RydeAppNavigationUiTest {
     }
 
     @Test
-    fun findShowsFullListAndSuppressesClosedDepartedOwnAndFullJourneyActions() {
+    fun fullyBookedFindUsesAvailableSeatEmptyStateAndRecoversLive() {
+        store.journeys = store.journeys.map { it.copy(seatsRemaining = 0) }
+        launchConnected()
+        tab("Find").performClick()
+
+        scrollFindTo("No seats currently available")
+        findText("No seats currently available").assertIsDisplayed()
+        findText("0 upcoming journeys").performScrollTo().assertIsDisplayed()
+        compose.onAllNodesWithText("Request one seat").assertCountEquals(0)
+
+        compose.runOnIdle {
+            store.journeys = store.journeys.map { it.copy(seatsRemaining = 1) }
+        }
+        findText("Refresh").performClick()
+
+        scrollFindTo("1 upcoming journey")
+        findText("1 upcoming journey").assertIsDisplayed()
+        findText("Request one seat").performScrollTo().assertIsEnabled()
+    }
+
+    @Test
+    fun findShowsOnlyAvailableOffersAndSuppressesClosedDepartedOwnAndFullJourneys() {
         val offer = store.journeys.single()
         store.journeys = (1..4).map {
             offer.copy(id = "offer-$it", originArea = "Area ${('A'.code + it - 1).toChar()}", departureEpochMillis = offer.departureEpochMillis + it)
@@ -255,13 +276,11 @@ class RydeAppNavigationUiTest {
             .performScrollToNode(hasText("View all journeys in Find"))
         compose.onNodeWithText("View all journeys in Find").assertIsDisplayed().performClick()
         tab("Find").assertIsSelected()
-        scrollFindTo("5 upcoming journeys")
-        findText("5 upcoming journeys").performScrollTo().assertIsDisplayed()
+        scrollFindTo("4 upcoming journeys")
+        findText("4 upcoming journeys").performScrollTo().assertIsDisplayed()
         scrollFindTo("Area D → Leeds")
         findText("Area D → Leeds").assertIsDisplayed()
-        scrollFindTo("Full area → Leeds")
-        findText("No seats available").performScrollTo().assertIsDisplayed()
-        listOf("Closed area", "Departed area", "Own area").forEach {
+        listOf("Closed area", "Departed area", "Own area", "Full area").forEach {
             compose.onAllNodesWithText(it, substring = true).assertCountEquals(0)
         }
         assertNoFictionalContent()

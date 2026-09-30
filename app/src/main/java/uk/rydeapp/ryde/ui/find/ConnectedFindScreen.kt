@@ -193,6 +193,13 @@ internal fun ConnectedFindScreen(
                     stringResource(R.string.connected_find_empty_body),
                 )
             }
+        } else if (results.isEmpty() && !criteria.hasFilters) {
+            item {
+                InfoCard(
+                    stringResource(R.string.connected_find_no_available),
+                    stringResource(R.string.connected_find_no_available_body),
+                )
+            }
         } else if (results.isEmpty()) {
             item {
                 InfoCard(
