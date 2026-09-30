@@ -89,6 +89,7 @@ class RydeAppNavigationUiTest {
         compose.onAllNodesWithText("Request one seat").assertCountEquals(0)
         compose.runOnIdle {
             assertEquals(listOf("rider-private-uid" to "connected-offer"), store.requestCalls)
+            assertEquals(listOf(null), store.requestSegments)
             assertEquals(0, legacyCommands)
             assertEquals(ConnectedRequestStatus.PENDING, repository.journeyState.value.requests.single().status)
         }
@@ -339,6 +340,43 @@ class RydeAppNavigationUiTest {
             "Visual connection from Mansfield via Hucknall to Nottingham; this is not a geographic map",
         ).assertIsDisplayed()
         compose.onAllNodesWithText("Seat requested. Waiting for the driver.").assertCountEquals(0)
+    }
+
+    @Test
+    fun resolvedViaOverlapFindSegmentSurvivesDetailsRequestAndAcceptance() {
+        val journey = store.journeys.single()
+        store.journeys = listOf(journey.copy(
+            originArea = "Mansfield",
+            destinationArea = "Nottingham",
+            originCoordinate = GeographicCoordinate(53.1432, -1.1984),
+            destinationCoordinate = GeographicCoordinate(52.9548, -1.1581),
+            routeWaypoints = listOf(ConnectedRouteWaypoint(
+                "Hucknall", GeographicCoordinate(53.0380, -1.2034),
+            )),
+        ))
+        launchConnected()
+        tab("Find").performClick()
+        findField("connected-find-origin").performTextInput("Hucknall")
+        findField("connected-find-destination").performTextInput("Nottingham")
+        scrollFindTo("Search these areas")
+        compose.onNodeWithText("Search these areas").performClick()
+        scrollFindTo("1 matching journey")
+        openDetails()
+        detailsText("Request one seat").performClick()
+        detailsText("Your request is pending").assertIsDisplayed()
+
+        compose.runOnIdle {
+            assertEquals(
+                ConnectedRequestedBroadAreaSegment("Hucknall", "Nottingham"),
+                store.requestSegments.single(),
+            )
+            assertEquals(store.requestSegments.single(), store.requests.single().requestedBroadAreaSegment)
+        }
+        detailsText("Rider requested: Hucknall → Nottingham").assertIsDisplayed()
+        compose.runOnIdle { store.acceptForRiderRemotely() }
+        detailsText("Your seat is confirmed").assertIsDisplayed()
+        detailsText("Rider requested: Hucknall → Nottingham").assertIsDisplayed()
+        compose.onAllNodesWithTag("connected-route-via").assertCountEquals(1)
     }
 
     @Test
@@ -938,6 +976,7 @@ class RydeAppNavigationUiTest {
         compose.onNodeWithText("York → Wakefield").assertIsDisplayed()
         compose.runOnIdle {
             assertEquals(listOf("rider-private-uid" to "selected-offer"), store.requestCalls)
+            assertEquals(listOf(null), store.requestSegments)
             assertEquals(0, legacyCommands)
         }
     }
@@ -1287,6 +1326,7 @@ class RydeAppNavigationUiTest {
             lifecycleChanges.tryEmit(Unit)
         }
         val requestCalls = mutableListOf<Pair<String, String>>()
+        val requestSegments = mutableListOf<ConnectedRequestedBroadAreaSegment?>()
         var requestGate: CompletableDeferred<Unit>? = null
         var createGate: CompletableDeferred<Unit>? = null
         var failNextLoad = false
@@ -1345,6 +1385,16 @@ class RydeAppNavigationUiTest {
             requests.removeAll { it.journeyId == journeyId && it.riderUid == uid }
             requests += ConnectedSeatRequest("${journeyId}_$uid", journeyId, journey.driverUid, uid,
                 ConnectedRequestStatus.PENDING, if (uid == "rider-private-uid") "Taylor" else "Morgan")
+        }
+        override suspend fun requestSeat(
+            uid: String,
+            journeyId: String,
+            requestedBroadAreaSegment: ConnectedRequestedBroadAreaSegment?,
+        ) {
+            requestSegments += requestedBroadAreaSegment
+            requestSeat(uid, journeyId)
+            val index = requests.indexOfFirst { it.journeyId == journeyId && it.riderUid == uid }
+            requests[index] = requests[index].copy(requestedBroadAreaSegment = requestedBroadAreaSegment)
         }
         override suspend fun cancelRequest(uid: String, requestId: String) {
             requestCancelCalls += uid to requestId

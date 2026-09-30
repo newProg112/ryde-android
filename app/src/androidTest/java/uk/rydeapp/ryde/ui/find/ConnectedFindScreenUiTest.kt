@@ -13,6 +13,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import uk.rydeapp.ryde.data.connected.ConnectedJourney
+import uk.rydeapp.ryde.data.connected.ConnectedRequestedBroadAreaSegment
 import uk.rydeapp.ryde.data.connected.ConnectedRequestStatus
 import uk.rydeapp.ryde.data.connected.ConnectedRouteWaypoint
 import uk.rydeapp.ryde.data.connected.ConnectedSeatRequest
@@ -146,6 +147,43 @@ class ConnectedFindScreenUiTest {
             assertEquals(listOf("available"), opened)
             assertEquals(listOf("available"), requested)
         }
+    }
+
+    @Test fun completeResolvedSegmentIsForwardedForRequestAndDetailsWhilePartialResolutionIsNot() {
+        val forwardedRequests = mutableListOf<ConnectedRequestedBroadAreaSegment?>()
+        val forwardedDetails = mutableListOf<ConnectedRequestedBroadAreaSegment?>()
+        val resolved = mutableStateOf(ConnectedFindCriteria(
+            origin = "Hucknall",
+            destination = "Nottingham",
+            originCoordinate = GeographicCoordinate(53.0380, -1.2034),
+            destinationCoordinate = GeographicCoordinate(52.9548, -1.1581),
+        ))
+        compose.setContent { RydeTheme {
+            ConnectedFindScreen(
+                journeys = listOf(item("available", "Hucknall", "Nottingham")),
+                busy = false,
+                requestsEnabled = true,
+                message = null,
+                onRefresh = {},
+                onRequestSeat = {},
+                onManageRequests = {},
+                resolvedCriteria = resolved.value,
+                onRequestSeatWithSegment = { _, segment -> forwardedRequests += segment },
+                onOpenJourneyWithSegment = { _, segment -> forwardedDetails += segment },
+            )
+        } }
+        origin().performTextInput("Hucknall")
+        destination().performTextInput("Nottingham")
+        scrollTo("View trip details").performClick()
+        scrollTo("Request one seat").performClick()
+        compose.runOnIdle {
+            assertEquals(ConnectedRequestedBroadAreaSegment("Hucknall", "Nottingham"), forwardedDetails.single())
+            assertEquals(forwardedDetails, forwardedRequests)
+            resolved.value = resolved.value.copy(originCoordinate = null)
+            forwardedRequests.clear()
+        }
+        scrollTo("Request one seat").performClick()
+        compose.runOnIdle { assertEquals(listOf(null), forwardedRequests) }
     }
 
     @Test fun resultCardRendersTheDriversDeclaredVia() {

@@ -112,6 +112,18 @@ internal fun ConnectedTripsScreen(
         items(content.unavailableIncoming, key = { "unavailable:${it.id}" }) {
             IncomingRequest(it, busy, actionsEnabled, onDecideRequest)
         }
+        if ((content.rider + content.driver).any {
+                it.requestedBroadAreaSegment != null || it.incoming.any { request ->
+                    request.requestedBroadAreaSegment != null
+                }
+            } || content.unavailableIncoming.any { it.requestedBroadAreaSegment != null }
+        ) item {
+            Text(
+                stringResource(R.string.connected_requested_segment_clarification),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         item { Text(stringResource(R.string.connected_trips_refresh_hint), style = MaterialTheme.typography.bodySmall) }
     }
     if (selected != null) AlertDialog(
@@ -212,6 +224,7 @@ private fun TripCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            item.requestedBroadAreaSegment?.let { RequestedBroadAreaSegment(it) }
             item.departureEpochMillis?.let { Text(formatConnectedJourneyDeparture(it)) }
             Text(stringResource(item.roleText), color = MaterialTheme.colorScheme.onSurfaceVariant)
             item.driverDisplayName?.takeIf { item.roleText == R.string.connected_trips_rider }?.let {
@@ -259,6 +272,7 @@ private fun IncomingRequest(
         Text(request.riderDisplayName?.let {
             stringResource(R.string.connected_incoming_rider_name, it)
         } ?: stringResource(R.string.connected_incoming_rider_fallback))
+        request.requestedBroadAreaSegment?.let { RequestedBroadAreaSegment(it) }
         Text(stringResource(request.statusText))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (request.canAccept) Button(enabled = !busy && actionsEnabled,
@@ -267,4 +281,17 @@ private fun IncomingRequest(
                 onClick = { onDecide(request.id, false) }) { Text(stringResource(R.string.connected_decline)) }
         }
     }
+}
+
+@Composable
+private fun RequestedBroadAreaSegment(segment: uk.rydeapp.ryde.data.connected.ConnectedRequestedBroadAreaSegment) {
+    Text(
+        stringResource(
+            R.string.connected_requested_segment,
+            segment.originArea,
+            segment.destinationArea,
+        ),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }

@@ -20,6 +20,42 @@ class ConnectedTripsScreenUiTest {
         request.riderUid, journey.originArea, journey.destinationArea, journey.departureEpochMillis,
         ConnectedTripStatus.CONFIRMED, driverDisplayName = "Morgan Driver")
 
+    @Test fun requestedBroadAreaSegmentRendersSeparatelyForRiderAndDriver() {
+        val segmented = request.copy(requestedBroadAreaSegment = ConnectedRequestedBroadAreaSegment(
+            "Hucknall", "Nottingham",
+        ))
+        val viewer = mutableStateOf(request.riderUid)
+        val accepted = mutableStateOf(false)
+        compose.setContent { RydeTheme {
+            ConnectedTripsScreen(
+                connectedTripsContent(
+                    ConnectedJourneySnapshot(
+                        listOf(journey),
+                        listOf(segmented.copy(status = if (accepted.value) {
+                            ConnectedRequestStatus.ACCEPTED
+                        } else ConnectedRequestStatus.PENDING)),
+                        if (accepted.value) listOf(trip) else emptyList(),
+                    ),
+                    viewer.value,
+                    0,
+                ),
+                false, true, null, {}, {},
+            )
+        } }
+
+        compose.onNodeWithText("Rider requested: Hucknall → Nottingham").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Broad areas only — pickup and drop-off are not agreed yet.")
+            .performScrollTo().assertIsDisplayed()
+        compose.runOnIdle { viewer.value = journey.driverUid }
+        compose.onNodeWithText("Rider requested: Hucknall → Nottingham").performScrollTo().assertIsDisplayed()
+        compose.runOnIdle {
+            viewer.value = request.riderUid
+            accepted.value = true
+        }
+        compose.onNodeWithText("Your seat is confirmed").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Rider requested: Hucknall → Nottingham").assertIsDisplayed()
+    }
+
     @Test fun declaredViaRendersForDriverPendingRiderAndConfirmedRiderWhileNoViaStaysUnchanged() {
         val routed = journey.copy(
             originCoordinate = GeographicCoordinate(53.1432, -1.1984),

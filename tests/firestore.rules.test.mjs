@@ -110,8 +110,16 @@ const journeyWithRoute = (driverUid, seats = 2) => ({
     coordinate: coordinate(53.0380, -1.2034),
   }],
 });
-const request = (journeyId, driverUid, riderUid, status = "PENDING", riderDisplayName = displayNameFor(riderUid)) => ({
+const request = (
+  journeyId,
+  driverUid,
+  riderUid,
+  status = "PENDING",
+  riderDisplayName = displayNameFor(riderUid),
+  requestedSegment,
+) => ({
   journeyId, driverUid, riderUid, status, riderDisplayName,
+  ...(requestedSegment ?? {}),
 });
 const legacyRequest = (journeyId, driverUid, riderUid, status = "PENDING") => ({
   journeyId, driverUid, riderUid, status,
@@ -207,7 +215,7 @@ const acceptRequest = (db, journeyId, requestId, seatsRemaining, acceptanceCount
     );
   });
 
-const requestSeatLikeGateway = (db, journeyId, riderUid) => runTransaction(db, async (transaction) => {
+const requestSeatLikeGateway = (db, journeyId, riderUid, requestedSegment) => runTransaction(db, async (transaction) => {
   const journeyRef = doc(db, `journeys/${journeyId}`);
   const [journeySnapshot, profileSnapshot] = await Promise.all([
     transaction.get(journeyRef),
@@ -217,7 +225,14 @@ const requestSeatLikeGateway = (db, journeyId, riderUid) => runTransaction(db, a
   if (!profileSnapshot.exists()) throw new Error("Rider profile unavailable");
   transaction.set(
     doc(db, `seatRequests/${journeyId}_${riderUid}`),
-    request(journeyId, journeySnapshot.data().driverUid, riderUid, "PENDING", profileSnapshot.data().displayName),
+    request(
+      journeyId,
+      journeySnapshot.data().driverUid,
+      riderUid,
+      "PENDING",
+      profileSnapshot.data().displayName,
+      requestedSegment,
+    ),
   );
 });
 
@@ -962,6 +977,61 @@ test("request identity is the rider profile snapshot and remains participant pri
   assert.equal((await getDoc(doc(rider, "seatRequests/identity_rider"))).data().riderDisplayName, "Riley Rider");
   await assertFails(updateDoc(doc(rider, "seatRequests/identity_rider"), { riderDisplayName: "Riley Renamed" }));
   await assertFails(updateDoc(doc(driver, "seatRequests/identity_rider"), { riderDisplayName: "Riley Renamed" }));
+});
+
+test("requested broad-area segment accepts only a complete valid pair and remains participant private", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  const rider = environment.authenticatedContext("rider").firestore();
+  const stranger = environment.authenticatedContext("stranger").firestore();
+  await assertSucceeds(createJourney(driver, "segment", "driver", 2));
+  const validSegment = {
+    requestedOriginArea: "Hucknall",
+    requestedDestinationArea: "Nottingham",
+  };
+  await assertSucceeds(requestSeatLikeGateway(rider, "segment", "rider", validSegment));
+  const stored = (await getDoc(doc(driver, "seatRequests/segment_rider"))).data();
+  assert.equal(stored.requestedOriginArea, "Hucknall");
+  assert.equal(stored.requestedDestinationArea, "Nottingham");
+  await assertFails(getDoc(doc(stranger, "seatRequests/segment_rider")));
+
+  for (const [index, invalidSegment] of [
+    { requestedOriginArea: "Hucknall" },
+    { requestedDestinationArea: "Nottingham" },
+    { requestedOriginArea: "   ", requestedDestinationArea: "Nottingham" },
+    { requestedOriginArea: "Hucknall 1", requestedDestinationArea: "Nottingham" },
+    { requestedOriginArea: "Hucknall", requestedDestinationArea: "hUcKnAlL" },
+    { requestedOriginArea: "Hucknall", requestedDestinationArea: "Nottingham", unexpected: true },
+  ].entries()) {
+    const journeyId = `invalid-segment-${index}`;
+    await assertSucceeds(createJourney(driver, journeyId, "driver", 1));
+    await assertFails(requestSeatLikeGateway(rider, journeyId, "rider", invalidSegment));
+  }
+});
+
+test("ordinary transitions preserve the segment while CANCELLED to PENDING can replace add or clear it", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  const rider = environment.authenticatedContext("rider").firestore();
+  const first = { requestedOriginArea: "Hucknall", requestedDestinationArea: "Nottingham" };
+  const replacement = { requestedOriginArea: "Arnold", requestedDestinationArea: "Nottingham" };
+  await assertSucceeds(createJourney(driver, "segment-cycle", "driver", 2));
+  const requestRef = doc(rider, "seatRequests/segment-cycle_rider");
+  await assertSucceeds(requestSeatLikeGateway(rider, "segment-cycle", "rider", first));
+  await assertFails(updateDoc(requestRef, { status: "CANCELLED", requestedOriginArea: "Arnold" }));
+  await assertSucceeds(updateDoc(requestRef, { status: "CANCELLED" }));
+  await assertSucceeds(requestSeatLikeGateway(rider, "segment-cycle", "rider", replacement));
+  assert.equal((await getDoc(requestRef)).data().requestedOriginArea, "Arnold");
+  await assertSucceeds(updateDoc(requestRef, { status: "CANCELLED" }));
+  await assertSucceeds(requestSeatLikeGateway(rider, "segment-cycle", "rider"));
+  assert.equal("requestedOriginArea" in (await getDoc(requestRef)).data(), false);
+  await assertSucceeds(updateDoc(requestRef, { status: "CANCELLED" }));
+  await assertSucceeds(requestSeatLikeGateway(rider, "segment-cycle", "rider", first));
+  await assertSucceeds(acceptRequest(driver, "segment-cycle", "segment-cycle_rider", 1, 1));
+  const accepted = (await getDoc(requestRef)).data();
+  assert.equal(accepted.requestedOriginArea, "Hucknall");
+  assert.equal(accepted.requestedDestinationArea, "Nottingham");
+  const trip = (await getDoc(doc(driver, "confirmedTrips/segment-cycle_rider"))).data();
+  assert.equal("requestedOriginArea" in trip, false);
+  assert.equal("requestedDestinationArea" in trip, false);
 });
 
 test("duplicate display names remain distinct requests keyed by deterministic request id", async () => {

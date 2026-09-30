@@ -84,6 +84,17 @@ internal fun ConnectedTripDetailsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            summary?.requestedBroadAreaSegment?.let { segment ->
+                Text(
+                    stringResource(
+                        R.string.connected_requested_segment,
+                        segment.originArea,
+                        segment.destinationArea,
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             departure?.let { Text(formatConnectedJourneyDeparture(it)) }
             if (summary != null) {
                 Text(stringResource(summary.roleText))
@@ -129,6 +140,17 @@ internal fun ConnectedTripDetailsScreen(
                     Text(request.riderDisplayName?.let {
                         stringResource(R.string.connected_incoming_rider_name, it)
                     } ?: stringResource(R.string.connected_incoming_rider_fallback))
+                    request.requestedBroadAreaSegment?.let { segment ->
+                        Text(
+                            stringResource(
+                                R.string.connected_requested_segment,
+                                segment.originArea,
+                                segment.destinationArea,
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     Text(stringResource(request.statusText))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (request.canAccept) Button(enabled = !busy && actionsEnabled,
@@ -167,6 +189,15 @@ internal fun ConnectedTripDetailsScreen(
             }
         } }
         item {
+            if (summary?.requestedBroadAreaSegment != null ||
+                summary?.incoming?.any { it.requestedBroadAreaSegment != null } == true
+            ) {
+                Text(
+                    stringResource(R.string.connected_requested_segment_clarification),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Text(stringResource(R.string.connected_find_privacy), style = MaterialTheme.typography.bodySmall)
             Text(stringResource(R.string.connected_refresh_hint), style = MaterialTheme.typography.bodySmall)
         }

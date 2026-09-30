@@ -54,6 +54,23 @@ class ConnectedTripDetailsScreenUiTest {
         return compose.onNodeWithText(label)
     }
 
+    @Test fun requestedBroadAreaSegmentRendersOutsideDriverRouteInDetails() {
+        val segmented = request.copy(requestedBroadAreaSegment = ConnectedRequestedBroadAreaSegment(
+            "Hucknall", "Nottingham",
+        ))
+        compose.setContent { RydeTheme {
+            ConnectedTripDetailsScreen(
+                content(ConnectedJourneySnapshot(listOf(journey), listOf(segmented))),
+                false, true, null, {}, {}, {}, { _, _ -> }, {}, {},
+            )
+        } }
+
+        text("York → Leeds").assertIsDisplayed()
+        text("Rider requested: Hucknall → Nottingham").assertIsDisplayed()
+        text("Broad areas only — pickup and drop-off are not agreed yet.").assertIsDisplayed()
+        compose.onAllNodesWithTag("connected-route-via").assertCountEquals(0)
+    }
+
     @Test fun declaredViaRendersInDetailsAndAccessibleOrderedRoute() {
         val routed = journey.copy(
             originArea = "Mansfield",

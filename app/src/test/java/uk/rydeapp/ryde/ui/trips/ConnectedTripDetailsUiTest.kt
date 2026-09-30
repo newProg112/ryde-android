@@ -95,6 +95,30 @@ class ConnectedTripDetailsUiTest {
         assertFalse(cancelled.canRequest)
     }
 
+    @Test fun requestedSegmentReusesSafeTripsProjectionInRiderAndDriverDetails() {
+        val segment = ConnectedRequestedBroadAreaSegment("Hucknall", "Nottingham")
+        val pending = request.copy(requestedBroadAreaSegment = segment)
+        assertEquals(
+            segment,
+            details(ConnectedJourneySnapshot(listOf(journey), listOf(pending)))
+                .summary?.requestedBroadAreaSegment,
+        )
+        assertEquals(
+            segment,
+            details(ConnectedJourneySnapshot(listOf(journey), listOf(pending)), uid = journey.driverUid)
+                .summary?.incoming?.single()?.requestedBroadAreaSegment,
+        )
+        val accepted = pending.copy(status = ConnectedRequestStatus.ACCEPTED)
+        assertEquals(
+            segment,
+            details(ConnectedJourneySnapshot(listOf(journey), listOf(accepted), listOf(trip)))
+                .summary?.requestedBroadAreaSegment,
+        )
+        assertNull(details(ConnectedJourneySnapshot(
+            listOf(journey), listOf(accepted.copy(driverUid = "mismatch")), listOf(trip),
+        )).summary?.requestedBroadAreaSegment)
+    }
+
     @Test fun driverDetailsSummariseGuardedSeatAllocationWithoutAddingRiderMetadata() {
         val accepted = request.copy(status = ConnectedRequestStatus.ACCEPTED)
         val snapshot = ConnectedJourneySnapshot(listOf(journey), listOf(accepted), listOf(trip))

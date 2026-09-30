@@ -12,6 +12,8 @@ import uk.rydeapp.ryde.domain.JourneyGeographicEndpoints
 import uk.rydeapp.ryde.domain.JourneyGeographicRoute
 import uk.rydeapp.ryde.domain.combinedEndpointScore
 import uk.rydeapp.ryde.domain.model.GeographicCoordinate
+import uk.rydeapp.ryde.data.connected.ConnectedJourneyValidator
+import uk.rydeapp.ryde.data.connected.ConnectedRequestedBroadAreaSegment
 import uk.rydeapp.ryde.ui.home.ConnectedHomeJourney
 import uk.rydeapp.ryde.ui.place.BroadAreaCoordinates
 
@@ -36,6 +38,18 @@ internal fun ConnectedFindCriteria.withResolvedBroadAreas(
     originCoordinate = coordinates.from,
     destinationCoordinate = coordinates.to,
 )
+
+/** Returns rider intent only for a resolved, valid, two-ended Find search. */
+internal fun ConnectedFindCriteria.requestedBroadAreaSegmentOrNull(): ConnectedRequestedBroadAreaSegment? {
+    val resolvedOrigin = origin.trim()
+    val resolvedDestination = destination.trim()
+    if (originCoordinate == null || destinationCoordinate == null) return null
+    if (!ConnectedJourneyValidator.isBroadArea(resolvedOrigin) ||
+        !ConnectedJourneyValidator.isBroadArea(resolvedDestination) ||
+        resolvedOrigin.equals(resolvedDestination, ignoreCase = true)
+    ) return null
+    return ConnectedRequestedBroadAreaSegment(resolvedOrigin, resolvedDestination)
+}
 
 internal fun filterConnectedFindJourneys(
     journeys: List<ConnectedHomeJourney>,

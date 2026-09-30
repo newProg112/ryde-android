@@ -119,6 +119,25 @@ class ConnectedFindUiTest {
         assertEquals(listOf(first), filterConnectedFindJourneys(journeys, resolved))
     }
 
+    @Test fun resolvedTwoEndedFindDerivesRequestedSegmentAndIncompleteSearchesDoNot() {
+        val from = GeographicCoordinate(53.0380, -1.2034)
+        val to = GeographicCoordinate(52.9548, -1.1581)
+        val resolved = ConnectedFindCriteria(
+            origin = "  Hucknall ",
+            destination = " Nottingham ",
+            originCoordinate = from,
+            destinationCoordinate = to,
+        )
+
+        assertEquals("Hucknall", resolved.requestedBroadAreaSegmentOrNull()?.originArea)
+        assertEquals("Nottingham", resolved.requestedBroadAreaSegmentOrNull()?.destinationArea)
+        assertNull(resolved.copy(originCoordinate = null).requestedBroadAreaSegmentOrNull())
+        assertNull(resolved.copy(destination = "").requestedBroadAreaSegmentOrNull())
+        assertNull(resolved.copy(origin = "Nottingham").requestedBroadAreaSegmentOrNull())
+        assertNull(ConnectedFindCriteria(departureDate = LocalDate.of(2026, 9, 18))
+            .requestedBroadAreaSegmentOrNull())
+    }
+
     @Test fun independentlyUnresolvedEndpointReachesBoundaryAsNullWithoutChangingFilter() {
         val destination = GeographicCoordinate(52.9548, -1.1581)
         val resolved = ConnectedFindCriteria("Unknown", "Nottingham").withResolvedBroadAreas(

@@ -58,6 +58,7 @@ class FirestoreConnectedCancellationEmulatorTest {
             ))
             val journey = driver.load(driverUid).journeys.single { it.driverUid == driverUid }
             assertEquals(listOf(routeWaypoint), journey.routeWaypoints)
+            val requestedSegment = ConnectedRequestedBroadAreaSegment("Hucknall", "Nottingham")
             val observedPending = async {
                 withTimeout(10_000) {
                     driver.observeSnapshot(driverUid).first { snapshot ->
@@ -65,11 +66,12 @@ class FirestoreConnectedCancellationEmulatorTest {
                     }
                 }
             }
-            rider.requestSeat(riderUid, journey.id)
+            rider.requestSeat(riderUid, journey.id, requestedSegment)
             val requestId = "${journey.id}_$riderUid"
             assertEquals(requestId, observedPending.await().requests.single { it.id == requestId }.id)
             val driverRequest = driver.load(driverUid).requests.single { it.id == requestId }
             assertEquals("Shared Rider Label", driverRequest.riderDisplayName)
+            assertEquals(requestedSegment, driverRequest.requestedBroadAreaSegment)
             assertEquals(driverRequest, rider.load(riderUid).requests.single { it.id == requestId })
             assertFalse(runCatching {
                 driverDb.collection("users").document(riderUid).get(Source.SERVER).await()
@@ -87,8 +89,16 @@ class FirestoreConnectedCancellationEmulatorTest {
             driver.decide(driverUid, requestId, true)
             val acceptedSnapshot = observedAcceptance.await()
             assertEquals(ConnectedTripStatus.CONFIRMED, acceptedSnapshot.confirmedTrips.single().status)
+            assertEquals(
+                requestedSegment,
+                acceptedSnapshot.requests.single { it.id == requestId }.requestedBroadAreaSegment,
+            )
             val accepted = rider.load(riderUid).confirmedTrips.single()
             assertEquals("Driver Label", accepted.driverDisplayName)
+            val acceptedTripData = riderDb.collection("confirmedTrips").document(requestId)
+                .get(Source.SERVER).await().data.orEmpty()
+            assertFalse("requestedOriginArea" in acceptedTripData)
+            assertFalse("requestedDestinationArea" in acceptedTripData)
             val driverCoordination = FirestoreConnectedCoordinationStore(driverDb)
             val riderCoordination = FirestoreConnectedCoordinationStore(riderDb)
             driverCoordination.sendMessage(

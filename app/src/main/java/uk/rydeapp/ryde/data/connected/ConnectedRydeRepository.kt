@@ -182,8 +182,11 @@ class ConnectedRydeRepository(
     /** Safe provider-neutral lookup boundary used by the normal Offer selection flow. */
     suspend fun resolveConnectedPlace(broadPlace: String): PlaceResolution = safelyResolve(broadPlace)
 
-    suspend fun requestConnectedSeat(journeyId: String): ConnectedJourneyCommandResult =
-        journeyCommand { store, uid -> store.requestSeat(uid, journeyId) }
+    suspend fun requestConnectedSeat(
+        journeyId: String,
+        requestedBroadAreaSegment: ConnectedRequestedBroadAreaSegment? = null,
+    ): ConnectedJourneyCommandResult =
+        journeyCommand { store, uid -> store.requestSeat(uid, journeyId, requestedBroadAreaSegment) }
 
     suspend fun cancelConnectedRequest(requestId: String): ConnectedJourneyCommandResult =
         journeyCommand { store, uid -> store.cancelRequest(uid, requestId) }

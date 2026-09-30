@@ -462,6 +462,52 @@ class ConnectedJourneyFlowTest {
     }
 
     @Test
+    fun `requested broad area segment maps round trip while legacy and malformed requests stay safe`() {
+        val journey = ConnectedJourney(
+            "journey-1", "driver", "Mansfield", "Nottingham",
+            4_070_908_800_000L, 1, 1,
+        )
+        val segment = ConnectedRequestedBroadAreaSegment("Hucknall", "Nottingham")
+        val data = FirestoreJourneyMapper.requestData(journey, "rider", "Riley Rider", segment)
+
+        assertEquals("Hucknall", data["requestedOriginArea"])
+        assertEquals("Nottingham", data["requestedDestinationArea"])
+        assertEquals(
+            segment,
+            FirestoreJourneyMapper.request("journey-1_rider", data)?.requestedBroadAreaSegment,
+        )
+        assertNull(FirestoreJourneyMapper.request(
+            "journey-1_rider", data - "requestedOriginArea",
+        ))
+        assertNull(FirestoreJourneyMapper.request(
+            "journey-1_rider", data + ("requestedOriginArea" to "   "),
+        ))
+        assertNull(FirestoreJourneyMapper.request(
+            "journey-1_rider", data + ("requestedOriginArea" to "Nottingham"),
+        ))
+        assertNull(FirestoreJourneyMapper.request(
+            "journey-1_rider", data + ("unexpected" to true),
+        ))
+        assertNull(FirestoreJourneyMapper.request(
+            "journey-1_rider",
+            mapOf(
+                "journeyId" to "journey-1",
+                "driverUid" to "driver",
+                "riderUid" to "rider",
+                "status" to "PENDING",
+            ),
+        )?.requestedBroadAreaSegment)
+        assertFalse(FirestoreJourneyMapper.confirmedTripData(
+            journey,
+            ConnectedSeatRequest(
+                "journey-1_rider", journey.id, journey.driverUid, "rider",
+                ConnectedRequestStatus.ACCEPTED, "Riley Rider", segment,
+            ),
+            "Driver Name",
+        ).keys.any { it.startsWith("requested") })
+    }
+
+    @Test
     fun `offer validation rejects private-looking areas past times and seat limits`() {
         assertTrue(ConnectedJourneyValidator.offer("12 High Street", "Derby", "2099-01-01 10:00", "1") is ValidationResult.Invalid)
         assertTrue(ConnectedJourneyValidator.offer("Nottingham", "Derby", "2000-01-01 10:00", "1") is ValidationResult.Invalid)

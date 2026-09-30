@@ -35,6 +35,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import uk.rydeapp.ryde.R
+import uk.rydeapp.ryde.data.connected.ConnectedRequestedBroadAreaSegment
 import uk.rydeapp.ryde.ui.components.ConnectedJourneyCard
 import uk.rydeapp.ryde.ui.components.InfoCard
 import uk.rydeapp.ryde.ui.components.RouteMark
@@ -66,6 +67,8 @@ internal fun ConnectedFindScreen(
     placeSelectionPrompt: BroadAreaPlaceSelectionPrompt? = null,
     onPlaceSelected: (BroadAreaEndpoint, uk.rydeapp.ryde.domain.PlaceMatch) -> Unit = { _, _ -> },
     onDismissPlaceSelection: () -> Unit = {},
+    onRequestSeatWithSegment: (String, ConnectedRequestedBroadAreaSegment?) -> Unit = { id, _ -> onRequestSeat(id) },
+    onOpenJourneyWithSegment: (String, ConnectedRequestedBroadAreaSegment?) -> Unit = { id, _ -> onOpenJourney(id) },
 ) {
     var origin by rememberSaveable { mutableStateOf("") }
     var destination by rememberSaveable { mutableStateOf("") }
@@ -78,6 +81,7 @@ internal fun ConnectedFindScreen(
         destinationCoordinate = matchingResolution?.destinationCoordinate,
     )
     val results = matchConnectedFindJourneys(journeys, criteria)
+    val requestedBroadAreaSegment = criteria.requestedBroadAreaSegmentOrNull()
 
     fun clearFilters() {
         onPlaceDraftChanged()
@@ -201,7 +205,9 @@ internal fun ConnectedFindScreen(
         items(results, key = { it.item.journey.id }) { result ->
             val item = result.item
             ConnectedJourneyCard(
-                item, busy, requestsEnabled, onRequestSeat,
+                item, busy, requestsEnabled, { journeyId ->
+                    onRequestSeatWithSegment(journeyId, requestedBroadAreaSegment)
+                },
                 modifier = Modifier.testTag("connected-find-result-${item.journey.id}"),
                 allowRerequest = true,
                 onManageRequests = onManageRequests,
@@ -211,7 +217,7 @@ internal fun ConnectedFindScreen(
                     }
                 },
                 footerContent = {
-                    TextButton(onClick = { onOpenJourney(item.journey.id) }) {
+                    TextButton(onClick = { onOpenJourneyWithSegment(item.journey.id, requestedBroadAreaSegment) }) {
                         Text(stringResource(R.string.connected_view_trip_details))
                     }
                 },

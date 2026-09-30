@@ -18,8 +18,17 @@ service cloud.firestore {
       return value is string
         && value.size() > 0
         && value.size() <= 60
+        && value.matches('.*[^\\s].*')
         && !value.matches('.*[0-9,].*')
         && !value.matches('.*[\\x00-\\x1F\\x7F-\\x9F].*');
+    }
+
+    function validRequestedBroadAreaSegment(data) {
+      return ((!('requestedOriginArea' in data) && !('requestedDestinationArea' in data))
+        || ('requestedOriginArea' in data && 'requestedDestinationArea' in data
+          && validBroadArea(data.requestedOriginArea)
+          && validBroadArea(data.requestedDestinationArea)
+          && data.requestedOriginArea.lower() != data.requestedDestinationArea.lower()));
     }
 
     function validCoordinate(value) {
@@ -127,13 +136,17 @@ service cloud.firestore {
     }
 
     function validSeatRequest(data) {
-      return data.keys().hasOnly(['journeyId', 'driverUid', 'riderUid', 'status', 'riderDisplayName'])
+      return data.keys().hasOnly([
+          'journeyId', 'driverUid', 'riderUid', 'status', 'riderDisplayName',
+          'requestedOriginArea', 'requestedDestinationArea'
+        ])
         && data.keys().hasAll(['journeyId', 'driverUid', 'riderUid', 'status'])
         && data.journeyId is string
         && data.driverUid is string
         && data.riderUid is string
         && data.driverUid != data.riderUid
         && (!('riderDisplayName' in data) || validDisplayName(data.riderDisplayName))
+        && validRequestedBroadAreaSegment(data)
         && data.status in ['PENDING', 'ACCEPTED', 'DECLINED', 'CANCELLED', 'CANCELLED_AFTER_ACCEPTANCE'];
     }
 
@@ -500,7 +513,10 @@ service cloud.firestore {
           || (resource.data.status == 'CANCELLED'
             && request.resource.data.status == 'PENDING'
             && request.resource.data.diff(resource.data).affectedKeys()
-              .hasOnly(['status', 'riderDisplayName'])
+              .hasOnly([
+                'status', 'riderDisplayName',
+                'requestedOriginArea', 'requestedDestinationArea'
+              ])
             && requestSnapshotMatchesRiderProfile(request.resource.data)
             && exists(journeyPath(resource.data.journeyId))
             && get(journeyPath(resource.data.journeyId)).data.driverUid == resource.data.driverUid

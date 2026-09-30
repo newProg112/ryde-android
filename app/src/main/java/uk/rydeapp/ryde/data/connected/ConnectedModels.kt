@@ -123,7 +123,20 @@ data class ConnectedSeatRequest(
     val status: ConnectedRequestStatus,
     /** Immutable for one request cycle; null only for legacy records. */
     val riderDisplayName: String? = null,
+    /** Rider search intent in broad areas; never an agreed pickup/drop-off. */
+    val requestedBroadAreaSegment: ConnectedRequestedBroadAreaSegment? = null,
 )
+
+data class ConnectedRequestedBroadAreaSegment(
+    val originArea: String,
+    val destinationArea: String,
+) {
+    init {
+        require(ConnectedJourneyValidator.isBroadArea(originArea))
+        require(ConnectedJourneyValidator.isBroadArea(destinationArea))
+        require(!originArea.equals(destinationArea, ignoreCase = true))
+    }
+}
 
 data class ConnectedConfirmedTrip(
     val id: String,
@@ -254,6 +267,7 @@ object FirestoreJourneyMapper {
     private val routeWaypointFields = setOf("area", "coordinate")
     private val legacyRequestFields = setOf("journeyId", "driverUid", "riderUid", "status")
     private val requestFields = legacyRequestFields + "riderDisplayName"
+    private val requestedSegmentFields = setOf("requestedOriginArea", "requestedDestinationArea")
     private val acceptanceGuardFields = setOf("driverUid", "acceptanceCount", "lastAcceptedRequestId")
     private val legacyConfirmedTripFields = setOf(
         "journeyId",
@@ -288,13 +302,20 @@ object FirestoreJourneyMapper {
         journey: ConnectedJourney,
         riderUid: String,
         riderDisplayName: String,
-    ): Map<String, Any> = mapOf(
-        "journeyId" to journey.id,
-        "driverUid" to journey.driverUid,
-        "riderUid" to riderUid,
-        "status" to ConnectedRequestStatus.PENDING.name,
-        "riderDisplayName" to riderDisplayName,
-    )
+        requestedBroadAreaSegment: ConnectedRequestedBroadAreaSegment? = null,
+    ): Map<String, Any> = buildMap {
+        putAll(mapOf(
+            "journeyId" to journey.id,
+            "driverUid" to journey.driverUid,
+            "riderUid" to riderUid,
+            "status" to ConnectedRequestStatus.PENDING.name,
+            "riderDisplayName" to riderDisplayName,
+        ))
+        requestedBroadAreaSegment?.let {
+            put("requestedOriginArea", it.originArea)
+            put("requestedDestinationArea", it.destinationArea)
+        }
+    }
 
     fun initialAcceptanceGuardData(driverUid: String): Map<String, Any?> = mapOf(
         "driverUid" to driverUid,
@@ -359,15 +380,29 @@ object FirestoreJourneyMapper {
     }
 
     fun request(id: String, data: Map<String, Any?>): ConnectedSeatRequest? {
-        if (data.keys != legacyRequestFields && data.keys != requestFields) return null
+        if (data.keys !in setOf(
+                legacyRequestFields,
+                requestFields,
+                legacyRequestFields + requestedSegmentFields,
+                requestFields + requestedSegmentFields,
+            )) return null
         val status = runCatching { ConnectedRequestStatus.valueOf(data["status"] as? String ?: return null) }.getOrNull() ?: return null
         val riderDisplayName = if ("riderDisplayName" in data) {
             (data["riderDisplayName"] as? String)?.takeIf(::isSafeDisplayName) ?: return null
+        } else null
+        val requestedBroadAreaSegment = if (requestedSegmentFields.all(data::containsKey)) {
+            val origin = (data["requestedOriginArea"] as? String)?.takeIf(ConnectedJourneyValidator::isBroadArea)
+                ?: return null
+            val destination = (data["requestedDestinationArea"] as? String)?.takeIf(ConnectedJourneyValidator::isBroadArea)
+                ?: return null
+            if (origin.equals(destination, ignoreCase = true)) return null
+            ConnectedRequestedBroadAreaSegment(origin, destination)
         } else null
         return ConnectedSeatRequest(
             id, data["journeyId"] as? String ?: return null,
             data["driverUid"] as? String ?: return null,
             data["riderUid"] as? String ?: return null, status, riderDisplayName,
+            requestedBroadAreaSegment,
         ).takeIf { it.id == "${it.journeyId}_${it.riderUid}" && it.driverUid != it.riderUid }
     }
 

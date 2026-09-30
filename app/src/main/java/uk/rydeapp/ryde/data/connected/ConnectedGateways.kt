@@ -30,6 +30,11 @@ interface ConnectedJourneyStore {
     fun observeSnapshot(uid: String): Flow<ConnectedJourneySnapshot> = emptyFlow()
     suspend fun create(uid: String, draft: ConnectedJourneyDraft)
     suspend fun requestSeat(uid: String, journeyId: String)
+    suspend fun requestSeat(
+        uid: String,
+        journeyId: String,
+        requestedBroadAreaSegment: ConnectedRequestedBroadAreaSegment?,
+    ) = requestSeat(uid, journeyId)
     suspend fun cancelRequest(uid: String, requestId: String)
     suspend fun cancelConfirmedSeat(uid: String, tripId: String)
     suspend fun cancelJourney(uid: String, journeyId: String)
@@ -241,7 +246,14 @@ class FirestoreConnectedJourneyStore(private val firestore: FirebaseFirestore) :
         }.await()
     }
 
-    override suspend fun requestSeat(uid: String, journeyId: String) {
+    override suspend fun requestSeat(uid: String, journeyId: String) =
+        requestSeat(uid, journeyId, null)
+
+    override suspend fun requestSeat(
+        uid: String,
+        journeyId: String,
+        requestedBroadAreaSegment: ConnectedRequestedBroadAreaSegment?,
+    ) {
         val journeyRef = firestore.collection(JOURNEYS).document(journeyId)
         val requestRef = firestore.collection(REQUESTS).document("${journeyId}_$uid")
         val profileRef = firestore.collection(USERS).document(uid)
@@ -256,7 +268,9 @@ class FirestoreConnectedJourneyStore(private val firestore: FirebaseFirestore) :
                     journey.seatsRemaining > 0 &&
                     journey.departureEpochMillis > System.currentTimeMillis(),
             )
-            transaction.set(requestRef, FirestoreJourneyMapper.requestData(journey, uid, profile.displayName))
+            transaction.set(requestRef, FirestoreJourneyMapper.requestData(
+                journey, uid, profile.displayName, requestedBroadAreaSegment,
+            ))
         }.await()
     }
 

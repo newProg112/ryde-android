@@ -87,6 +87,8 @@
     <string name="connected_offer_destination">To town or district</string>
     <string name="connected_offer_via">Via broad area (optional)</string>
     <string name="connected_route_via">Via %1$s</string>
+    <string name="connected_requested_segment">Rider requested: %1$s → %2$s</string>
+    <string name="connected_requested_segment_clarification">Broad areas only — pickup and drop-off are not agreed yet.</string>
     <string name="connected_offer_departure">Departure</string>
     <string name="connected_offer_seats">Spare seats (1–8)</string>
     <string name="connected_offer_future">Choose a departure in the future.</string>

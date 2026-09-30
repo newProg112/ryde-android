@@ -25,6 +25,7 @@ internal data class ConnectedTripsItem(
     val messageTarget: ConnectedMessageTarget? = null,
     /** One immutable broad area on the driver's declared route, never a rider pickup. */
     val viaArea: String? = null,
+    val requestedBroadAreaSegment: ConnectedRequestedBroadAreaSegment? = null,
 )
 
 internal data class ConnectedMessageTarget(
@@ -39,6 +40,7 @@ internal data class ConnectedIncomingRequest(
     val canAccept: Boolean,
     val canDecline: Boolean,
     val messageTarget: ConnectedMessageTarget? = null,
+    val requestedBroadAreaSegment: ConnectedRequestedBroadAreaSegment? = null,
 )
 
 internal data class ConnectedTripsContent(
@@ -88,6 +90,7 @@ private fun incomingRequest(
             it.journeyId == request.journeyId && it.driverUid == request.driverUid &&
             it.riderUid == request.riderUid && it.driverUid == uid
     }?.let { ConnectedMessageTarget(it.id, request.riderDisplayName) },
+    request.requestedBroadAreaSegment,
 )
 
 private fun List<ConnectedTripsItem>.orderedForTrips(nowEpochMillis: Long): List<ConnectedTripsItem> =
@@ -125,6 +128,12 @@ internal fun connectedTripsContent(
     val riderTrips = trips.map { trip ->
         val journey = journeys[trip.journeyId]
         val lifecycle = ConnectedJourneyLifecycle.trip(trip, journey, nowEpochMillis)
+        val acceptedRequest = snapshot.requests.singleOrNull { request ->
+            request.id == trip.acceptedRequestId &&
+                request.journeyId == trip.journeyId &&
+                request.driverUid == trip.driverUid &&
+                request.riderUid == trip.riderUid
+        }
         ConnectedTripsItem(
             "trip:${trip.id}", trip.originArea, trip.destinationArea, trip.departureEpochMillis,
             when (lifecycle) {
@@ -144,6 +153,7 @@ internal fun connectedTripsContent(
             viaArea = journey
                 ?.takeIf { ConnectedJourneyLifecycle.coordinationJourneyMatches(trip, it) }
                 ?.routeWaypoints?.singleOrNull()?.area,
+            requestedBroadAreaSegment = acceptedRequest?.requestedBroadAreaSegment,
         )
     }
     val representedRequests = trips.map { it.acceptedRequestId }.toSet()
@@ -170,7 +180,8 @@ internal fun connectedTripsContent(
             journeyStatusText = R.string.connected_trips_driver_cancelled.takeIf {
                 journey?.status == ConnectedJourneyStatus.CANCELLED && status != R.string.connected_trips_driver_cancelled
             }, journeyId = request.journeyId,
-            viaArea = journey?.routeWaypoints?.singleOrNull()?.area)
+            viaArea = journey?.routeWaypoints?.singleOrNull()?.area,
+            requestedBroadAreaSegment = request.requestedBroadAreaSegment)
     }
     val owned = snapshot.journeys.filter { it.driverUid == uid }
     val incoming = snapshot.requests.filter { it.driverUid == uid && it.riderUid != uid }

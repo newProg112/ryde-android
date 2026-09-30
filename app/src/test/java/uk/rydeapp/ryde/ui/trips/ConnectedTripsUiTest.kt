@@ -63,6 +63,31 @@ class ConnectedTripsUiTest {
         assertNull(content(t = listOf(trip.copy(driverDisplayName = null))).rider.single().driverDisplayName)
     }
 
+    @Test fun `requested segment reaches rider pending driver incoming and safely linked confirmation`() {
+        val segment = ConnectedRequestedBroadAreaSegment("Hucknall", "Nottingham")
+        val segmented = request.copy(requestedBroadAreaSegment = segment)
+        assertEquals(segment, content(r = listOf(segmented)).rider.single().requestedBroadAreaSegment)
+        assertEquals(
+            segment,
+            content(r = listOf(segmented), uid = journey.driverUid)
+                .driver.single().incoming.single().requestedBroadAreaSegment,
+        )
+        val accepted = segmented.copy(status = ConnectedRequestStatus.ACCEPTED)
+        assertEquals(
+            segment,
+            content(r = listOf(accepted), t = listOf(trip)).rider.single().requestedBroadAreaSegment,
+        )
+        listOf(
+            accepted.copy(id = "wrong"),
+            accepted.copy(journeyId = "wrong"),
+            accepted.copy(driverUid = "wrong"),
+            accepted.copy(riderUid = "wrong"),
+        ).forEach { mismatch ->
+            assertNull(content(r = listOf(mismatch), t = listOf(trip)).rider
+                .single { it.key == "trip:${trip.id}" }.requestedBroadAreaSegment)
+        }
+    }
+
     @Test fun `declared Via reaches driver pending rider and confirmed rider only through a valid journey link`() {
         val routed = journey.copy(
             originCoordinate = GeographicCoordinate(53.1432, -1.1984),

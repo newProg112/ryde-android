@@ -33,6 +33,7 @@ import uk.rydeapp.ryde.data.AccountSession
 import uk.rydeapp.ryde.data.connected.ConnectedJourneyCommandResult
 import uk.rydeapp.ryde.data.connected.ConnectedJourneyLifecycle
 import uk.rydeapp.ryde.data.connected.ConnectedRydeRepository
+import uk.rydeapp.ryde.data.connected.ConnectedRequestedBroadAreaSegment
 import uk.rydeapp.ryde.domain.PlaceMatch
 import uk.rydeapp.ryde.domain.PlaceResolution
 import uk.rydeapp.ryde.domain.model.ProfileContent
@@ -64,6 +65,7 @@ private data class ConnectedNavigation(
     val detailJourneyId: String? = null,
     val conversationTripId: String? = null,
     val conversationName: String? = null,
+    val requestedBroadAreaSegment: ConnectedRequestedBroadAreaSegment? = null,
 )
 
 private data class PendingConnectedOffer(
@@ -99,17 +101,28 @@ internal fun ConnectedReadyApp(
     // Include the owner in saved values: rememberSaveable inputs alone do not validate restored state.
     val navigationSaver = remember(session.accountId) {
         listSaver<ConnectedNavigation, String>(
-            save = { listOf(session.accountId, it.destination.name, it.labSection?.name.orEmpty(), it.detailJourneyId.orEmpty(), it.conversationTripId.orEmpty(), it.conversationName.orEmpty()) },
+            save = { listOf(
+                session.accountId, it.destination.name, it.labSection?.name.orEmpty(),
+                it.detailJourneyId.orEmpty(), it.conversationTripId.orEmpty(), it.conversationName.orEmpty(),
+                it.requestedBroadAreaSegment?.originArea.orEmpty(),
+                it.requestedBroadAreaSegment?.destinationArea.orEmpty(),
+            ) },
             restore = {
                 if (it[0] != session.accountId) ConnectedNavigation()
                 else {
                     val detail = it.getOrNull(3)?.takeIf { id -> id.isNotBlank() && it[2].isEmpty() }
+                    val requestedSegment = if (detail != null && it.getOrNull(6)?.isNotBlank() == true &&
+                        it.getOrNull(7)?.isNotBlank() == true
+                    ) runCatching {
+                        ConnectedRequestedBroadAreaSegment(it[6], it[7])
+                    }.getOrNull() else null
                     ConnectedNavigation(
                         RydeDestination.valueOf(it[1]),
                         it[2].takeIf(String::isNotEmpty)?.let(ConnectedJourneySection::valueOf),
                         detail,
                         it.getOrNull(4)?.takeIf { id -> id.isNotBlank() && detail != null },
                         it.getOrNull(5)?.takeIf(String::isNotBlank),
+                        requestedSegment,
                     )
                 }
             },
@@ -175,14 +188,20 @@ internal fun ConnectedReadyApp(
         }
     }
     val openLab: (ConnectedJourneySection) -> Unit = { section ->
-        if (!busy) navigation = navigation.copy(labSection = section, detailJourneyId = null, conversationTripId = null, conversationName = null)
+        if (!busy) navigation = navigation.copy(
+            labSection = section, detailJourneyId = null, conversationTripId = null,
+            conversationName = null, requestedBroadAreaSegment = null,
+        )
     }
     val closeLab: () -> Unit = {
         if (!busy && !labBusy) navigation = navigation.copy(labSection = null)
     }
     val labSection = navigation.labSection
     BackHandler(enabled = labSection != null, onBack = closeLab)
-    val closeDetails: () -> Unit = { navigation = navigation.copy(detailJourneyId = null, conversationTripId = null, conversationName = null) }
+    val closeDetails: () -> Unit = { navigation = navigation.copy(
+        detailJourneyId = null, conversationTripId = null, conversationName = null,
+        requestedBroadAreaSegment = null,
+    ) }
     val closeConversation: () -> Unit = { navigation = navigation.copy(conversationTripId = null, conversationName = null) }
     BackHandler(enabled = labSection == null && navigation.conversationTripId != null, onBack = closeConversation)
     BackHandler(enabled = labSection == null && navigation.detailJourneyId != null && navigation.conversationTripId == null, onBack = closeDetails)
@@ -205,7 +224,7 @@ internal fun ConnectedReadyApp(
     val nowEpochMillis = lifecycleNowEpochMillis
     val discoveryJourneys = connectedHomeJourneys(snapshot, session.accountId, nowEpochMillis)
     val tripsContent = connectedTripsContent(snapshot, session.accountId, nowEpochMillis)
-    val requestSeat: (String) -> Unit = { journeyId ->
+    val requestSeat: (String, ConnectedRequestedBroadAreaSegment?) -> Unit = { journeyId, requestedSegment ->
         // Check repository truth and time again at the shared Home/Find command boundary.
         val canRequest = connectedHomeJourneys(
             repository.journeyState.value, session.accountId, currentTimeMillis(),
@@ -213,7 +232,7 @@ internal fun ConnectedReadyApp(
         if (canRequest && !refreshRequired) {
             pendingRequestNoticeJourneyId = null
             runCommand {
-                when (val result = repository.requestConnectedSeat(journeyId)) {
+                when (val result = repository.requestConnectedSeat(journeyId, requestedSegment)) {
                     ConnectedJourneyCommandResult.Success -> {
                         pendingRequestNoticeJourneyId = journeyId
                         resources.getString(R.string.connected_requested)
@@ -434,7 +453,16 @@ internal fun ConnectedReadyApp(
     }
     val visibleMessage = currentMessage(null)
     val openJourney: (String) -> Unit = { id ->
-        if (id.isNotBlank()) navigation = navigation.copy(detailJourneyId = id, labSection = null, conversationTripId = null, conversationName = null)
+        if (id.isNotBlank()) navigation = navigation.copy(
+            detailJourneyId = id, labSection = null, conversationTripId = null,
+            conversationName = null, requestedBroadAreaSegment = null,
+        )
+    }
+    val openFindJourney: (String, ConnectedRequestedBroadAreaSegment?) -> Unit = { id, requestedSegment ->
+        if (id.isNotBlank()) navigation = navigation.copy(
+            detailJourneyId = id, labSection = null, conversationTripId = null,
+            conversationName = null, requestedBroadAreaSegment = requestedSegment,
+        )
     }
     val openMessages: (ConnectedMessageTarget) -> Unit = { target ->
         if (target.tripId.isNotBlank() && navigation.detailJourneyId != null) {
@@ -442,7 +470,10 @@ internal fun ConnectedReadyApp(
         }
     }
     RydeShell(navigation.destination, {
-        navigation = navigation.copy(destination = it, detailJourneyId = null, conversationTripId = null, conversationName = null)
+        navigation = navigation.copy(
+            destination = it, detailJourneyId = null, conversationTripId = null,
+            conversationName = null, requestedBroadAreaSegment = null,
+        )
     }) { padding ->
         val detailJourneyId = navigation.detailJourneyId
         val conversationTripId = navigation.conversationTripId
@@ -467,7 +498,8 @@ internal fun ConnectedReadyApp(
                 ConnectedTripDetailsScreen(
                     content = detailsContent,
                     busy = busy, actionsEnabled = !refreshRequired, message = currentMessage(detailJourneyId),
-                    onBack = closeDetails, onRefresh = refresh, onRequestSeat = requestSeat,
+                    onBack = closeDetails, onRefresh = refresh,
+                    onRequestSeat = { requestSeat(it, navigation.requestedBroadAreaSegment) },
                     onDecideRequest = decideRequest, onCancelSeat = cancelSeat, onCancelJourney = cancelJourney,
                     onWithdrawRequest = cancelRequest,
                     onOpenMessages = openMessages,
@@ -490,7 +522,7 @@ internal fun ConnectedReadyApp(
                     onFind = { navigation = navigation.copy(destination = RydeDestination.FIND) },
                     onOffer = { navigation = navigation.copy(destination = RydeDestination.OFFER) },
                     onRefresh = refresh,
-                    onRequestSeat = requestSeat,
+                    onRequestSeat = { requestSeat(it, null) },
                     onManageRequests = { navigation = navigation.copy(destination = RydeDestination.TRIPS) },
                     modifier = modifier,
                     onOpenJourney = openJourney,
@@ -501,7 +533,7 @@ internal fun ConnectedReadyApp(
                     requestsEnabled = !refreshRequired,
                     message = visibleMessage,
                     onRefresh = refresh,
-                    onRequestSeat = requestSeat,
+                    onRequestSeat = { requestSeat(it, null) },
                     onManageRequests = { navigation = navigation.copy(destination = RydeDestination.TRIPS) },
                     modifier = modifier,
                     onOpenJourney = openJourney,
@@ -511,6 +543,8 @@ internal fun ConnectedReadyApp(
                     placeSelectionPrompt = pendingFind?.places?.prompt,
                     onPlaceSelected = selectFindPlace,
                     onDismissPlaceSelection = dismissFindPlaceSelection,
+                    onRequestSeatWithSegment = requestSeat,
+                    onOpenJourneyWithSegment = openFindJourney,
                 )
                 RydeDestination.OFFER -> ConnectedOfferScreen(
                     busy = busy, actionsEnabled = !refreshRequired, message = visibleMessage, createdVersion = createdVersion,
