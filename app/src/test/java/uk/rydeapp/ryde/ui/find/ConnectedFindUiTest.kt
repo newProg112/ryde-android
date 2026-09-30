@@ -63,6 +63,71 @@ class ConnectedFindUiTest {
         assertEquals(listOf(first, third), filterConnectedFindJourneys(journeys, criteria.copy(departureDate = null)))
     }
 
+    @Test fun anyTimePreservesExistingDateResults() {
+        val criteria = ConnectedFindCriteria(
+            departureDate = LocalDate.of(2026, 9, 18),
+            preferredDepartureMinutes = null,
+        )
+
+        assertEquals(
+            listOf(first, second),
+            filterConnectedFindJourneys(journeys, criteria, ZoneId.of("UTC")),
+        )
+    }
+
+    @Test fun preferredTimeIncludesThirtyMinuteBoundariesAndExcludesMinuteBeyond() {
+        val date = LocalDate.of(2026, 10, 1)
+        val zone = ZoneId.of("Europe/London")
+        val candidates = listOf(
+            localItem("minus-31", date, 8 * 60 + 29, zone),
+            localItem("minus-30", date, 8 * 60 + 30, zone),
+            localItem("exact", date, 9 * 60, zone),
+            localItem("plus-30", date, 9 * 60 + 30, zone),
+            localItem("plus-31", date, 9 * 60 + 31, zone),
+        )
+        val criteria = ConnectedFindCriteria(
+            departureDate = date,
+            preferredDepartureMinutes = 9 * 60,
+        )
+
+        assertEquals(
+            listOf("minus-30", "exact", "plus-30"),
+            filterConnectedFindJourneys(candidates, criteria, zone).map { it.journey.id },
+        )
+    }
+
+    @Test fun dateEligibilityIsAppliedBeforePreferredTime() {
+        val zone = ZoneId.of("Europe/London")
+        val selectedDate = LocalDate.of(2026, 10, 1)
+        val candidates = listOf(
+            localItem("selected-date", selectedDate, 9 * 60, zone),
+            localItem("next-date", selectedDate.plusDays(1), 9 * 60, zone),
+        )
+        val criteria = ConnectedFindCriteria(
+            departureDate = selectedDate,
+            preferredDepartureMinutes = 9 * 60,
+        )
+
+        assertEquals(
+            listOf("selected-date"),
+            filterConnectedFindJourneys(candidates, criteria, zone).map { it.journey.id },
+        )
+    }
+
+    @Test fun preferredTimeUsesTheInjectedLocalZoneNearUtcMidnight() {
+        val boundary = item("boundary", "Mansfield", "Nottingham", "2026-09-18T23:15:00Z")
+        val criteria = ConnectedFindCriteria(
+            departureDate = LocalDate.of(2026, 9, 19),
+            preferredDepartureMinutes = 15,
+        )
+
+        assertEquals(
+            listOf(boundary),
+            filterConnectedFindJourneys(listOf(boundary), criteria, ZoneId.of("Europe/London")),
+        )
+        assertTrue(filterConnectedFindJourneys(listOf(boundary), criteria, ZoneId.of("UTC")).isEmpty())
+    }
+
     @Test fun matchingUsesLocalCalendarDateAcrossMidnightAndDaylightSavingBoundaries() {
         val boundary = item("boundary", "Mansfield", "Nottingham", "2026-09-18T23:30:00Z")
         val september18 = ConnectedFindCriteria(departureDate = LocalDate.of(2026, 9, 18))
@@ -298,6 +363,56 @@ class ConnectedFindUiTest {
         assertEquals(listOf("a-early", "z-early", "a-later"), results.map { it.item.journey.id })
     }
 
+    @Test fun activePreferredTimeUsesProximityAfterExistingGeographicRanking() {
+        val early = locatedItem(
+            "early", originKilometres = 2.0, destinationKilometres = 4.0,
+            departure = "2026-09-18T08:40:00Z",
+        )
+        val exact = locatedItem(
+            "exact", originKilometres = 3.0, destinationKilometres = 3.0,
+            departure = "2026-09-18T09:00:00Z",
+        )
+        val late = locatedItem(
+            "late", originKilometres = 1.0, destinationKilometres = 5.0,
+            departure = "2026-09-18T09:20:00Z",
+        )
+
+        val results = matchConnectedFindJourneys(
+            listOf(late, early, exact),
+            rankedCriteria().copy(
+                departureDate = LocalDate.of(2026, 9, 18),
+                preferredDepartureMinutes = 9 * 60,
+            ),
+            zoneId = ZoneId.of("UTC"),
+            policy = encodedDistancePolicy,
+        )
+
+        assertEquals(listOf("exact", "early", "late"), results.map { it.item.journey.id })
+    }
+
+    @Test fun preferredTimeDoesNotOverrideGeographyOrAvailabilityEligibility() {
+        val date = LocalDate.of(2026, 9, 18)
+        val eligible = locatedItem("eligible", 2.0, 2.0, "2026-09-18T09:00:00Z")
+        val geographicallyIncompatible = locatedItem(
+            "incompatible", 16.0, 2.0, "2026-09-18T09:00:00Z",
+        )
+        val unavailable = locatedItem("unavailable", 2.0, 2.0, "2026-09-18T09:00:00Z")
+            .copy(canRequest = false)
+        val criteria = rankedCriteria().copy(
+            departureDate = date,
+            preferredDepartureMinutes = 9 * 60,
+        )
+
+        val results = matchConnectedFindJourneys(
+            listOf(unavailable, geographicallyIncompatible, eligible),
+            criteria,
+            zoneId = ZoneId.of("UTC"),
+            policy = encodedDistancePolicy,
+        )
+
+        assertEquals(listOf("eligible"), results.map { it.item.journey.id })
+    }
+
     @Test fun legacyFallbackResultsAreUnscoredAndDeterministicAfterGeographicResults() {
         val legacyZ = item("z-legacy", "Mansfield", "Nottingham", "2026-09-18T08:00:00Z")
         val geographic = locatedItem(
@@ -484,6 +599,26 @@ class ConnectedFindUiTest {
     private fun item(id: String, origin: String, destination: String, departure: String) = ConnectedHomeJourney(
         ConnectedJourney(id, "driver", origin, destination, Instant.parse(departure).toEpochMilli(), 2, 1),
         request = null, canRequest = true,
+    )
+
+    private fun localItem(
+        id: String,
+        date: LocalDate,
+        minuteOfDay: Int,
+        zoneId: ZoneId,
+    ): ConnectedHomeJourney = ConnectedHomeJourney(
+        ConnectedJourney(
+            id = id,
+            driverUid = "driver",
+            originArea = "Mansfield",
+            destinationArea = "Nottingham",
+            departureEpochMillis = date.atTime(minuteOfDay / 60, minuteOfDay % 60)
+                .atZone(zoneId).toInstant().toEpochMilli(),
+            seatCapacity = 2,
+            seatsRemaining = 1,
+        ),
+        request = null,
+        canRequest = true,
     )
 
     private fun locatedItem(

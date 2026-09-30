@@ -62,9 +62,13 @@
     <string name="connected_find_choose_destination">Which To area did you mean by “%1$s”?</string>
     <string name="connected_find_departure_date">Departure date</string>
     <string name="connected_find_any_date">Any date</string>
+    <string name="connected_find_departure_time">Departure time</string>
+    <string name="connected_find_any_time">Any time</string>
+    <string name="connected_find_around_time">Around %1$s (%2$s)</string>
+    <string name="connected_find_time_requires_date">Choose a departure date to filter by time.</string>
     <string name="connected_find_clear">Clear filters</string>
     <string name="connected_find_no_matches">No journeys match your filters</string>
-    <string name="connected_find_no_matches_body">Try another area or date, or clear your filters to browse all upcoming journeys.</string>
+    <string name="connected_find_no_matches_body">Try another area, date or time, or clear your filters to browse all upcoming journeys.</string>
     <string name="connected_find_no_available">No seats currently available</string>
     <string name="connected_find_no_available_body">Upcoming offers are fully booked right now. Refresh to check for newly available seats.</string>
     <string name="connected_find_resolution_failed">Ryde could not check those broad areas. Text matching is still available.</string>

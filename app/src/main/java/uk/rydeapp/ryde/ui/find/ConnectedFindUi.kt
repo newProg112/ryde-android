@@ -3,6 +3,7 @@ package uk.rydeapp.ryde.ui.find
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import kotlin.math.abs
 import kotlin.math.roundToInt
 import uk.rydeapp.ryde.domain.BroadAreaJourneyMatchPolicy
 import uk.rydeapp.ryde.domain.BroadAreaRouteOverlapPolicy
@@ -12,6 +13,7 @@ import uk.rydeapp.ryde.domain.JourneyGeographicEndpoints
 import uk.rydeapp.ryde.domain.JourneyGeographicRoute
 import uk.rydeapp.ryde.domain.combinedEndpointScore
 import uk.rydeapp.ryde.domain.model.GeographicCoordinate
+import uk.rydeapp.ryde.domain.model.Flexibility
 import uk.rydeapp.ryde.data.connected.ConnectedJourneyValidator
 import uk.rydeapp.ryde.data.connected.ConnectedRequestedBroadAreaSegment
 import uk.rydeapp.ryde.ui.home.ConnectedHomeJourney
@@ -22,11 +24,14 @@ internal data class ConnectedFindCriteria(
     val origin: String = "",
     val destination: String = "",
     val departureDate: LocalDate? = null,
+    val preferredDepartureMinutes: Int? = null,
+    val flexibility: Flexibility = Flexibility.THIRTY,
     val originCoordinate: GeographicCoordinate? = null,
     val destinationCoordinate: GeographicCoordinate? = null,
 ) {
     val hasFilters: Boolean
-        get() = origin.isNotBlank() || destination.isNotBlank() || departureDate != null
+        get() = origin.isNotBlank() || destination.isNotBlank() || departureDate != null ||
+            preferredDepartureMinutes != null
 }
 
 internal fun ConnectedFindCriteria.sameTypedAreasAs(other: ConnectedFindCriteria): Boolean =
@@ -56,13 +61,15 @@ internal fun filterConnectedFindJourneys(
     criteria: ConnectedFindCriteria,
     zoneId: ZoneId = ZoneId.systemDefault(),
 ): List<ConnectedHomeJourney> = journeys.filter { item ->
-    textRouteMatches(item, criteria) && dateMatches(item, criteria, zoneId)
+    textRouteMatches(item, criteria) && dateMatches(item, criteria, zoneId) &&
+        timeDifferenceMinutes(item, criteria, zoneId)?.let { it <= criteria.flexibility.minutes } != false
 }
 
 /** A Find item accepted by either geographic matching or the safe legacy text fallback. */
 internal data class ConnectedFindJourneyResult(
     val item: ConnectedHomeJourney,
     val geographicMatch: GeographicJourneyMatch,
+    val timeDifferenceMinutes: Int? = null,
 ) {
     val geographicScore: GeographicJourneyMatchScore?
         get() = (geographicMatch as? GeographicJourneyMatch.Compatible)?.combinedEndpointScore()
@@ -109,6 +116,10 @@ internal fun matchConnectedFindJourneys(
         .filter(::isRelevantConnectedFindOffer)
         .mapNotNull { item ->
             if (!dateMatches(item, criteria, zoneId)) return@mapNotNull null
+            val timeDifferenceMinutes = timeDifferenceMinutes(item, criteria, zoneId)
+            if (timeDifferenceMinutes != null && timeDifferenceMinutes > criteria.flexibility.minutes) {
+                return@mapNotNull null
+            }
             val offeredEndpoints = geographicEndpoints(
                 item.journey.originCoordinate,
                 item.journey.destinationCoordinate,
@@ -132,7 +143,9 @@ internal fun matchConnectedFindJourneys(
                 is GeographicJourneyMatch.Incompatible -> false
                 GeographicJourneyMatch.InsufficientGeographicData -> textRouteMatches(item, criteria)
             }
-            if (routeMatches) ConnectedFindJourneyResult(item, geographicMatch) else null
+            if (routeMatches) {
+                ConnectedFindJourneyResult(item, geographicMatch, timeDifferenceMinutes)
+            } else null
         }
         .sortedWith(connectedFindResultRanking)
         .toList()
@@ -144,6 +157,7 @@ internal fun isRelevantConnectedFindOffer(item: ConnectedHomeJourney): Boolean =
 private val connectedFindResultRanking =
     compareBy<ConnectedFindJourneyResult> { it.geographicScore == null }
         .thenBy { it.geographicScore }
+        .thenBy { it.timeDifferenceMinutes ?: 0 }
         .thenBy { it.item.journey.departureEpochMillis }
         .thenBy { it.item.journey.id }
 
@@ -160,6 +174,18 @@ private fun dateMatches(
 ): Boolean = criteria.departureDate == null ||
     Instant.ofEpochMilli(item.journey.departureEpochMillis)
         .atZone(zoneId).toLocalDate() == criteria.departureDate
+
+private fun timeDifferenceMinutes(
+    item: ConnectedHomeJourney,
+    criteria: ConnectedFindCriteria,
+    zoneId: ZoneId,
+): Int? {
+    val preferredMinutes = criteria.preferredDepartureMinutes ?: return null
+    if (criteria.departureDate == null) return Int.MAX_VALUE
+    val localDeparture = Instant.ofEpochMilli(item.journey.departureEpochMillis).atZone(zoneId)
+    val candidateMinutes = localDeparture.hour * 60 + localDeparture.minute
+    return abs(candidateMinutes - preferredMinutes)
+}
 
 private fun geographicEndpoints(
     origin: GeographicCoordinate?,

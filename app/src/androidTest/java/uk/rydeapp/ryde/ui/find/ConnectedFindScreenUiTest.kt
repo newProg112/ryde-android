@@ -90,6 +90,89 @@ class ConnectedFindScreenUiTest {
         scrollTo("2 upcoming journeys").assertIsDisplayed()
     }
 
+    @Test fun preferredTimeRequiresDateFiltersRestoresAndCanBeClearedIndependently() {
+        val today = LocalDate.now()
+        val items = listOf(
+            item("nine", "Mansfield", "Nottingham", today, 9 * 60),
+            item("noon", "Mansfield", "Nottingham", today, 12 * 60),
+            item("tomorrow", "Mansfield", "Nottingham", today.plusDays(1), 9 * 60),
+        )
+        val restoration = StateRestorationTester(compose)
+        restoration.setContent { RydeTheme {
+            ConnectedFindScreen(items, false, true, null, {}, {}, {})
+        } }
+
+        field("connected-find-time").assert(hasText("Any time"))
+        scrollTo("Choose time").assertIsNotEnabled()
+        origin().performTextInput("mans")
+        scrollTo("Choose date").performClick()
+        compose.onNodeWithText("OK").performClick()
+        scrollTo("Choose time").assertIsEnabled().performClick()
+        compose.onNodeWithText("OK").performClick()
+        field("connected-find-time").assert(hasText("Around 09:00", substring = true))
+        scrollTo("1 matching journey").assertIsDisplayed()
+        compose.onNodeWithTag("connected-find-list")
+            .performScrollToNode(hasTestTag("connected-find-result-nine"))
+        compose.onNodeWithTag("connected-find-result-nine").assertIsDisplayed()
+        compose.onAllNodesWithTag("connected-find-result-noon").assertCountEquals(0)
+
+        restoration.emulateSavedInstanceStateRestore()
+        field("connected-find-date").assert(
+            hasText(today.format(DateTimeFormatter.ofPattern("EEE, d MMM yyyy", Locale.UK))),
+        )
+        field("connected-find-time").assert(hasText("Around 09:00", substring = true))
+        origin().assert(hasText("mans"))
+        scrollTo("1 matching journey").assertIsDisplayed()
+
+        scrollTo("Any date").performClick()
+        field("connected-find-date").assert(hasText("Any date"))
+        field("connected-find-time").assert(hasText("Any time"))
+        scrollTo("Choose time").assertIsNotEnabled()
+        origin().assert(hasText("mans"))
+
+        scrollTo("Choose date").performClick()
+        compose.onNodeWithText("OK").performClick()
+        scrollTo("Choose time").performClick()
+        compose.onNodeWithText("OK").performClick()
+        scrollTo("Any time").performClick()
+        field("connected-find-time").assert(hasText("Any time"))
+        scrollTo("2 matching journeys").assertIsDisplayed()
+        field("connected-find-date").assert(
+            hasText(today.format(DateTimeFormatter.ofPattern("EEE, d MMM yyyy", Locale.UK))),
+        )
+        origin().assert(hasText("mans"))
+
+        scrollTo("Choose time").performClick()
+        compose.onNodeWithText("OK").performClick()
+        scrollTo("Clear filters").performClick()
+        field("connected-find-date").assert(hasText("Any date"))
+        field("connected-find-time").assert(hasText("Any time"))
+        scrollTo("Choose time").assertIsNotEnabled()
+        origin().assert(hasText(""))
+        scrollTo("3 upcoming journeys").assertIsDisplayed()
+    }
+
+    @Test fun timeOnlyMismatchUsesExistingFilteredEmptyState() {
+        val today = LocalDate.now()
+        compose.setContent { RydeTheme {
+            ConnectedFindScreen(
+                listOf(item("noon", "Mansfield", "Nottingham", today, 12 * 60)),
+                false, true, null, {}, {}, {},
+            )
+        } }
+
+        scrollTo("Choose date").performClick()
+        compose.onNodeWithText("OK").performClick()
+        scrollTo("Choose time").performClick()
+        compose.onNodeWithText("OK").performClick()
+
+        scrollTo("0 matching journeys").assertIsDisplayed()
+        scrollTo("No journeys match your filters").assertIsDisplayed()
+        scrollTo("Try another area, date or time, or clear your filters to browse all upcoming journeys.")
+            .assertIsDisplayed()
+        compose.onAllNodesWithTag("connected-find-result-noon").assertCountEquals(0)
+    }
+
     @Test fun filteredCardsPreserveRequestStatusCallbacksAndBusyGuards() {
         val available = item("available", "Mansfield", "Nottingham")
         val pending = item("pending", "Derby", "Nottingham").copy(
@@ -132,6 +215,8 @@ class ConnectedFindScreenUiTest {
             )
         } }
 
+        compose.onNodeWithTag("connected-find-list")
+            .performScrollToNode(hasTestTag("connected-find-result-available"))
         val card = compose.onNodeWithTag("connected-find-result-available")
         card.performScrollTo().assert(
             hasAnyDescendant(hasText("Mansfield", substring = true)) and
@@ -267,7 +352,7 @@ class ConnectedFindScreenUiTest {
         origin().performTextInput("Mansfield")
         destination().performTextInput("Nottingham")
         field("connected-find-search").performScrollTo().performClick()
-        compose.onNodeWithTag("connected-find-list").performScrollToIndex(6)
+        compose.onNodeWithTag("connected-find-list").performScrollToIndex(7)
 
         val closerTop = compose.onNodeWithText("Closer origin", substring = true)
             .fetchSemanticsNode().boundsInRoot.top
@@ -344,9 +429,16 @@ class ConnectedFindScreenUiTest {
         compose.onNodeWithTag("connected-find-list").performScrollToNode(hasText(text))
         return compose.onNodeWithText(text)
     }
-    private fun item(id: String, origin: String, destination: String, date: LocalDate = LocalDate.now()) = ConnectedHomeJourney(
+    private fun item(
+        id: String,
+        origin: String,
+        destination: String,
+        date: LocalDate = LocalDate.now(),
+        minuteOfDay: Int = 12 * 60,
+    ) = ConnectedHomeJourney(
         ConnectedJourney(id, "driver", origin, destination,
-            date.atTime(12, 0).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli(), 2, 1),
+            date.atTime(minuteOfDay / 60, minuteOfDay % 60)
+                .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli(), 2, 1),
         request = null, canRequest = true,
     )
 }

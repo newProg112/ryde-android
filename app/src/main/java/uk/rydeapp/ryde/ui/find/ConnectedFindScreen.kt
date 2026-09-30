@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -18,7 +19,9 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TimePicker
 import androidx.compose.material3.rememberDatePickerState
+import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -36,6 +39,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import uk.rydeapp.ryde.R
 import uk.rydeapp.ryde.data.connected.ConnectedRequestedBroadAreaSegment
+import uk.rydeapp.ryde.domain.model.Flexibility
 import uk.rydeapp.ryde.ui.components.ConnectedJourneyCard
 import uk.rydeapp.ryde.ui.components.InfoCard
 import uk.rydeapp.ryde.ui.components.RouteMark
@@ -73,8 +77,16 @@ internal fun ConnectedFindScreen(
     var origin by rememberSaveable { mutableStateOf("") }
     var destination by rememberSaveable { mutableStateOf("") }
     var dateEpochDay by rememberSaveable { mutableStateOf<Long?>(null) }
+    var preferredDepartureMinutes by rememberSaveable { mutableStateOf<Int?>(null) }
     var pickDate by remember { mutableStateOf(false) }
-    val draftCriteria = ConnectedFindCriteria(origin, destination, dateEpochDay?.let(LocalDate::ofEpochDay))
+    var pickTime by remember { mutableStateOf(false) }
+    val draftCriteria = ConnectedFindCriteria(
+        origin = origin,
+        destination = destination,
+        departureDate = dateEpochDay?.let(LocalDate::ofEpochDay),
+        preferredDepartureMinutes = preferredDepartureMinutes,
+        flexibility = Flexibility.THIRTY,
+    )
     val matchingResolution = resolvedCriteria?.takeIf { it.sameTypedAreasAs(draftCriteria) }
     val criteria = draftCriteria.copy(
         originCoordinate = matchingResolution?.originCoordinate,
@@ -88,6 +100,7 @@ internal fun ConnectedFindScreen(
         origin = ""
         destination = ""
         dateEpochDay = null
+        preferredDepartureMinutes = null
     }
 
     LazyColumn(
@@ -153,8 +166,42 @@ internal fun ConnectedFindScreen(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { pickDate = true }) { Text(stringResource(R.string.connected_choose_date)) }
                 if (dateEpochDay != null) {
-                    TextButton(onClick = { dateEpochDay = null }) { Text(stringResource(R.string.connected_find_any_date)) }
+                    TextButton(onClick = {
+                        dateEpochDay = null
+                        preferredDepartureMinutes = null
+                    }) { Text(stringResource(R.string.connected_find_any_date)) }
                 }
+            }
+        }
+        item {
+            Text(stringResource(R.string.connected_find_departure_time), style = MaterialTheme.typography.titleMedium)
+            Text(
+                preferredDepartureMinutes?.let {
+                    stringResource(
+                        R.string.connected_find_around_time,
+                        formatConnectedFindTime(it),
+                        Flexibility.THIRTY.displayName,
+                    )
+                } ?: stringResource(R.string.connected_find_any_time),
+                modifier = Modifier.testTag("connected-find-time"),
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = { pickTime = true },
+                    enabled = dateEpochDay != null,
+                ) { Text(stringResource(R.string.connected_choose_time)) }
+                if (preferredDepartureMinutes != null) {
+                    TextButton(onClick = { preferredDepartureMinutes = null }) {
+                        Text(stringResource(R.string.connected_find_any_time))
+                    }
+                }
+            }
+            if (dateEpochDay == null) {
+                Text(
+                    stringResource(R.string.connected_find_time_requires_date),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
             TextButton(onClick = ::clearFilters, enabled = criteria.hasFilters) {
                 Text(stringResource(R.string.connected_find_clear))
@@ -258,6 +305,30 @@ internal fun ConnectedFindScreen(
             },
         ) { DatePicker(state = state) }
     }
+    if (pickTime && dateEpochDay != null) {
+        val initialMinutes = preferredDepartureMinutes ?: 9 * 60
+        val state = rememberTimePickerState(
+            initialHour = initialMinutes / 60,
+            initialMinute = initialMinutes % 60,
+            is24Hour = true,
+        )
+        AlertDialog(
+            onDismissRequest = { pickTime = false },
+            title = { Text(stringResource(R.string.connected_choose_time)) },
+            text = { TimePicker(state = state) },
+            confirmButton = {
+                TextButton(onClick = {
+                    preferredDepartureMinutes = state.hour * 60 + state.minute
+                    pickTime = false
+                }) { Text(stringResource(R.string.connected_picker_ok)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pickTime = false }) {
+                    Text(stringResource(R.string.connected_picker_cancel))
+                }
+            },
+        )
+    }
     placeSelectionPrompt?.let { prompt ->
         BroadAreaPlaceSelectionDialog(
             prompt = prompt,
@@ -275,6 +346,9 @@ internal fun ConnectedFindScreen(
         )
     }
 }
+
+private fun formatConnectedFindTime(minutesAfterMidnight: Int): String =
+    "%02d:%02d".format(Locale.UK, minutesAfterMidnight / 60, minutesAfterMidnight % 60)
 
 @Composable
 private fun ConnectedFindGeographicMatchSummary(

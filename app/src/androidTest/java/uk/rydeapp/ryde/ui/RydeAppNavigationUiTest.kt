@@ -10,6 +10,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
+import java.time.LocalDate
+import java.time.ZoneId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -285,6 +287,44 @@ class RydeAppNavigationUiTest {
             compose.onAllNodesWithText(it, substring = true).assertCountEquals(0)
         }
         assertNoFictionalContent()
+    }
+
+    @Test
+    fun connectedFindFiltersRepositoryOffersByPreferredDepartureTimeWithoutDemoCommands() {
+        val date = LocalDate.now()
+        val zoneId = ZoneId.systemDefault()
+        val beforeSelectedDate = date.atStartOfDay(zoneId).toInstant().toEpochMilli() - 1
+        val offer = store.journeys.single()
+        store.journeys = listOf(
+            offer.copy(
+                id = "nine-offer",
+                originArea = "Mansfield",
+                destinationArea = "Nottingham",
+                departureEpochMillis = date.atTime(9, 0).atZone(zoneId).toInstant().toEpochMilli(),
+            ),
+            offer.copy(
+                id = "eleven-offer",
+                originArea = "Derby",
+                destinationArea = "Nottingham",
+                departureEpochMillis = date.atTime(11, 0).atZone(zoneId).toInstant().toEpochMilli(),
+            ),
+        )
+        launchConnected(currentTimeMillis = { beforeSelectedDate })
+        tab("Find").performClick()
+        scrollFindTo("2 upcoming journeys")
+
+        findText("Choose date").performClick()
+        compose.onNodeWithText("OK").performClick()
+        scrollFindTo("Choose time")
+        findText("Choose time").assertIsEnabled().performClick()
+        compose.onNodeWithText("OK").performClick()
+
+        scrollFindTo("1 matching journey")
+        findText("1 matching journey").assertIsDisplayed()
+        findText("Mansfield → Nottingham").performScrollTo().assertIsDisplayed()
+        findText("at 09:00", substring = true).assertIsDisplayed()
+        compose.onAllNodesWithText("Derby → Nottingham").assertCountEquals(0)
+        compose.runOnIdle { assertEquals(0, legacyCommands) }
     }
 
     @Test
