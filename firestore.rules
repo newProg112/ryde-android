@@ -87,6 +87,20 @@ service cloud.firestore {
         && data.sentAt is timestamp;
     }
 
+    function validNormalizedCoordinationDetail(value) {
+      // Mirrors ConnectedJourneyPlanPolicy.structurallyValid: Kotlin trim()
+      // removes Unicode whitespace at either edge, while Regex("\\s+")
+      // collapses repeated ASCII whitespace. Control whitespace is already
+      // rejected by the ISO-control check below.
+      return value is string
+        && value.size() > 0
+        && value.size() <= 160
+        && !value.matches('[\\s\\x{00A0}\\x{1680}\\x{2000}-\\x{200A}\\x{2028}\\x{2029}\\x{202F}\\x{205F}\\x{3000}].*')
+        && !value.matches('.*[\\s\\x{00A0}\\x{1680}\\x{2000}-\\x{200A}\\x{2028}\\x{2029}\\x{202F}\\x{205F}\\x{3000}]')
+        && !value.matches('.* {2,}.*')
+        && !value.matches('.*[\\x00-\\x1F\\x7F-\\x9F].*');
+    }
+
     function validCoordinationDetails(data) {
       return data.keys().hasOnly([
           'pickupDetails', 'dropOffDetails', 'revision', 'proposedAt',
@@ -96,16 +110,8 @@ service cloud.firestore {
           'pickupDetails', 'dropOffDetails', 'revision', 'proposedAt',
           'acceptedRevision', 'acceptedAt'
         ])
-        && data.pickupDetails is string
-        && data.pickupDetails.size() > 0
-        && data.pickupDetails.size() <= 160
-        && data.pickupDetails.matches('.*[^\\s].*')
-        && !data.pickupDetails.matches('.*[\\x00-\\x1F\\x7F-\\x9F].*')
-        && data.dropOffDetails is string
-        && data.dropOffDetails.size() > 0
-        && data.dropOffDetails.size() <= 160
-        && data.dropOffDetails.matches('.*[^\\s].*')
-        && !data.dropOffDetails.matches('.*[\\x00-\\x1F\\x7F-\\x9F].*')
+        && validNormalizedCoordinationDetail(data.pickupDetails)
+        && validNormalizedCoordinationDetail(data.dropOffDetails)
         && data.revision is int
         && data.revision >= 1
         && data.proposedAt is timestamp

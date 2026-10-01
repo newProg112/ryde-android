@@ -1845,6 +1845,58 @@ test("only the driver creates and revises an exact coordination proposal", async
   assert.equal((await getDoc(doc(rider, path))).data().revision, 2);
 });
 
+test("coordination proposal text must match the client normalization contract", async () => {
+  await seedConversation();
+  const driver = environment.authenticatedContext("driver").firestore();
+  const path = "confirmedTrips/messages_rider/coordination/details";
+  const detailsRef = doc(driver, path);
+
+  const edgeWhitespace = [
+    "\u0020", "\u00a0", "\u1680", "\u2000", "\u2001", "\u2002", "\u2003",
+    "\u2004", "\u2005", "\u2006", "\u2007", "\u2008", "\u2009", "\u200a",
+    "\u2028", "\u2029", "\u202f", "\u205f", "\u3000",
+  ];
+  const nonNormalized = [
+    coordinationDetails({ pickupDetails: " Mansfield station" }),
+    coordinationDetails({ dropOffDetails: "Nottingham station " }),
+    coordinationDetails({ pickupDetails: "Mansfield  station" }),
+    coordinationDetails({ dropOffDetails: "Nottingham  station" }),
+    coordinationDetails({ pickupDetails: "Mansfield\tstation" }),
+    coordinationDetails({ dropOffDetails: "Nottingham\nstation" }),
+    ...edgeWhitespace.flatMap((whitespace) => [
+      coordinationDetails({ pickupDetails: `${whitespace}Mansfield station` }),
+      coordinationDetails({ dropOffDetails: `Nottingham station${whitespace}` }),
+    ]),
+  ];
+  for (const [index, data] of nonNormalized.entries()) {
+    await assertFails(setDoc(detailsRef, data), `non-normalized ${index}`);
+  }
+
+  await assertSucceeds(setDoc(detailsRef, coordinationDetails()));
+  await assertFails(updateDoc(detailsRef, {
+    pickupDetails: " Mansfield station main entrance, meet 08:10",
+    revision: 2,
+    proposedAt: serverTimestamp(),
+    acceptedRevision: 0,
+    acceptedAt: null,
+  }));
+  await assertSucceeds(updateDoc(detailsRef, {
+    pickupDetails: "Mansfield station main entrance, meet 08:10",
+    revision: 2,
+    proposedAt: serverTimestamp(),
+    acceptedRevision: 0,
+    acceptedAt: null,
+  }));
+  await assertSucceeds(updateDoc(detailsRef, {
+    pickupDetails: "Mansfield\u00a0station main entrance, meet 08:05",
+    revision: 3,
+    proposedAt: serverTimestamp(),
+    acceptedRevision: 0,
+    acceptedAt: null,
+  }));
+  assert.equal((await getDoc(detailsRef)).data().revision, 3);
+});
+
 test("only the rider agrees to the current revision and driver revision clears agreement", async () => {
   await seedConversation();
   const driver = environment.authenticatedContext("driver").firestore();

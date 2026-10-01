@@ -116,6 +116,15 @@ class ConnectedCoordinationTest {
         assertTrue(agreed!!.isAgreed)
         assertNull(FirestoreConnectedJourneyPlanMapper.plan(base + ("extra" to true)))
         assertNull(FirestoreConnectedJourneyPlanMapper.plan(base + ("pickupDetails" to " padded ")))
+        assertNull(FirestoreConnectedJourneyPlanMapper.plan(base + ("pickupDetails" to "trailing ")))
+        assertNull(FirestoreConnectedJourneyPlanMapper.plan(base + ("pickupDetails" to "two  spaces")))
+        assertNull(FirestoreConnectedJourneyPlanMapper.plan(base + ("pickupDetails" to "\u00a0non-breaking")))
+        assertEquals(
+            "internal\u00a0non-breaking",
+            FirestoreConnectedJourneyPlanMapper.plan(
+                base + ("pickupDetails" to "internal\u00a0non-breaking"),
+            )?.pickupDetails,
+        )
         assertNull(FirestoreConnectedJourneyPlanMapper.plan(base + ("revision" to 1.5)))
         assertNull(FirestoreConnectedJourneyPlanMapper.plan(
             base + ("acceptedRevision" to 1L) + ("acceptedAt" to Timestamp(20, 0)),
