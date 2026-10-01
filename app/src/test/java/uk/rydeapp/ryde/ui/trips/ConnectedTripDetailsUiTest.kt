@@ -210,7 +210,7 @@ class ConnectedTripDetailsUiTest {
         assertEquals("Persisted area", result.summary!!.origin)
         assertEquals("Sheffield", result.summary.destination)
         assertEquals(1000L, result.summary.departureEpochMillis)
-        assertEquals(R.string.connected_trips_departure_passed, result.summary.statusText)
+        assertEquals(R.string.connected_trips_awaiting_completion, result.summary.statusText)
         assertEquals("Morgan Driver", result.summary.driverDisplayName)
         assertNull(result.summary.cancellableTripId)
         assertFalse(result.canRequest)

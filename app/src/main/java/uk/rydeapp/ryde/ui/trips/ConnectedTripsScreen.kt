@@ -74,10 +74,13 @@ internal fun ConnectedTripsScreen(
         if (content.rider.isEmpty() && content.driver.isEmpty() && content.unavailableIncoming.isEmpty()) item {
             InfoCard(stringResource(R.string.connected_trips_empty), stringResource(R.string.connected_trips_empty_body))
         }
-        if (content.rider.isNotEmpty()) item {
-            Text(stringResource(R.string.connected_trips_rider_heading), style = MaterialTheme.typography.titleMedium)
+        if (content.riderCurrent.isNotEmpty()) item {
+            Text(
+                stringResource(R.string.connected_trips_rider_current_heading),
+                style = MaterialTheme.typography.titleMedium,
+            )
         }
-        items(content.rider, key = { it.key }) { item ->
+        items(content.riderCurrent, key = { it.key }) { item ->
             Column {
                 TripCard(
                     item, busy, actionsEnabled,
@@ -89,10 +92,13 @@ internal fun ConnectedTripsScreen(
                 }
             }
         }
-        if (content.driver.isNotEmpty()) item {
-            Text(stringResource(R.string.connected_trips_driver_heading), style = MaterialTheme.typography.titleMedium)
+        if (content.driverCurrent.isNotEmpty()) item {
+            Text(
+                stringResource(R.string.connected_trips_driver_current_heading),
+                style = MaterialTheme.typography.titleMedium,
+            )
         }
-        items(content.driver, key = { it.key }) { item ->
+        items(content.driverCurrent, key = { it.key }) { item ->
             Column {
                 TripCard(
                     item, busy, actionsEnabled, onCancel = {},
@@ -102,6 +108,47 @@ internal fun ConnectedTripsScreen(
                 )
                 item.journeyId?.takeIf(String::isNotBlank)?.let { id ->
                     TextButton(onClick = { onOpenJourney(id) }) { Text(stringResource(R.string.connected_view_trip_details)) }
+                }
+            }
+        }
+        if (content.riderHistory.isNotEmpty()) item {
+            Text(
+                stringResource(R.string.connected_trips_rider_history_heading),
+                style = MaterialTheme.typography.titleMedium,
+            )
+        }
+        items(content.riderHistory, key = { it.key }) { item ->
+            Column {
+                TripCard(
+                    item, busy, actionsEnabled,
+                    onCancel = { selectedTripId = it },
+                    onWithdraw = { selectedRequestId = it },
+                )
+                item.journeyId?.takeIf(String::isNotBlank)?.let { id ->
+                    TextButton(onClick = { onOpenJourney(id) }) {
+                        Text(stringResource(R.string.connected_view_trip_details))
+                    }
+                }
+            }
+        }
+        if (content.driverHistory.isNotEmpty() || content.unavailableIncoming.isNotEmpty()) item {
+            Text(
+                stringResource(R.string.connected_trips_driver_history_heading),
+                style = MaterialTheme.typography.titleMedium,
+            )
+        }
+        items(content.driverHistory, key = { it.key }) { item ->
+            Column {
+                TripCard(
+                    item, busy, actionsEnabled, onCancel = {},
+                    onDecide = onDecideRequest,
+                    onCancelJourney = { selectedJourneyId = it },
+                    onCompleteJourney = { selectedCompletionId = it },
+                )
+                item.journeyId?.takeIf(String::isNotBlank)?.let { id ->
+                    TextButton(onClick = { onOpenJourney(id) }) {
+                        Text(stringResource(R.string.connected_view_trip_details))
+                    }
                 }
             }
         }

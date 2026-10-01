@@ -308,7 +308,7 @@ class ConnectedTripDetailsScreenUiTest {
                 { error("Past seat cannot be cancelled") }, {},
             )
         } }
-        text("Departure has passed").assertIsDisplayed()
+        text("Departure has passed — awaiting driver completion").assertIsDisplayed()
         text("Driver: Morgan Driver").assertIsDisplayed()
         text("${journey.originArea} \u2192 ${journey.destinationArea}").assertIsDisplayed()
         text("Route overview").assertIsDisplayed()

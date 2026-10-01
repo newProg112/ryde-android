@@ -240,7 +240,7 @@ class ConnectedTripsScreenUiTest {
         assertSafe()
     }
 
-    @Test fun passedConfirmedSeatIsHistoricalAndCannotBeCancelled() {
+    @Test fun departedOpenConfirmedSeatRemainsCurrentAwaitingCompletionAndCannotBeCancelled() {
         compose.setContent { RydeTheme {
             ConnectedTripsScreen(
                 connectedTripsContent(
@@ -251,13 +251,75 @@ class ConnectedTripsScreenUiTest {
                 false, true, null, {}, { error("Past seat cannot be cancelled") },
             )
         } }
-        compose.onNodeWithText("Departure has passed").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Current rides and requests").assertIsDisplayed()
+        compose.onAllNodesWithText("Rider history").assertCountEquals(0)
+        compose.onNodeWithText("Departure has passed — awaiting driver completion")
+            .performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Driver: Morgan Driver").assertIsDisplayed()
         compose.onNodeWithText("${journey.originArea} \u2192 ${journey.destinationArea}")
             .performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("2099", substring = true).assertIsDisplayed()
         compose.onAllNodesWithText("Your seat is confirmed").assertCountEquals(0)
         compose.onAllNodesWithText("Cancel my seat").assertCountEquals(0)
+    }
+
+    @Test fun currentAndHistoryHeadingsRenderOnlyWhenTheirLifecycleSectionHasContent() {
+        val current = mutableStateOf(request)
+        compose.setContent { RydeTheme {
+            ConnectedTripsScreen(
+                connectedTripsContent(
+                    ConnectedJourneySnapshot(listOf(journey), listOf(current.value)),
+                    request.riderUid,
+                    0,
+                ),
+                false, true, null, {}, {},
+            )
+        } }
+
+        compose.onNodeWithText("Current rides and requests").assertIsDisplayed()
+        compose.onAllNodesWithText("Rider history").assertCountEquals(0)
+        compose.onAllNodesWithText("Current offered journeys").assertCountEquals(0)
+        compose.onAllNodesWithText("Offered journey history").assertCountEquals(0)
+
+        compose.runOnIdle { current.value = request.copy(status = ConnectedRequestStatus.DECLINED) }
+        compose.onNodeWithText("Rider history").assertIsDisplayed()
+        compose.onAllNodesWithText("Current rides and requests").assertCountEquals(0)
+        compose.onAllNodesWithText("Withdraw request").assertCountEquals(0)
+    }
+
+    @Test fun departedOpenDriverJourneyStaysCurrentAndKeepsCompletionConfirmation() {
+        val current = mutableStateOf(journey)
+        val completions = mutableListOf<String>()
+        compose.setContent { RydeTheme {
+            ConnectedTripsScreen(
+                connectedTripsContent(
+                    ConnectedJourneySnapshot(listOf(current.value)),
+                    journey.driverUid,
+                    journey.departureEpochMillis,
+                ),
+                false, true, null, {}, {},
+                onCompleteJourney = { completions += it },
+            )
+        } }
+
+        compose.onNodeWithText("Current offered journeys").assertIsDisplayed()
+        compose.onAllNodesWithText("Offered journey history").assertCountEquals(0)
+        compose.onNodeWithText("Departure has passed — ready to mark complete")
+            .performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Mark journey complete").performClick()
+        compose.onNodeWithText("Confirm journey completion").performClick()
+        compose.runOnIdle { assertEquals(listOf(journey.id), completions) }
+
+        compose.runOnIdle {
+            current.value = journey.copy(
+                status = ConnectedJourneyStatus.COMPLETED,
+                completedAtEpochMillis = journey.departureEpochMillis,
+            )
+        }
+        compose.onNodeWithText("Offered journey history").assertIsDisplayed()
+        compose.onAllNodesWithText("Current offered journeys").assertCountEquals(0)
+        compose.onNodeWithText("Journey completed").performScrollTo().assertIsDisplayed()
+        compose.onAllNodesWithText("Mark journey complete").assertCountEquals(0)
     }
 
     @Test fun passedPendingRequestKeepsOnlyAuthorisedCleanupByRequestId() {

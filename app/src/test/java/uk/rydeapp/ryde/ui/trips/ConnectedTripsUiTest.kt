@@ -31,7 +31,8 @@ class ConnectedTripsUiTest {
     }
 
     @Test fun `pending joins genuine broad areas departure and exposes request id for withdrawal`() {
-        val item = content().rider.single()
+        val result = content()
+        val item = result.riderCurrent.single()
         assertEquals("York", item.origin)
         assertEquals("Leeds", item.destination)
         assertEquals(1000L, item.departureEpochMillis)
@@ -39,6 +40,7 @@ class ConnectedTripsUiTest {
         assertEquals(R.string.connected_trips_rider, item.roleText)
         assertNull(item.cancellableTripId)
         assertEquals(request.id, item.cancellableRequestId)
+        assertTrue(result.riderHistory.isEmpty())
     }
 
     @Test fun `pending request notice follows the exact journey and stops at accepted truth`() {
@@ -52,14 +54,16 @@ class ConnectedTripsUiTest {
     }
 
     @Test fun `confirmed trip replaces linked request and uses persisted trip fields`() {
-        val item = content(r = listOf(request.copy(status = ConnectedRequestStatus.ACCEPTED)),
-            t = listOf(trip.copy(originArea = "Sheffield", departureEpochMillis = 999))).rider.single()
+        val result = content(r = listOf(request.copy(status = ConnectedRequestStatus.ACCEPTED)),
+            t = listOf(trip.copy(originArea = "Sheffield", departureEpochMillis = 999)))
+        val item = result.riderCurrent.single()
         assertEquals("Sheffield", item.origin)
         assertEquals("Leeds", item.destination)
         assertEquals(999L, item.departureEpochMillis)
         assertEquals(R.string.connected_request_accepted, item.statusText)
         assertEquals(trip.id, item.cancellableTripId)
         assertEquals("Morgan Driver", item.driverDisplayName)
+        assertTrue(result.riderHistory.isEmpty())
         assertNull(content(t = listOf(trip.copy(driverDisplayName = null))).rider.single().driverDisplayName)
     }
 
@@ -127,12 +131,15 @@ class ConnectedTripsUiTest {
             id = second.id, acceptedRequestId = second.id, riderUid = second.riderUid,
         )
         val result = content(
-            r = listOf(request.copy(status = ConnectedRequestStatus.ACCEPTED), second),
-            t = listOf(trip, secondTrip),
+            r = listOf(second, request.copy(status = ConnectedRequestStatus.ACCEPTED)),
+            t = listOf(secondTrip, trip),
             uid = journey.driverUid,
-        ).driver.single().incoming
-        assertEquals(setOf(trip.id, secondTrip.id), result.mapNotNull { it.messageTarget?.tripId }.toSet())
-        assertEquals(setOf("Riley Rider", "Second Rider"), result.mapNotNull { it.messageTarget?.otherDisplayName }.toSet())
+        )
+        assertEquals(1, result.driverCurrent.size)
+        val incoming = result.driverCurrent.single().incoming
+        assertEquals(listOf(trip.id, secondTrip.id), incoming.map { it.id })
+        assertEquals(setOf(trip.id, secondTrip.id), incoming.mapNotNull { it.messageTarget?.tripId }.toSet())
+        assertEquals(setOf("Riley Rider", "Second Rider"), incoming.mapNotNull { it.messageTarget?.otherDisplayName }.toSet())
 
         val ineligible = listOf(ConnectedRequestStatus.PENDING, ConnectedRequestStatus.DECLINED, ConnectedRequestStatus.CANCELLED)
         ineligible.forEach { status ->
@@ -155,18 +162,23 @@ class ConnectedTripsUiTest {
         assertTrue(result.unavailableIncoming.isEmpty())
     }
 
-    @Test fun `past confirmed trip and accepted driver row use truthful history and retain rider name`() {
+    @Test fun `departed open trip remains current awaiting completion and retains rider name`() {
         val accepted = request.copy(status = ConnectedRequestStatus.ACCEPTED)
-        val rider = content(r = listOf(accepted), t = listOf(trip), now = 1000).rider.single()
-        assertEquals(R.string.connected_trips_departure_passed, rider.statusText)
+        val result = content(r = listOf(accepted), t = listOf(trip), now = 1000)
+        val rider = result.riderCurrent.single()
+        assertEquals(R.string.connected_trips_awaiting_completion, rider.statusText)
         assertNull(rider.cancellableTripId)
         assertEquals("York", rider.origin)
         assertEquals(1000L, rider.departureEpochMillis)
         assertEquals("Morgan Driver", rider.driverDisplayName)
+        assertTrue(result.riderHistory.isEmpty())
 
-        val driver = content(r = listOf(accepted), uid = journey.driverUid, now = 1000).driver.single()
-        assertEquals(R.string.connected_offer_departed, driver.statusText)
+        val driverResult = content(r = listOf(accepted), uid = journey.driverUid, now = 1000)
+        val driver = driverResult.driverCurrent.single()
+        assertEquals(R.string.connected_offer_awaiting_completion, driver.statusText)
         assertNull(driver.cancellableJourneyId)
+        assertEquals(journey.id, driver.completableJourneyId)
+        assertTrue(driverResult.driverHistory.isEmpty())
         val incoming = driver.incoming.single()
         assertEquals(R.string.connected_incoming_accepted_departed, incoming.statusText)
         assertEquals("Riley Rider", incoming.riderDisplayName)
@@ -177,25 +189,35 @@ class ConnectedTripsUiTest {
     @Test fun `driver can complete only a departed open journey and completion reaches rider history`() {
         val accepted = request.copy(status = ConnectedRequestStatus.ACCEPTED)
         val departedDriver = content(r = listOf(accepted), uid = journey.driverUid, now = journey.departureEpochMillis)
-            .driver.single()
+            .driverCurrent.single()
         assertEquals(journey.id, departedDriver.completableJourneyId)
         assertNull(departedDriver.cancellableJourneyId)
 
         val completed = journey.copy(status = ConnectedJourneyStatus.COMPLETED, completedAtEpochMillis = 1_001)
-        val driver = content(j = listOf(completed), r = listOf(accepted), uid = journey.driverUid, now = 2_000).driver.single()
+        val driverResult = content(j = listOf(completed), r = listOf(accepted), uid = journey.driverUid, now = 2_000)
+        val driver = driverResult.driverHistory.single()
         assertEquals(R.string.connected_trips_completed, driver.statusText)
         assertNull(driver.completableJourneyId)
         assertEquals(R.string.connected_trips_completed, driver.incoming.single().statusText)
-        val rider = content(j = listOf(completed), r = listOf(accepted), t = listOf(trip), now = 2_000).rider.single()
+        assertTrue(driverResult.driverCurrent.isEmpty())
+        val riderResult = content(j = listOf(completed), r = listOf(accepted), t = listOf(trip), now = 2_000)
+        val rider = riderResult.riderHistory.single()
         assertEquals(R.string.connected_trips_completed, rider.statusText)
         assertNull(rider.cancellableTripId)
         assertNotNull(rider.messageTarget)
+        assertTrue(riderResult.riderCurrent.isEmpty())
+
+        val pendingAtCompletion = content(j = listOf(completed), now = 2_000)
+        assertEquals(R.string.connected_request_pending_departed, pendingAtCompletion.riderHistory.single().statusText)
+        assertTrue(pendingAtCompletion.riderCurrent.isEmpty())
     }
 
-    @Test fun `past pending request is historical while authorised cleanup remains routed by request id`() {
-        val rider = content(now = 1000).rider.single()
+    @Test fun `departed pending request remains current while authorised cleanup is routed by request id`() {
+        val result = content(now = 1000)
+        val rider = result.riderCurrent.single()
         assertEquals(R.string.connected_request_pending_departed, rider.statusText)
         assertEquals(request.id, rider.cancellableRequestId)
+        assertTrue(result.riderHistory.isEmpty())
 
         val incoming = content(uid = journey.driverUid, now = 1000).driver.single().incoming.single()
         assertEquals(R.string.connected_incoming_pending_departed, incoming.statusText)
@@ -204,7 +226,7 @@ class ConnectedTripsUiTest {
         assertEquals(request.id, incoming.id)
     }
 
-    @Test fun `upcoming entries sort first and past history sorts newest first`() {
+    @Test fun `departed open driver journeys sort before nearest upcoming current journeys`() {
         fun offer(id: String, departure: Long) = journey.copy(id = id, departureEpochMillis = departure)
         val result = content(
             j = listOf(offer("past-old", 100), offer("future-late", 500), offer("past-new", 200), offer("future-soon", 400)),
@@ -213,22 +235,70 @@ class ConnectedTripsUiTest {
             now = 300,
         )
         assertEquals(
-            listOf("future-soon", "future-late", "past-new", "past-old"),
-            result.driver.map { it.journeyId },
+            listOf("past-new", "past-old", "future-soon", "future-late"),
+            result.driverCurrent.map { it.journeyId },
         )
+        assertTrue(result.driverHistory.isEmpty())
+    }
+
+    @Test fun `rider current ordering surfaces overdue cleanup then nearest upcoming departure`() {
+        fun pending(id: String, departure: Long): Pair<ConnectedJourney, ConnectedSeatRequest> {
+            val offered = journey.copy(id = id, departureEpochMillis = departure)
+            return offered to request.copy(id = "${id}_private-rider", journeyId = id)
+        }
+        val values = listOf(
+            pending("overdue-old", 100),
+            pending("future-late", 500),
+            pending("overdue-new", 200),
+            pending("future-soon", 400),
+        )
+        val result = content(values.map { it.first }, values.map { it.second }, now = 300)
+
+        assertEquals(
+            listOf("overdue-new", "overdue-old", "future-soon", "future-late"),
+            result.riderCurrent.map { it.journeyId },
+        )
+        assertTrue(result.riderHistory.isEmpty())
+    }
+
+    @Test fun `terminal rider activity is history despite future departure and sorts newest first`() {
+        fun requestFor(id: String, departure: Long, status: ConnectedRequestStatus): Pair<ConnectedJourney, ConnectedSeatRequest> {
+            val offered = journey.copy(id = id, departureEpochMillis = departure)
+            return offered to request.copy(id = "${id}_private-rider", journeyId = id, status = status)
+        }
+        val declined = requestFor("declined", 5_000, ConnectedRequestStatus.DECLINED)
+        val cancelled = requestFor("cancelled", 5_000, ConnectedRequestStatus.CANCELLED)
+        val withdrawn = requestFor("withdrawn", 4_000, ConnectedRequestStatus.CANCELLED)
+        val pending = requestFor("pending", 3_000, ConnectedRequestStatus.PENDING)
+        val result = content(
+            j = listOf(declined.first, withdrawn.first, pending.first, cancelled.first),
+            r = listOf(declined.second, withdrawn.second, pending.second, cancelled.second),
+            now = 0,
+        )
+
+        assertEquals(listOf("pending"), result.riderCurrent.map { it.journeyId })
+        assertEquals(listOf("cancelled", "declined", "withdrawn"), result.riderHistory.map { it.journeyId })
+        assertTrue(result.riderHistory.all {
+            it.cancellableTripId == null && it.cancellableRequestId == null
+        })
     }
 
     @Test fun `cancellation follows existing lifecycle ownership and departure`() {
         assertNull(content(t = listOf(trip), now = 1000).rider.single().cancellableTripId)
         val closed = journey.copy(status = ConnectedJourneyStatus.CANCELLED)
-        val driverCancelled = content(j = listOf(closed), t = listOf(trip)).rider.single()
+        val driverCancelledResult = content(j = listOf(closed), t = listOf(trip))
+        val driverCancelled = driverCancelledResult.riderHistory.single()
         assertEquals(R.string.connected_trips_driver_cancelled, driverCancelled.statusText)
         assertEquals("Morgan Driver", driverCancelled.driverDisplayName)
         assertNull(driverCancelled.cancellableTripId)
-        val missing = content(j = emptyList(), t = listOf(trip)).rider.single()
+        assertTrue(driverCancelledResult.riderCurrent.isEmpty())
+        val missing = content(j = emptyList(), t = listOf(trip)).riderHistory.single()
         assertEquals(R.string.connected_trips_unavailable, missing.statusText)
         assertNull(missing.cancellableTripId)
-        val riderCancelled = content(j = listOf(closed), t = listOf(trip.copy(status = ConnectedTripStatus.CANCELLED_BY_RIDER))).rider.single()
+        val riderCancelled = content(
+            j = listOf(closed),
+            t = listOf(trip.copy(status = ConnectedTripStatus.CANCELLED_BY_RIDER)),
+        ).riderHistory.single()
         assertEquals(R.string.connected_trips_cancelled, riderCancelled.statusText)
         assertEquals("Morgan Driver", riderCancelled.driverDisplayName)
         assertNull(riderCancelled.cancellableTripId)
@@ -265,14 +335,20 @@ class ConnectedTripsUiTest {
     }
 
     @Test fun `owned journey is separate driver state with no rider action`() {
-        val item = content(uid = journey.driverUid).driver.single()
+        val open = content(uid = journey.driverUid)
+        val item = open.driverCurrent.single()
         assertEquals(R.string.connected_trips_driver, item.roleText)
         assertEquals(R.string.connected_trips_offer_open, item.statusText)
         assertEquals("York", item.origin)
         assertNull(item.cancellableTripId)
         assertNull(item.cancellableRequestId)
-        assertEquals(R.string.connected_trips_offer_cancelled,
-            content(uid = journey.driverUid, j = listOf(journey.copy(status = ConnectedJourneyStatus.CANCELLED))).driver.single().statusText)
+        assertTrue(open.driverHistory.isEmpty())
+        val cancelled = content(
+            uid = journey.driverUid,
+            j = listOf(journey.copy(status = ConnectedJourneyStatus.CANCELLED)),
+        )
+        assertEquals(R.string.connected_trips_offer_cancelled, cancelled.driverHistory.single().statusText)
+        assertTrue(cancelled.driverCurrent.isEmpty())
     }
 
     @Test fun `withdrawal eligibility uses lifecycle truth and blank action ids fail closed`() {
@@ -319,7 +395,8 @@ class ConnectedTripsUiTest {
         assertFalse(closed.incoming.single().canAccept)
         assertFalse(closed.incoming.single().canDecline)
         assertNull(content(uid = journey.driverUid, now = 1000).driver.single().cancellableJourneyId)
-        assertEquals(R.string.connected_offer_departed, content(uid = journey.driverUid, now = 1000).driver.single().statusText)
+        assertEquals(R.string.connected_offer_awaiting_completion,
+            content(uid = journey.driverUid, now = 1000).driver.single().statusText)
         val missing = content(uid = journey.driverUid, j = emptyList()).unavailableIncoming.single()
         assertEquals(R.string.connected_trips_unavailable, missing.statusText)
         assertFalse(missing.canAccept)

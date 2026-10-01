@@ -626,7 +626,10 @@ class RydeAppNavigationUiTest {
             boundary.complete(Unit)
         }
         compose.waitForIdle()
-        compose.onNodeWithText("Departure has passed").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Departure has passed — awaiting driver completion")
+            .performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Current rides and requests").assertIsDisplayed()
+        compose.onAllNodesWithText("Rider history").assertCountEquals(0)
         compose.onAllNodesWithText("Your seat is confirmed").assertCountEquals(0)
         compose.onAllNodesWithText("Cancel my seat").assertCountEquals(0)
         assertShell()
@@ -651,7 +654,7 @@ class RydeAppNavigationUiTest {
             boundary.complete(Unit)
         }
         compose.waitForIdle()
-        detailsText("Departure has passed").assertIsDisplayed()
+        detailsText("Departure has passed — awaiting driver completion").assertIsDisplayed()
         detailsText("Sheffield \u2192 Leeds").assertIsDisplayed()
         compose.onAllNodesWithText("Cancel my seat").assertCountEquals(0)
         assertShell()
@@ -715,7 +718,9 @@ class RydeAppNavigationUiTest {
             boundary.complete(Unit)
         }
         compose.waitForIdle()
-        compose.onNodeWithText("Departure has passed").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Departure has passed — ready to mark complete")
+            .performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Current offered journeys").assertIsDisplayed()
         compose.onNodeWithText("Departure has passed - this request can no longer be accepted")
             .assertIsDisplayed()
         compose.onAllNodesWithText("Accept").assertCountEquals(0)
@@ -731,9 +736,13 @@ class RydeAppNavigationUiTest {
         val departure = store.journeys.single().departureEpochMillis
         launchConnected(currentTimeMillis = { departure })
         tab("Trips").performClick()
+        compose.onNodeWithText("Current offered journeys").assertIsDisplayed()
+        compose.onAllNodesWithText("Offered journey history").assertCountEquals(0)
         compose.onNodeWithText("Mark journey complete").performScrollTo().performClick()
         compose.onNodeWithText("Confirm journey completion").performClick()
         compose.onNodeWithText("Journey completed").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Offered journey history").assertIsDisplayed()
+        compose.onAllNodesWithText("Current offered journeys").assertCountEquals(0)
         compose.onAllNodesWithText("Mark journey complete").assertCountEquals(0)
         compose.onAllNodesWithText("Decline").assertCountEquals(0)
         compose.runOnIdle {
@@ -754,6 +763,26 @@ class RydeAppNavigationUiTest {
         compose.runOnIdle { store.completeForRiderRemotely() }
         tab("Trips").performClick()
         compose.onNodeWithText("Journey completed").performScrollTo().assertIsDisplayed()
+        openDetails()
+
+        detailsText("Journey completed").assertIsDisplayed()
+        compose.onAllNodesWithText("Seat requested. Waiting for the driver.").assertCountEquals(0)
+        compose.onAllNodesWithText("Your seat is confirmed").assertCountEquals(0)
+    }
+
+    @Test
+    fun remoteCompletionMovesRiderFromCurrentToHistoryAndKeepsDetails() {
+        store.confirmSeat()
+        launchConnected()
+        tab("Trips").performClick()
+        compose.onNodeWithText("Current rides and requests").assertIsDisplayed()
+        compose.onAllNodesWithText("Rider history").assertCountEquals(0)
+        compose.onNodeWithText("Your seat is confirmed").performScrollTo().assertIsDisplayed()
+
+        compose.runOnIdle { store.completeForRiderRemotely() }
+        compose.onNodeWithText("Journey completed").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Rider history").assertIsDisplayed()
+        compose.onAllNodesWithText("Current rides and requests").assertCountEquals(0)
         openDetails()
 
         detailsText("Journey completed").assertIsDisplayed()
@@ -1399,7 +1428,7 @@ class RydeAppNavigationUiTest {
             lifecycleChanges.tryEmit(Unit)
         }
         fun completeForRiderRemotely() {
-            confirmSeat()
+            if (trips.isEmpty()) confirmSeat()
             journeys = journeys.map {
                 it.copy(status = ConnectedJourneyStatus.COMPLETED, completedAtEpochMillis = 1)
             }

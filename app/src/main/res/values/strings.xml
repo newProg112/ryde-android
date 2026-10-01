@@ -121,6 +121,7 @@
     <string name="connected_manage_offers">Manage offers in Trips</string>
     <string name="connected_offer_created">Journey offered. Manage your requests here.</string>
     <string name="connected_offer_departed">Departure has passed</string>
+    <string name="connected_offer_awaiting_completion">Departure has passed — ready to mark complete</string>
     <string name="connected_offer_full">Journey full</string>
     <string name="connected_incoming_heading">Seat requests</string>
     <string name="connected_incoming_rider_name">Rider: %1$s</string>
@@ -155,8 +156,10 @@
     <string name="connected_trips_intro">Your seat requests, shared trips and offered journeys.</string>
     <string name="connected_trips_empty">No trips yet</string>
     <string name="connected_trips_empty_body">Request a seat in Find and follow its progress here. Refresh to check for changes.</string>
-    <string name="connected_trips_rider_heading">Your seats and requests</string>
-    <string name="connected_trips_driver_heading">Your offered journeys</string>
+    <string name="connected_trips_rider_current_heading">Current rides and requests</string>
+    <string name="connected_trips_driver_current_heading">Current offered journeys</string>
+    <string name="connected_trips_rider_history_heading">Rider history</string>
+    <string name="connected_trips_driver_history_heading">Offered journey history</string>
     <string name="connected_trips_rider">Rider</string>
     <string name="connected_trips_driver">Driver</string>
     <string name="connected_trips_driver_name">Driver: %1$s</string>
@@ -166,6 +169,7 @@
     <string name="connected_trips_cancel_success">Seat cancelled. Your trips are up to date.</string>
     <string name="connected_trips_driver_cancelled">Journey cancelled by driver</string>
     <string name="connected_trips_departure_passed">Departure has passed</string>
+    <string name="connected_trips_awaiting_completion">Departure has passed — awaiting driver completion</string>
     <string name="connected_trips_completed">Journey completed</string>
     <string name="connected_trips_unavailable">Journey unavailable</string>
     <string name="connected_trips_details_unavailable">Journey details unavailable</string>

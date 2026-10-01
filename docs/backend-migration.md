@@ -316,6 +316,24 @@ do not guarantee that arbitrary user-entered prose contains no sensitive informa
 adds no maps, pins, coordinates, place lookup, navigation, contact exchange, arrival workflow or
 additional messaging features.
 
+### Current trips and journey history Phase 1.7
+
+The normal connected Trips screen separates current rider and driver activity from retained
+history without persisting an archive flag or a second lifecycle. Classification uses the existing
+resolved journey, request and confirmed-trip lifecycle. An `OPEN` journey remains current after
+its scheduled departure: the driver sees it first with the existing completion action, while a
+confirmed rider sees that it is awaiting driver completion and can continue coordinating. Pending
+requests after departure also remain current while their existing authorised cleanup is available.
+
+Completed and cancelled journeys, rider-cancelled seats, declined or withdrawn requests, and
+unavailable fail-closed records are history even when their scheduled departure is still in the
+future. Current overdue activity is ordered before upcoming departures; history is ordered by
+scheduled departure newest first with deterministic record keys as tie-breakers. A journey with
+multiple riders remains one driver journey with its existing per-rider request and coordination
+entries. Realtime completion moves participant presentation from Current to History and retains
+Trip Details plus read-only messages and the saved plan. Phase 1.7 adds no Firestore fields,
+statuses, writes, queries or Security Rules.
+
 ## Manual two-emulator test
 
 1. Start the disposable manual emulators with
