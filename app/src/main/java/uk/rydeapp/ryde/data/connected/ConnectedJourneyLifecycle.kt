@@ -97,6 +97,20 @@ object ConnectedJourneyLifecycle {
     fun canReadMessages(trip: ConnectedConfirmedTrip, uid: String): Boolean =
         validConfirmedTripIdentity(trip) && (trip.driverUid == uid || trip.riderUid == uid)
 
+    fun canProposePlan(
+        trip: ConnectedConfirmedTrip,
+        journey: ConnectedJourney?,
+        uid: String,
+    ): Boolean = uid == trip.driverUid && canSendMessages(trip, journey, uid)
+
+    fun canAgreePlan(
+        trip: ConnectedConfirmedTrip,
+        journey: ConnectedJourney?,
+        plan: ConnectedJourneyPlan?,
+        uid: String,
+    ): Boolean = uid == trip.riderUid && plan != null && !plan.isAgreed &&
+        canSendMessages(trip, journey, uid)
+
     fun validConfirmedTripIdentity(trip: ConnectedConfirmedTrip): Boolean =
         trip.id.isNotBlank() && trip.id == trip.acceptedRequestId &&
             trip.acceptedRequestId == "${trip.journeyId}_${trip.riderUid}" &&

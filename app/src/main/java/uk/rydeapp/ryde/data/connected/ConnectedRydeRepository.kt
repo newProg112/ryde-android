@@ -243,6 +243,11 @@ class ConnectedRydeRepository(
                     messages = snapshot.messages,
                     canSendMessages = canSend,
                     readOnlyReason = if (canSend) null else snapshot.readOnlyReason(),
+                    plan = snapshot.plan,
+                    canProposePlan = ConnectedJourneyLifecycle.canProposePlan(snapshot.trip, snapshot.journey, uid),
+                    canAgreePlan = ConnectedJourneyLifecycle.canAgreePlan(
+                        snapshot.trip, snapshot.journey, snapshot.plan, uid,
+                    ),
                 )
                 previous = conversation
                 emit(ConnectedConversationState.Data(conversation))
@@ -281,6 +286,51 @@ class ConnectedRydeRepository(
             ConnectedMessageCommandResult.ReadOnly(SAFE_COORDINATION_READ_ONLY)
         } catch (_: Throwable) {
             ConnectedMessageCommandResult.Failure(SAFE_COORDINATION_SEND_ERROR)
+        }
+    }
+
+    suspend fun proposeConnectedJourneyPlan(
+        tripId: String,
+        pickupDetails: String,
+        dropOffDetails: String,
+    ): ConnectedJourneyPlanCommandResult {
+        val validated = when (val result = ConnectedJourneyPlanPolicy.validate(pickupDetails, dropOffDetails)) {
+            is ConnectedJourneyPlanValidationResult.Invalid ->
+                return ConnectedJourneyPlanCommandResult.InvalidInput(result.userMessage)
+            is ConnectedJourneyPlanValidationResult.Valid -> result.plan
+        }
+        val store = coordination ?: return ConnectedJourneyPlanCommandResult.Failure(SAFE_PLAN_SAVE_ERROR)
+        val uid = auth.currentUserId ?: return ConnectedJourneyPlanCommandResult.ReadOnly(SAFE_COORDINATION_READ_ONLY)
+        return try {
+            firebaseCall { store.proposePlan(uid, tripId, validated) }
+            if (auth.currentUserId == uid) ConnectedJourneyPlanCommandResult.Success
+            else ConnectedJourneyPlanCommandResult.ReadOnly(SAFE_COORDINATION_READ_ONLY)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: ConnectedCoordinationUnavailableException) {
+            ConnectedJourneyPlanCommandResult.ReadOnly(SAFE_COORDINATION_READ_ONLY)
+        } catch (_: Throwable) {
+            ConnectedJourneyPlanCommandResult.Failure(SAFE_PLAN_SAVE_ERROR)
+        }
+    }
+
+    suspend fun agreeConnectedJourneyPlan(
+        tripId: String,
+        revision: Int,
+    ): ConnectedJourneyPlanCommandResult {
+        if (revision <= 0) return ConnectedJourneyPlanCommandResult.ReadOnly(SAFE_COORDINATION_READ_ONLY)
+        val store = coordination ?: return ConnectedJourneyPlanCommandResult.Failure(SAFE_PLAN_SAVE_ERROR)
+        val uid = auth.currentUserId ?: return ConnectedJourneyPlanCommandResult.ReadOnly(SAFE_COORDINATION_READ_ONLY)
+        return try {
+            firebaseCall { store.agreePlan(uid, tripId, revision) }
+            if (auth.currentUserId == uid) ConnectedJourneyPlanCommandResult.Success
+            else ConnectedJourneyPlanCommandResult.ReadOnly(SAFE_COORDINATION_READ_ONLY)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: ConnectedCoordinationUnavailableException) {
+            ConnectedJourneyPlanCommandResult.ReadOnly(SAFE_COORDINATION_READ_ONLY)
+        } catch (_: Throwable) {
+            ConnectedJourneyPlanCommandResult.Failure(SAFE_PLAN_SAVE_ERROR)
         }
     }
 
@@ -442,6 +492,7 @@ class ConnectedRydeRepository(
         const val SAFE_COORDINATION_LOAD_ERROR = "Messages are unavailable right now. Try again."
         const val SAFE_COORDINATION_SEND_ERROR = "Ryde couldn't send that message. Try again."
         const val SAFE_COORDINATION_READ_ONLY = "This conversation is now read-only."
+        const val SAFE_PLAN_SAVE_ERROR = "Ryde couldn't update the journey plan. Try again."
         const val SAFE_PLACE_SELECTION_REQUIRED = "Choose the intended broad area before offering this journey."
     }
 }

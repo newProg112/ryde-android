@@ -113,6 +113,41 @@ class ConnectedCoordinationRepositoryTest {
         assertEquals(1, store.persisted.size)
     }
 
+    @Test
+    fun `driver proposal normalizes details increments revision and clears agreement`() = runBlocking {
+        val store = FakeCoordinationStore()
+        val repository = repository(FakeAuth("driver"), store)
+        assertEquals(
+            ConnectedJourneyPlanCommandResult.Success,
+            repository.proposeConnectedJourneyPlan(trip.id, "  Pickup  point ", " Drop-off point "),
+        )
+        assertEquals(1, store.plan?.revision)
+        assertEquals("Pickup point", store.plan?.pickupDetails)
+        store.plan = store.plan!!.copy(acceptedRevision = 1, acceptedAtEpochMillis = 2)
+        assertEquals(
+            ConnectedJourneyPlanCommandResult.Success,
+            repository.proposeConnectedJourneyPlan(trip.id, "New pickup", "Drop-off point"),
+        )
+        assertEquals(2, store.plan?.revision)
+        assertEquals(0, store.plan?.acceptedRevision)
+        assertEquals(null, store.plan?.acceptedAtEpochMillis)
+    }
+
+    @Test
+    fun `rider agrees only to current revision and account switch fails closed`() = runBlocking {
+        val auth = FakeAuth("rider")
+        val store = FakeCoordinationStore().apply {
+            plan = ConnectedJourneyPlan("Pickup", "Drop-off", 2, 1, 0, null)
+        }
+        val repository = repository(auth, store)
+        assertTrue(repository.agreeConnectedJourneyPlan(trip.id, 1) is ConnectedJourneyPlanCommandResult.ReadOnly)
+        assertEquals(0, store.plan?.acceptedRevision)
+        assertEquals(ConnectedJourneyPlanCommandResult.Success, repository.agreeConnectedJourneyPlan(trip.id, 2))
+        assertTrue(store.plan!!.isAgreed)
+        auth.uid = null
+        assertTrue(repository.agreeConnectedJourneyPlan(trip.id, 2) is ConnectedJourneyPlanCommandResult.ReadOnly)
+    }
+
     private fun repository(auth: FakeAuth, store: ConnectedCoordinationStore) =
         ConnectedRydeRepository(auth, EmptyProfiles, coordination = store)
 
@@ -134,6 +169,7 @@ class ConnectedCoordinationRepositoryTest {
         var activeObservers = 0
         var sendCalls = 0
         val persisted = linkedMapOf<String, Pair<String, String>>()
+        var plan: ConnectedJourneyPlan? = null
 
         override fun observeConversation(uid: String, tripId: String): Flow<ConnectedConversationSnapshot> = flow {
             activeObservers++
@@ -150,6 +186,21 @@ class ConnectedCoordinationRepositoryTest {
             if (existing == null) persisted[messageId] = uid to body
             else if (existing != uid to body) throw ConnectedCoordinationUnavailableException()
             else sendCalls--
+        }
+
+        override suspend fun proposePlan(uid: String, tripId: String, plan: ValidatedConnectedJourneyPlan) {
+            if (uid != "driver") throw ConnectedCoordinationUnavailableException()
+            if (this.plan?.pickupDetails == plan.pickupDetails && this.plan?.dropOffDetails == plan.dropOffDetails) return
+            this.plan = ConnectedJourneyPlan(
+                plan.pickupDetails, plan.dropOffDetails, (this.plan?.revision ?: 0) + 1,
+                1, 0, null,
+            )
+        }
+
+        override suspend fun agreePlan(uid: String, tripId: String, revision: Int) {
+            val current = plan ?: throw ConnectedCoordinationUnavailableException()
+            if (uid != "rider" || current.revision != revision) throw ConnectedCoordinationUnavailableException()
+            if (!current.isAgreed) plan = current.copy(acceptedRevision = revision, acceptedAtEpochMillis = 2)
         }
     }
 }

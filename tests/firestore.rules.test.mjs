@@ -163,6 +163,16 @@ const message = (senderUid, body = "I'm outside the station.") => ({
   sentAt: serverTimestamp(),
 });
 
+const coordinationDetails = (overrides = {}) => ({
+  pickupDetails: "Mansfield station taxi rank, meet 08:15",
+  dropOffDetails: "Nottingham station main entrance",
+  revision: 1,
+  proposedAt: serverTimestamp(),
+  acceptedRevision: 0,
+  acceptedAt: null,
+  ...overrides,
+});
+
 const createJourney = (
   db,
   journeyId,
@@ -1611,13 +1621,18 @@ test("confirmed-trip participants can create and read bounded message history", 
     doc(rider, "confirmedTrips/messages_rider/messages/rider-message"),
     message("rider", "I'm here."),
   ));
-  const history = query(
-    collection(rider, "confirmedTrips/messages_rider/messages"),
-    orderBy("sentAt"),
-    limitToLast(100),
-  );
-  assert.equal((await assertSucceeds(getDocs(history))).size, 2);
-  await assertSucceeds(getDoc(doc(driver, "confirmedTrips/messages_rider/messages/rider-message")));
+  const participantHistory = async (db) => {
+    const history = query(
+      collection(db, "confirmedTrips/messages_rider/messages"),
+      orderBy("sentAt"),
+      limitToLast(100),
+    );
+    const snapshot = await assertSucceeds(getDocs(history));
+    return snapshot.docs.map((item) => item.id).sort();
+  };
+  const expected = ["driver-message", "rider-message"];
+  assert.deepEqual(await participantHistory(driver), expected);
+  assert.deepEqual(await participantHistory(rider), expected);
 });
 
 test("message history and creation deny strangers and unauthenticated callers", async () => {
@@ -1785,4 +1800,149 @@ test("an OPEN journey permits coordination at and after departure", async () => 
     ));
     await environment.clearFirestore();
   }
+});
+
+test("coordination details require a valid confirmed parent and remain participant private", async () => {
+  const driver = environment.authenticatedContext("driver").firestore();
+  const rider = environment.authenticatedContext("rider").firestore();
+  const stranger = environment.authenticatedContext("stranger").firestore();
+  const anonymous = environment.unauthenticatedContext().firestore();
+  const missing = "confirmedTrips/missing_rider/coordination/details";
+  await assertFails(setDoc(doc(driver, missing), coordinationDetails()));
+  await seedConversation();
+  const path = "confirmedTrips/messages_rider/coordination/details";
+  await assertSucceeds(setDoc(doc(driver, path), coordinationDetails()));
+  await assertSucceeds(getDoc(doc(driver, path)));
+  await assertSucceeds(getDoc(doc(rider, path)));
+  await assertFails(getDoc(doc(stranger, path)));
+  await assertFails(getDoc(doc(anonymous, path)));
+  await assertFails(getDocs(collection(stranger, "confirmedTrips/messages_rider/coordination")));
+});
+
+test("only the driver creates and revises an exact coordination proposal", async () => {
+  await seedConversation();
+  const driver = environment.authenticatedContext("driver").firestore();
+  const rider = environment.authenticatedContext("rider").firestore();
+  const path = "confirmedTrips/messages_rider/coordination/details";
+  await assertFails(setDoc(doc(rider, path), coordinationDetails()));
+  await assertSucceeds(setDoc(doc(driver, path), coordinationDetails()));
+  await assertFails(updateDoc(doc(rider, path), {
+    pickupDetails: "Rider changed pickup", revision: 2, proposedAt: serverTimestamp(),
+  }));
+  await assertFails(updateDoc(doc(driver, path), {
+    pickupDetails: "New pickup", revision: 1, proposedAt: serverTimestamp(),
+  }));
+  await assertFails(updateDoc(doc(driver, path), {
+    pickupDetails: "New pickup", revision: 3, proposedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(updateDoc(doc(driver, path), {
+    pickupDetails: "Mansfield station main entrance, meet 08:10",
+    revision: 2,
+    proposedAt: serverTimestamp(),
+    acceptedRevision: 0,
+    acceptedAt: null,
+  }));
+  assert.equal((await getDoc(doc(rider, path))).data().revision, 2);
+});
+
+test("only the rider agrees to the current revision and driver revision clears agreement", async () => {
+  await seedConversation();
+  const driver = environment.authenticatedContext("driver").firestore();
+  const rider = environment.authenticatedContext("rider").firestore();
+  const path = "confirmedTrips/messages_rider/coordination/details";
+  await assertSucceeds(setDoc(doc(driver, path), coordinationDetails()));
+  await assertFails(updateDoc(doc(driver, path), { acceptedRevision: 1, acceptedAt: serverTimestamp() }));
+  await assertFails(updateDoc(doc(rider, path), { acceptedRevision: 2, acceptedAt: serverTimestamp() }));
+  await assertSucceeds(updateDoc(doc(rider, path), { acceptedRevision: 1, acceptedAt: serverTimestamp() }));
+  assert.equal((await getDoc(doc(driver, path))).data().acceptedRevision, 1);
+  await assertFails(updateDoc(doc(rider, path), { acceptedAt: serverTimestamp() }));
+  await assertSucceeds(updateDoc(doc(driver, path), {
+    pickupDetails: "Mansfield station main entrance, meet 08:10",
+    revision: 2,
+    proposedAt: serverTimestamp(),
+    acceptedRevision: 0,
+    acceptedAt: null,
+  }));
+  const revised = (await getDoc(doc(rider, path))).data();
+  assert.equal(revised.acceptedRevision, 0);
+  assert.equal(revised.acceptedAt, null);
+});
+
+test("coordination detail schema rejects malformed extra and unbounded values", async () => {
+  const invalid = [
+    coordinationDetails({ extra: true }),
+    coordinationDetails({ pickupDetails: " " }),
+    coordinationDetails({ dropOffDetails: "x".repeat(161) }),
+    coordinationDetails({ revision: 0 }),
+    coordinationDetails({ acceptedRevision: 1, acceptedAt: null }),
+    coordinationDetails({ proposedAt: Timestamp.fromMillis(1) }),
+  ];
+  for (const [index, data] of invalid.entries()) {
+    await environment.clearFirestore();
+    await seedConversation();
+    const driver = environment.authenticatedContext("driver").firestore();
+    await assertFails(setDoc(doc(driver, "confirmedTrips/messages_rider/coordination/details"), data), `invalid ${index}`);
+  }
+  await environment.clearFirestore();
+  await seedConversation();
+  const driver = environment.authenticatedContext("driver").firestore();
+  await assertSucceeds(setDoc(
+    doc(driver, "confirmedTrips/messages_rider/coordination/details"),
+    coordinationDetails(),
+  ));
+  await assertFails(deleteDoc(doc(driver, "confirmedTrips/messages_rider/coordination/details")));
+});
+
+test("closed coordination preserves participant plan reads and blocks every write", async () => {
+  for (const terminal of ["CANCELLED_BY_RIDER", "CANCELLED", "COMPLETED"]) {
+    await seedConversation();
+    const driver = environment.authenticatedContext("driver").firestore();
+    const rider = environment.authenticatedContext("rider").firestore();
+    const path = "confirmedTrips/messages_rider/coordination/details";
+    await assertSucceeds(setDoc(doc(driver, path), coordinationDetails()));
+    await environment.withSecurityRulesDisabled(async (context) => {
+      const db = context.firestore();
+      if (terminal === "CANCELLED_BY_RIDER") {
+        await updateDoc(doc(db, "confirmedTrips/messages_rider"), {
+          status: terminal, cancelledAt: Timestamp.now(),
+        });
+      } else {
+        await updateDoc(doc(db, "journeys/messages"), terminal === "CANCELLED" ? {
+          status: terminal, cancelledAt: Timestamp.now(),
+        } : { status: terminal, completedAt: Timestamp.now() });
+      }
+    });
+    await assertSucceeds(getDoc(doc(driver, path)));
+    await assertSucceeds(getDoc(doc(rider, path)));
+    await assertFails(updateDoc(doc(driver, path), {
+      pickupDetails: "Changed", revision: 2, proposedAt: serverTimestamp(),
+      acceptedRevision: 0, acceptedAt: null,
+    }));
+    await assertFails(updateDoc(doc(rider, path), { acceptedRevision: 1, acceptedAt: serverTimestamp() }));
+    await environment.clearFirestore();
+  }
+});
+
+test("confirmed riders on one journey have isolated coordination plans", async () => {
+  await seedConversation();
+  await environment.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    const sourceJourney = (await getDoc(doc(db, "journeys/messages"))).data();
+    const sourceRequest = request("messages", "driver", "other", "ACCEPTED");
+    await setDoc(
+      doc(db, "confirmedTrips/messages_other"),
+      confirmedTrip("messages_other", sourceRequest, sourceJourney),
+    );
+  });
+  const driver = environment.authenticatedContext("driver").firestore();
+  const rider = environment.authenticatedContext("rider").firestore();
+  const other = environment.authenticatedContext("other").firestore();
+  const riderPath = "confirmedTrips/messages_rider/coordination/details";
+  const otherPath = "confirmedTrips/messages_other/coordination/details";
+  await assertSucceeds(setDoc(doc(driver, riderPath), coordinationDetails()));
+  await assertSucceeds(setDoc(doc(driver, otherPath), coordinationDetails({ pickupDetails: "Other pickup" })));
+  await assertSucceeds(getDoc(doc(rider, riderPath)));
+  await assertFails(getDoc(doc(rider, otherPath)));
+  await assertSucceeds(getDoc(doc(other, otherPath)));
+  await assertFails(getDoc(doc(other, riderPath)));
 });

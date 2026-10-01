@@ -44,7 +44,7 @@ class ConnectedTripsScreenUiTest {
         } }
 
         compose.onNodeWithText("Rider requested: Hucknall → Nottingham").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText("Broad areas only — pickup and drop-off are not agreed yet.")
+        compose.onNodeWithText("Broad requested areas only — confirmed pairs coordinate pickup and drop-off privately.")
             .performScrollTo().assertIsDisplayed()
         compose.runOnIdle { viewer.value = journey.driverUid }
         compose.onNodeWithText("Rider requested: Hucknall → Nottingham").performScrollTo().assertIsDisplayed()

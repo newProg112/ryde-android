@@ -1068,7 +1068,7 @@ class RydeAppNavigationUiTest {
         launchConnected()
         tab("Trips").performClick()
         openDetails()
-        detailsText("Messages").performClick()
+        detailsText("Coordinate trip").performClick()
         compose.onNodeWithTag("connected-conversation").assertIsDisplayed()
         compose.waitUntil { coordination.activeObservers == 1 && store.activeLifecycleObservers == 1 }
         compose.runOnIdle { runBlocking { repository.signOut() } }
@@ -1111,8 +1111,8 @@ class RydeAppNavigationUiTest {
         launchConnected()
         tab("Trips").performClick()
         openDetails()
-        detailsText("Messages").performClick()
-        compose.onNodeWithText("Messages with Morgan").assertIsDisplayed()
+        detailsText("Coordinate trip").performClick()
+        compose.onNodeWithText("Coordinate with Morgan").assertIsDisplayed()
         compose.onNodeWithText("No messages yet. Send a short update to coordinate this trip.").assertIsDisplayed()
         compose.runOnIdle { assertEquals(1, coordination.activeObservers) }
 
@@ -1121,7 +1121,7 @@ class RydeAppNavigationUiTest {
         detailsText("Your seat is confirmed").assertIsDisplayed()
         compose.runOnIdle { assertEquals(0, coordination.activeObservers) }
 
-        detailsText("Messages").performClick()
+        detailsText("Coordinate trip").performClick()
         compose.runOnIdle {
             coordination.messages += ConnectedMessage("remote", "driver-private-uid", "I'm outside.", 10)
             coordination.notifyChanged()
@@ -1139,7 +1139,7 @@ class RydeAppNavigationUiTest {
         launchConnected()
         tab("Trips").performClick()
         openDetails()
-        detailsText("Messages").performClick()
+        detailsText("Coordinate trip").performClick()
         compose.waitUntil { coordination.activeObservers == 1 && store.activeLifecycleObservers == 1 }
 
         compose.runOnIdle {
@@ -1153,7 +1153,7 @@ class RydeAppNavigationUiTest {
 
         detailsText("Journey cancelled by driver").assertIsDisplayed()
         compose.onAllNodesWithText("Cancel my seat").assertCountEquals(0)
-        detailsText("Messages").assertIsDisplayed()
+        detailsText("Coordinate trip").assertIsDisplayed()
         compose.runOnIdle {
             assertEquals(ConnectedRequestStatus.ACCEPTED, repository.journeyState.value.requests.single().status)
             assertEquals(ConnectedTripStatus.CONFIRMED, repository.journeyState.value.confirmedTrips.single().status)
@@ -1316,6 +1316,7 @@ class RydeAppNavigationUiTest {
         private val snapshot: (String, List<ConnectedMessage>) -> ConnectedConversationSnapshot,
     ) : ConnectedCoordinationStore {
         val messages = mutableListOf<ConnectedMessage>()
+        var plan: ConnectedJourneyPlan? = null
         private val changes = MutableSharedFlow<Unit>(extraBufferCapacity = 4)
         var activeObservers = 0
         private val sent = linkedMapOf<String, Pair<String, String>>()
@@ -1325,8 +1326,8 @@ class RydeAppNavigationUiTest {
         override fun observeConversation(uid: String, tripId: String): Flow<ConnectedConversationSnapshot> = flow {
             activeObservers++
             try {
-                emit(snapshot(tripId, messages.toList()))
-                changes.collect { emit(snapshot(tripId, messages.toList())) }
+                emit(snapshot(tripId, messages.toList()).copy(plan = plan))
+                changes.collect { emit(snapshot(tripId, messages.toList()).copy(plan = plan)) }
             } finally {
                 activeObservers--
             }
@@ -1340,6 +1341,21 @@ class RydeAppNavigationUiTest {
             }
             sent[messageId] = uid to body
             messages += ConnectedMessage(messageId, uid, body, messages.size.toLong() + 1)
+            notifyChanged()
+        }
+
+        override suspend fun proposePlan(uid: String, tripId: String, plan: ValidatedConnectedJourneyPlan) {
+            if (uid != "driver-private-uid") error("Only driver can propose")
+            this.plan = ConnectedJourneyPlan(
+                plan.pickupDetails, plan.dropOffDetails, (this.plan?.revision ?: 0) + 1,
+                1, 0, null,
+            )
+            notifyChanged()
+        }
+
+        override suspend fun agreePlan(uid: String, tripId: String, revision: Int) {
+            if (uid != "rider-private-uid" || plan?.revision != revision) error("Cannot agree")
+            plan = plan!!.copy(acceptedRevision = revision, acceptedAtEpochMillis = 2)
             notifyChanged()
         }
     }

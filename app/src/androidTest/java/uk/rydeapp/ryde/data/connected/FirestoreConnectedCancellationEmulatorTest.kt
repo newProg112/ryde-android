@@ -7,7 +7,9 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.Source
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -101,19 +103,47 @@ class FirestoreConnectedCancellationEmulatorTest {
             assertFalse("requestedDestinationArea" in acceptedTripData)
             val driverCoordination = FirestoreConnectedCoordinationStore(driverDb)
             val riderCoordination = FirestoreConnectedCoordinationStore(riderDb)
-            driverCoordination.sendMessage(
-                driverUid, accepted.id, "driver-message", "I'm outside the station.",
+            driverCoordination.proposePlan(
+                driverUid,
+                accepted.id,
+                ValidatedConnectedJourneyPlan(
+                    "Mansfield station taxi rank, meet 08:15",
+                    "Nottingham station main entrance",
+                ),
             )
-            val riderConversation = withTimeout(10_000) {
+            val proposedPlan = withTimeout(10_000) {
                 riderCoordination.observeConversation(riderUid, accepted.id)
-                    .first { it.messages.any { message -> message.id == "driver-message" } }
-            }
-            assertEquals("I'm outside the station.", riderConversation.messages.single().body)
-            riderCoordination.sendMessage(riderUid, accepted.id, "rider-message", "I'm here.")
-            val driverConversation = withTimeout(10_000) {
-                driverCoordination.observeConversation(driverUid, accepted.id).first { it.messages.size == 2 }
-            }
-            assertEquals(listOf("driver-message", "rider-message"), driverConversation.messages.map { it.id })
+                    .first { it.plan?.revision == 1 }
+            }.plan!!
+            assertEquals(0, proposedPlan.acceptedRevision)
+            riderCoordination.agreePlan(riderUid, accepted.id, proposedPlan.revision)
+            val agreedPlan = withTimeout(10_000) {
+                driverCoordination.observeConversation(driverUid, accepted.id)
+                    .first { it.plan?.isAgreed == true }
+            }.plan!!
+            assertEquals(1, agreedPlan.acceptedRevision)
+            driverCoordination.proposePlan(
+                driverUid,
+                accepted.id,
+                ValidatedConnectedJourneyPlan(
+                    "Mansfield station main entrance, meet 08:10",
+                    "Nottingham station main entrance",
+                ),
+            )
+            val revisedPlan = withTimeout(10_000) {
+                riderCoordination.observeConversation(riderUid, accepted.id)
+                    .first { it.plan?.revision == 2 }
+            }.plan!!
+            assertFalse(revisedPlan.isAgreed)
+            assertEquals(0, revisedPlan.acceptedRevision)
+            verifyBidirectionalCoordination(
+                driverCoordination = driverCoordination,
+                riderCoordination = riderCoordination,
+                driverUid = driverUid,
+                riderUid = riderUid,
+                tripId = accepted.id,
+                currentPlanRevision = revisedPlan.revision,
+            )
             assertFalse(runCatching {
                 withTimeout(5_000) {
                     FirestoreConnectedCoordinationStore(otherDb)
@@ -155,7 +185,8 @@ class FirestoreConnectedCancellationEmulatorTest {
             assertEquals(ConnectedRequestStatus.CANCELLED_AFTER_ACCEPTANCE, cancelled.requests.single().status)
             val retainedConversation = withTimeout(10_000) {
                 riderCoordination.observeConversation(riderUid, trip.id).first { snapshot ->
-                    snapshot.trip.status == ConnectedTripStatus.CANCELLED_BY_RIDER && snapshot.messages.size == 2
+                    snapshot.trip.status == ConnectedTripStatus.CANCELLED_BY_RIDER &&
+                        snapshot.messages.size == 2 && snapshot.plan?.revision == 3
                 }
             }
             assertTrue(ConnectedJourneyLifecycle.canReadMessages(retainedConversation.trip, riderUid))
@@ -164,6 +195,11 @@ class FirestoreConnectedCancellationEmulatorTest {
             ))
             assertFalse(runCatching {
                 riderCoordination.sendMessage(riderUid, trip.id, "after-cancel", "Still here")
+            }.isSuccess)
+            assertFalse(runCatching {
+                driverCoordination.proposePlan(
+                    driverUid, trip.id, ValidatedConnectedJourneyPlan("Changed", "Changed"),
+                )
             }.isSuccess)
             assertEquals(1, cancelled.journeys.single { it.id == journey.id }.seatsRemaining)
             assertEquals(trip, driver.load(driverUid).confirmedTrips.single())
@@ -250,5 +286,83 @@ class FirestoreConnectedCancellationEmulatorTest {
             apps.forEach { it.delete() }
         }
         }
+    }
+
+    private suspend fun verifyBidirectionalCoordination(
+        driverCoordination: FirestoreConnectedCoordinationStore,
+        riderCoordination: FirestoreConnectedCoordinationStore,
+        driverUid: String,
+        riderUid: String,
+        tripId: String,
+        currentPlanRevision: Int,
+    ) = coroutineScope {
+        fun observeMessage(
+            store: FirestoreConnectedCoordinationStore,
+            uid: String,
+            messageId: String,
+        ) = async(start = CoroutineStart.UNDISPATCHED) {
+            withTimeout(10_000) {
+                store.observeConversation(uid, tripId)
+                    .first { snapshot -> snapshot.messages.any { it.id == messageId } }
+            }
+        }
+
+        val driverObservesOwn = observeMessage(driverCoordination, driverUid, "driver-message")
+        val riderObservesDriver = observeMessage(riderCoordination, riderUid, "driver-message")
+        driverCoordination.sendMessage(
+            driverUid, tripId, "driver-message", "I'm outside the station.",
+        )
+        assertEquals(
+            "I'm outside the station.",
+            driverObservesOwn.await().messages.single { it.id == "driver-message" }.body,
+        )
+        assertEquals(
+            "I'm outside the station.",
+            riderObservesDriver.await().messages.single { it.id == "driver-message" }.body,
+        )
+
+        val riderObservesOwn = observeMessage(riderCoordination, riderUid, "rider-message")
+        val driverObservesRider = observeMessage(driverCoordination, driverUid, "rider-message")
+        riderCoordination.sendMessage(riderUid, tripId, "rider-message", "I'm here.")
+        assertEquals(
+            "I'm here.",
+            riderObservesOwn.await().messages.single { it.id == "rider-message" }.body,
+        )
+        assertEquals(
+            "I'm here.",
+            driverObservesRider.await().messages.single { it.id == "rider-message" }.body,
+        )
+
+        val expectedMessageIds = listOf("driver-message", "rider-message")
+        val driverReentry = withTimeout(10_000) {
+            driverCoordination.observeConversation(driverUid, tripId)
+                .first { it.messages.size == expectedMessageIds.size }
+        }
+        val riderReentry = withTimeout(10_000) {
+            riderCoordination.observeConversation(riderUid, tripId)
+                .first { it.messages.size == expectedMessageIds.size }
+        }
+        assertEquals(expectedMessageIds, driverReentry.messages.map { it.id })
+        assertEquals(driverReentry.messages, riderReentry.messages)
+
+        riderCoordination.agreePlan(riderUid, tripId, currentPlanRevision)
+        val agreedWithMessages = withTimeout(10_000) {
+            driverCoordination.observeConversation(driverUid, tripId)
+                .first { it.plan?.isAgreed == true && it.messages.size == expectedMessageIds.size }
+        }
+        assertEquals(expectedMessageIds, agreedWithMessages.messages.map { it.id })
+        driverCoordination.proposePlan(
+            driverUid,
+            tripId,
+            ValidatedConnectedJourneyPlan(
+                "Mansfield station main entrance, meet 08:05",
+                "Nottingham station main entrance",
+            ),
+        )
+        val independentlyRevised = withTimeout(10_000) {
+            riderCoordination.observeConversation(riderUid, tripId)
+                .first { it.plan?.revision == 3 && it.messages.size == expectedMessageIds.size }
+        }
+        assertEquals(expectedMessageIds, independentlyRevised.messages.map { it.id })
     }
 }

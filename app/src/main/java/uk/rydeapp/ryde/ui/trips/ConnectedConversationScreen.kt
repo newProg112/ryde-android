@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -35,6 +37,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -53,7 +56,11 @@ import uk.rydeapp.ryde.data.connected.ConnectedConversationState
 import uk.rydeapp.ryde.data.connected.ConnectedMessage
 import uk.rydeapp.ryde.data.connected.ConnectedMessageCommandResult
 import uk.rydeapp.ryde.data.connected.ConnectedMessagePolicy
+import uk.rydeapp.ryde.data.connected.ConnectedJourneyPlanCommandResult
+import uk.rydeapp.ryde.data.connected.ConnectedJourneyPlanPolicy
+import uk.rydeapp.ryde.data.connected.ConnectedJourneyPlanStatus
 import uk.rydeapp.ryde.data.connected.ConnectedRydeRepository
+import uk.rydeapp.ryde.data.connected.status
 import uk.rydeapp.ryde.ui.components.formatConnectedJourneyDeparture
 
 @Composable
@@ -74,6 +81,10 @@ internal fun ConnectedConversationRoute(
     var pendingMessageId by rememberSaveable(accountId, target.tripId) { mutableStateOf<String?>(null) }
     var sending by remember(accountId, target.tripId) { mutableStateOf(false) }
     var sendError by remember(accountId, target.tripId) { mutableStateOf<String?>(null) }
+    var pickupDraft by rememberSaveable(accountId, target.tripId) { mutableStateOf("") }
+    var dropOffDraft by rememberSaveable(accountId, target.tripId) { mutableStateOf("") }
+    var planBusy by remember(accountId, target.tripId) { mutableStateOf(false) }
+    var planError by remember(accountId, target.tripId) { mutableStateOf<String?>(null) }
 
     val conversation = when (val current = state) {
         is ConnectedConversationState.Data -> current.conversation
@@ -87,6 +98,20 @@ internal fun ConnectedConversationRoute(
             pendingMessageId = null
             sendError = null
             sending = false
+        }
+    }
+    LaunchedEffect(conversation?.plan?.revision) {
+        pickupDraft = conversation?.plan?.pickupDetails.orEmpty()
+        dropOffDraft = conversation?.plan?.dropOffDetails.orEmpty()
+        planError = null
+    }
+
+    fun handlePlanResult(result: ConnectedJourneyPlanCommandResult) {
+        planError = when (result) {
+            ConnectedJourneyPlanCommandResult.Success -> null
+            is ConnectedJourneyPlanCommandResult.InvalidInput -> result.userMessage
+            is ConnectedJourneyPlanCommandResult.ReadOnly -> result.userMessage
+            is ConnectedJourneyPlanCommandResult.Failure -> result.userMessage
         }
     }
 
@@ -128,10 +153,55 @@ internal fun ConnectedConversationRoute(
         },
         onRetry = {
             sendError = null
+            planError = null
             retryVersion++
         },
         onBack = onBack,
         modifier = modifier,
+        pickupDraft = pickupDraft,
+        dropOffDraft = dropOffDraft,
+        planBusy = planBusy,
+        planError = planError,
+        onPickupChanged = {
+            pickupDraft = it.take(ConnectedJourneyPlanPolicy.MAX_DETAIL_LENGTH)
+            planError = null
+        },
+        onDropOffChanged = {
+            dropOffDraft = it.take(ConnectedJourneyPlanPolicy.MAX_DETAIL_LENGTH)
+            planError = null
+        },
+        onSavePlan = {
+            if (!planBusy) {
+                planBusy = true
+                planError = null
+                scope.launch {
+                    try {
+                        handlePlanResult(repository.proposeConnectedJourneyPlan(
+                            target.tripId, pickupDraft, dropOffDraft,
+                        ))
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } finally {
+                        planBusy = false
+                    }
+                }
+            }
+        },
+        onAgreePlan = { revision ->
+            if (!planBusy) {
+                planBusy = true
+                planError = null
+                scope.launch {
+                    try {
+                        handlePlanResult(repository.agreeConnectedJourneyPlan(target.tripId, revision))
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } finally {
+                        planBusy = false
+                    }
+                }
+            }
+        },
     )
 }
 
@@ -148,6 +218,14 @@ internal fun ConnectedConversationScreen(
     onRetry: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    pickupDraft: String = "",
+    dropOffDraft: String = "",
+    planBusy: Boolean = false,
+    planError: String? = null,
+    onPickupChanged: (String) -> Unit = {},
+    onDropOffChanged: (String) -> Unit = {},
+    onSavePlan: () -> Unit = {},
+    onAgreePlan: (Int) -> Unit = {},
 ) {
     val conversation = when (state) {
         is ConnectedConversationState.Data -> state.conversation
@@ -158,11 +236,15 @@ internal fun ConnectedConversationScreen(
     val canSend = state is ConnectedConversationState.Data && conversation?.canSendMessages == true
     val messages = conversation?.messages.orEmpty()
     val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val composerBringIntoViewRequester = remember { BringIntoViewRequester() }
     LaunchedEffect(messages.map(ConnectedMessage::id)) {
-        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
+        if (messages.isNotEmpty() && listState.layoutInfo.totalItemsCount > 0) {
+            listState.animateScrollToItem(listState.layoutInfo.totalItemsCount - 1)
+        }
     }
 
-    Column(modifier.fillMaxSize().imePadding().testTag("connected-conversation")) {
+    Column(modifier.fillMaxSize().testTag("connected-conversation")) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = onBack) { Text(stringResource(R.string.connected_trip_details_back)) }
             Text(
@@ -176,79 +258,226 @@ internal fun ConnectedConversationScreen(
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             return@Column
         }
-        if (listenerFailed) {
-            Column(
-                Modifier.fillMaxWidth().padding(horizontal = 18.dp).semantics { liveRegion = LiveRegionMode.Polite },
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Text((state as ConnectedConversationState.Error).userMessage, color = MaterialTheme.colorScheme.error)
-                TextButton(onClick = onRetry, modifier = Modifier.testTag("messages-retry")) {
-                    Text(stringResource(R.string.connected_messages_retry))
+        LazyColumn(
+            Modifier.weight(1f).fillMaxWidth().imePadding().testTag("coordinate-scroll-surface"),
+            state = listState,
+            contentPadding = PaddingValues(vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (listenerFailed) item(key = "listener-error") {
+                Column(
+                    Modifier.fillMaxWidth().padding(horizontal = 18.dp)
+                        .semantics { liveRegion = LiveRegionMode.Polite },
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text((state as ConnectedConversationState.Error).userMessage, color = MaterialTheme.colorScheme.error)
+                    TextButton(onClick = onRetry, modifier = Modifier.testTag("messages-retry")) {
+                        Text(stringResource(R.string.connected_messages_retry))
+                    }
                 }
             }
-        }
-        conversation?.let {
-            Text(
-                stringResource(R.string.connected_route, it.trip.originArea, it.trip.destinationArea),
-                Modifier.padding(horizontal = 18.dp),
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(formatConnectedJourneyDeparture(it.trip.departureEpochMillis), Modifier.padding(horizontal = 18.dp))
-        }
-        Text(
-            stringResource(R.string.connected_messages_privacy),
-            Modifier.padding(horizontal = 18.dp, vertical = 8.dp),
-            style = MaterialTheme.typography.bodySmall,
-        )
-        if (conversation == null) {
-            Text(stringResource(R.string.connected_messages_unavailable), Modifier.padding(18.dp))
-        } else {
-            LazyColumn(
-                Modifier.weight(1f).fillMaxWidth().testTag("messages-list"),
-                state = listState,
-                contentPadding = PaddingValues(18.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                if (messages.isEmpty()) item { Text(stringResource(R.string.connected_messages_empty)) }
+            conversation?.let { current ->
+                item(key = "trip-context") {
+                    Column(Modifier.padding(horizontal = 18.dp)) {
+                        Text(
+                            stringResource(
+                                R.string.connected_route,
+                                current.trip.originArea,
+                                current.trip.destinationArea,
+                            ),
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        Text(formatConnectedJourneyDeparture(current.trip.departureEpochMillis))
+                    }
+                }
+            }
+            item(key = "privacy") {
+                Text(
+                    stringResource(R.string.connected_messages_privacy),
+                    Modifier.padding(horizontal = 18.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            conversation?.let { current ->
+                item(key = "journey-plan") {
+                    JourneyPlanCard(
+                        accountId = accountId,
+                        conversation = current,
+                        stateIsCurrent = state is ConnectedConversationState.Data,
+                        pickupDraft = pickupDraft,
+                        dropOffDraft = dropOffDraft,
+                        busy = planBusy,
+                        error = planError,
+                        onPickupChanged = onPickupChanged,
+                        onDropOffChanged = onDropOffChanged,
+                        onSave = onSavePlan,
+                        onAgree = onAgreePlan,
+                    )
+                }
+            }
+            if (conversation == null) {
+                item(key = "unavailable") {
+                    Text(stringResource(R.string.connected_messages_unavailable), Modifier.padding(18.dp))
+                }
+            } else {
+                if (messages.isEmpty()) item(key = "empty-messages") {
+                    Text(stringResource(R.string.connected_messages_empty), Modifier.padding(horizontal = 18.dp))
+                }
                 items(messages, key = ConnectedMessage::id) { message ->
-                    MessageBubble(message, message.senderUid == accountId)
+                    Box(Modifier.fillMaxWidth().padding(horizontal = 18.dp)) {
+                        MessageBubble(message, message.senderUid == accountId)
+                    }
+                }
+                if (!canSend) item(key = "read-only") {
+                    Text(
+                        stringResource(conversation.readOnlyText()),
+                        Modifier.fillMaxWidth().padding(18.dp).testTag("messages-read-only")
+                            .semantics { liveRegion = LiveRegionMode.Polite },
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else item(key = "composer") {
+                    Column {
+                        sendError?.let {
+                            Text(
+                                it,
+                                Modifier.padding(horizontal = 18.dp)
+                                    .semantics { liveRegion = LiveRegionMode.Polite },
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                        if (sending) LinearProgressIndicator(Modifier.fillMaxWidth())
+                        Row(
+                            Modifier.fillMaxWidth().padding(12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            OutlinedTextField(
+                                value = draft,
+                                onValueChange = onDraftChanged,
+                                modifier = Modifier.weight(1f)
+                                    .bringIntoViewRequester(composerBringIntoViewRequester)
+                                    .onFocusChanged { focus ->
+                                        if (focus.isFocused) scope.launch {
+                                            composerBringIntoViewRequester.bringIntoView()
+                                        }
+                                    }
+                                    .testTag("message-compose"),
+                                enabled = !sending,
+                                singleLine = true,
+                                label = { Text(stringResource(R.string.connected_messages_compose)) },
+                                supportingText = {
+                                    Text("${draft.length}/${ConnectedMessagePolicy.MAX_BODY_LENGTH}")
+                                },
+                            )
+                            Button(
+                                onClick = onSend,
+                                enabled = !sending && draft.isNotBlank(),
+                                modifier = Modifier.testTag("message-send"),
+                            ) { Text(stringResource(R.string.connected_messages_send)) }
+                        }
+                    }
                 }
             }
         }
-        if (conversation != null && !canSend) {
+    }
+}
+
+@Composable
+private fun JourneyPlanCard(
+    accountId: String,
+    conversation: ConnectedConversation,
+    stateIsCurrent: Boolean,
+    pickupDraft: String,
+    dropOffDraft: String,
+    busy: Boolean,
+    error: String?,
+    onPickupChanged: (String) -> Unit,
+    onDropOffChanged: (String) -> Unit,
+    onSave: () -> Unit,
+    onAgree: (Int) -> Unit,
+) {
+    val plan = conversation.plan
+    val status = plan.status()
+    val isDriver = conversation.trip.driverUid == accountId
+    val canEdit = stateIsCurrent && conversation.canProposePlan
+    val changed = plan == null || pickupDraft.trim() != plan.pickupDetails ||
+        dropOffDraft.trim() != plan.dropOffDetails
+    Card(
+        Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 4.dp).testTag("journey-plan"),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(stringResource(R.string.connected_plan_title), style = MaterialTheme.typography.titleMedium)
             Text(
-                stringResource(conversation.readOnlyText()),
-                Modifier.fillMaxWidth().padding(18.dp).testTag("messages-read-only")
-                    .semantics { liveRegion = LiveRegionMode.Polite },
+                stringResource(when (status) {
+                    ConnectedJourneyPlanStatus.NOT_SET -> R.string.connected_plan_not_set
+                    ConnectedJourneyPlanStatus.WAITING_FOR_RIDER -> R.string.connected_plan_waiting
+                    ConnectedJourneyPlanStatus.AGREED -> R.string.connected_plan_agreed
+                }),
+                color = if (status == ConnectedJourneyPlanStatus.AGREED) {
+                    MaterialTheme.colorScheme.primary
+                } else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("journey-plan-status"),
+            )
+            Text(
+                stringResource(R.string.connected_plan_privacy),
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-        } else if (conversation != null) {
-            sendError?.let {
-                Text(it, Modifier.padding(horizontal = 18.dp).semantics { liveRegion = LiveRegionMode.Polite },
-                    color = MaterialTheme.colorScheme.error)
-            }
-            if (sending) LinearProgressIndicator(Modifier.fillMaxWidth())
-            Row(
-                Modifier.fillMaxWidth().padding(12.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+            if (isDriver && canEdit) {
                 OutlinedTextField(
-                    value = draft,
-                    onValueChange = onDraftChanged,
-                    modifier = Modifier.weight(1f).testTag("message-compose"),
-                    enabled = !sending,
+                    value = pickupDraft,
+                    onValueChange = onPickupChanged,
+                    modifier = Modifier.fillMaxWidth().testTag("plan-pickup-input"),
+                    label = { Text(stringResource(R.string.connected_plan_pickup)) },
+                    supportingText = { Text("${pickupDraft.length}/${ConnectedJourneyPlanPolicy.MAX_DETAIL_LENGTH}") },
+                    enabled = !busy,
                     singleLine = true,
-                    label = { Text(stringResource(R.string.connected_messages_compose)) },
-                    supportingText = { Text("${draft.length}/${ConnectedMessagePolicy.MAX_BODY_LENGTH}") },
+                )
+                OutlinedTextField(
+                    value = dropOffDraft,
+                    onValueChange = onDropOffChanged,
+                    modifier = Modifier.fillMaxWidth().testTag("plan-dropoff-input"),
+                    label = { Text(stringResource(R.string.connected_plan_dropoff)) },
+                    supportingText = { Text("${dropOffDraft.length}/${ConnectedJourneyPlanPolicy.MAX_DETAIL_LENGTH}") },
+                    enabled = !busy,
+                    singleLine = true,
                 )
                 Button(
-                    onClick = onSend,
-                    enabled = !sending && draft.isNotBlank(),
-                    modifier = Modifier.testTag("message-send"),
-                ) { Text(stringResource(R.string.connected_messages_send)) }
+                    onClick = onSave,
+                    enabled = !busy && changed && pickupDraft.isNotBlank() && dropOffDraft.isNotBlank(),
+                    modifier = Modifier.testTag("plan-save"),
+                ) {
+                    Text(stringResource(if (plan == null) R.string.connected_plan_propose else R.string.connected_plan_update))
+                }
+            } else if (plan != null) {
+                PlanDetail(R.string.connected_plan_pickup, plan.pickupDetails, "plan-pickup")
+                PlanDetail(R.string.connected_plan_dropoff, plan.dropOffDetails, "plan-dropoff")
+                if (!isDriver && stateIsCurrent && conversation.canAgreePlan) {
+                    Button(
+                        onClick = { onAgree(plan.revision) },
+                        enabled = !busy,
+                        modifier = Modifier.testTag("plan-agree"),
+                    ) { Text(stringResource(R.string.connected_plan_agree_action)) }
+                }
+            }
+            if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+            error?.let {
+                Text(
+                    it,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                )
             }
         }
+    }
+}
+
+@Composable
+private fun PlanDetail(label: Int, value: String, tag: String) {
+    Column {
+        Text(stringResource(label), style = MaterialTheme.typography.labelMedium)
+        Text(value, modifier = Modifier.testTag(tag))
     }
 }
 

@@ -87,6 +87,33 @@ service cloud.firestore {
         && data.sentAt is timestamp;
     }
 
+    function validCoordinationDetails(data) {
+      return data.keys().hasOnly([
+          'pickupDetails', 'dropOffDetails', 'revision', 'proposedAt',
+          'acceptedRevision', 'acceptedAt'
+        ])
+        && data.keys().hasAll([
+          'pickupDetails', 'dropOffDetails', 'revision', 'proposedAt',
+          'acceptedRevision', 'acceptedAt'
+        ])
+        && data.pickupDetails is string
+        && data.pickupDetails.size() > 0
+        && data.pickupDetails.size() <= 160
+        && data.pickupDetails.matches('.*[^\\s].*')
+        && !data.pickupDetails.matches('.*[\\x00-\\x1F\\x7F-\\x9F].*')
+        && data.dropOffDetails is string
+        && data.dropOffDetails.size() > 0
+        && data.dropOffDetails.size() <= 160
+        && data.dropOffDetails.matches('.*[^\\s].*')
+        && !data.dropOffDetails.matches('.*[\\x00-\\x1F\\x7F-\\x9F].*')
+        && data.revision is int
+        && data.revision >= 1
+        && data.proposedAt is timestamp
+        && data.acceptedRevision is int
+        && ((data.acceptedRevision == 0 && data.acceptedAt == null)
+          || (data.acceptedRevision == data.revision && data.acceptedAt is timestamp));
+    }
+
     function validJourney(data) {
       return data.keys().hasOnly([
           'driverUid', 'originArea', 'destinationArea', 'departureAt',
@@ -584,6 +611,40 @@ service cloud.firestore {
           && request.resource.data.sentAt == request.time
           && coordinationIsActive(tripId);
         allow update, delete: if false;
+      }
+
+      match /coordination/{coordinationId} {
+        allow read: if coordinationId == 'details' && messageParticipant(tripId);
+        allow create: if coordinationId == 'details'
+          && get(confirmedTripPath(tripId)).data.driverUid == request.auth.uid
+          && coordinationIsActive(tripId)
+          && validCoordinationDetails(request.resource.data)
+          && request.resource.data.revision == 1
+          && request.resource.data.proposedAt == request.time
+          && request.resource.data.acceptedRevision == 0
+          && request.resource.data.acceptedAt == null;
+        allow update: if coordinationId == 'details'
+          && coordinationIsActive(tripId)
+          && validCoordinationDetails(request.resource.data)
+          && ((get(confirmedTripPath(tripId)).data.driverUid == request.auth.uid
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'pickupDetails', 'dropOffDetails', 'revision', 'proposedAt',
+                'acceptedRevision', 'acceptedAt'
+              ])
+              && (request.resource.data.pickupDetails != resource.data.pickupDetails
+                || request.resource.data.dropOffDetails != resource.data.dropOffDetails)
+              && request.resource.data.revision == resource.data.revision + 1
+              && request.resource.data.proposedAt == request.time
+              && request.resource.data.acceptedRevision == 0
+              && request.resource.data.acceptedAt == null)
+            || (get(confirmedTripPath(tripId)).data.riderUid == request.auth.uid
+              && resource.data.acceptedRevision == 0
+              && resource.data.acceptedAt == null
+              && request.resource.data.diff(resource.data).affectedKeys()
+                .hasOnly(['acceptedRevision', 'acceptedAt'])
+              && request.resource.data.acceptedRevision == resource.data.revision
+              && request.resource.data.acceptedAt == request.time));
+        allow delete: if false;
       }
     }
 

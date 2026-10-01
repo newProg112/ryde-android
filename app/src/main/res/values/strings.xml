@@ -1,7 +1,7 @@
 <resources>
-    <string name="connected_messages_action">Messages</string>
-    <string name="connected_messages_title">Messages</string>
-    <string name="connected_messages_with">Messages with %1$s</string>
+    <string name="connected_messages_action">Coordinate trip</string>
+    <string name="connected_messages_title">Coordinate trip</string>
+    <string name="connected_messages_with">Coordinate with %1$s</string>
     <string name="connected_messages_privacy">Use public pickup places. Do not share a home address, phone number, or live location.</string>
     <string name="connected_messages_empty">No messages yet. Send a short update to coordinate this trip.</string>
     <string name="connected_messages_compose">Message</string>
@@ -12,6 +12,16 @@
     <string name="connected_messages_read_only_driver">This conversation is read-only because the driver cancelled the journey.</string>
     <string name="connected_messages_read_only_completed">This conversation is read-only because the journey is complete.</string>
     <string name="connected_messages_read_only_unavailable">Message history is available, but new messages cannot be sent because the linked journey is unavailable or has changed.</string>
+    <string name="connected_plan_title">Journey plan</string>
+    <string name="connected_plan_not_set">Not set</string>
+    <string name="connected_plan_waiting">Waiting for rider agreement</string>
+    <string name="connected_plan_agreed">Agreed</string>
+    <string name="connected_plan_privacy">Use public meeting places or landmarks and short instructions. Avoid home addresses, phone numbers and live location.</string>
+    <string name="connected_plan_pickup">Pickup details</string>
+    <string name="connected_plan_dropoff">Drop-off details</string>
+    <string name="connected_plan_propose">Propose plan</string>
+    <string name="connected_plan_update">Update proposal</string>
+    <string name="connected_plan_agree_action">Agree these details</string>
     <string name="connected_view_trip_details">View trip details</string>
     <string name="connected_trip_details_title">Trip details</string>
     <string name="connected_trip_details_back">Back</string>
@@ -94,7 +104,7 @@
     <string name="connected_offer_via">Via broad area (optional)</string>
     <string name="connected_route_via">Via %1$s</string>
     <string name="connected_requested_segment">Rider requested: %1$s → %2$s</string>
-    <string name="connected_requested_segment_clarification">Broad areas only — pickup and drop-off are not agreed yet.</string>
+    <string name="connected_requested_segment_clarification">Broad requested areas only — confirmed pairs coordinate pickup and drop-off privately.</string>
     <string name="connected_offer_departure">Departure</string>
     <string name="connected_offer_seats">Spare seats (1–8)</string>
     <string name="connected_offer_future">Choose a departure in the future.</string>

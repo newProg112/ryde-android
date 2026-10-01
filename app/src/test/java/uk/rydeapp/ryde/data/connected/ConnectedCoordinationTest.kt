@@ -79,4 +79,61 @@ class ConnectedCoordinationTest {
         assertEquals("101", ordered.last().id)
         assertEquals(ordered.sortedWith(compareBy(ConnectedMessage::sentAtEpochMillis, ConnectedMessage::id)), ordered)
     }
+
+    @Test
+    fun `journey plan policy normalizes bounded details and rejects unsafe structure`() {
+        assertEquals(
+            ConnectedJourneyPlanValidationResult.Valid(ValidatedConnectedJourneyPlan(
+                "Mansfield station taxi rank, meet 08:15",
+                "Nottingham station main entrance",
+            )),
+            ConnectedJourneyPlanPolicy.validate(
+                "  Mansfield  station taxi rank, meet 08:15  ",
+                " Nottingham station main entrance ",
+            ),
+        )
+        assertTrue(ConnectedJourneyPlanPolicy.validate(" ", "Station") is ConnectedJourneyPlanValidationResult.Invalid)
+        assertTrue(ConnectedJourneyPlanPolicy.validate("Station", "x".repeat(161)) is ConnectedJourneyPlanValidationResult.Invalid)
+        assertTrue(ConnectedJourneyPlanPolicy.validate("Station\nplatform", "Centre") is ConnectedJourneyPlanValidationResult.Invalid)
+    }
+
+    @Test
+    fun `journey plan mapper enforces exact revision agreement and normalized text`() {
+        val base = mapOf<String, Any?>(
+            "pickupDetails" to "Mansfield station",
+            "dropOffDetails" to "Nottingham station",
+            "revision" to 2L,
+            "proposedAt" to Timestamp(10, 0),
+            "acceptedRevision" to 0L,
+            "acceptedAt" to null,
+        )
+        val pending = FirestoreConnectedJourneyPlanMapper.plan(base)
+        assertEquals(2, pending?.revision)
+        assertFalse(pending!!.isAgreed)
+        val agreed = FirestoreConnectedJourneyPlanMapper.plan(
+            base + ("acceptedRevision" to 2L) + ("acceptedAt" to Timestamp(20, 0)),
+        )
+        assertTrue(agreed!!.isAgreed)
+        assertNull(FirestoreConnectedJourneyPlanMapper.plan(base + ("extra" to true)))
+        assertNull(FirestoreConnectedJourneyPlanMapper.plan(base + ("pickupDetails" to " padded ")))
+        assertNull(FirestoreConnectedJourneyPlanMapper.plan(base + ("revision" to 1.5)))
+        assertNull(FirestoreConnectedJourneyPlanMapper.plan(
+            base + ("acceptedRevision" to 1L) + ("acceptedAt" to Timestamp(20, 0)),
+        ))
+    }
+
+    @Test
+    fun `journey plan roles require active coherent coordination`() {
+        val plan = ConnectedJourneyPlan("Pickup", "Drop-off", 1, 1, 0, null)
+        assertTrue(ConnectedJourneyLifecycle.canProposePlan(trip, journey, "driver"))
+        assertFalse(ConnectedJourneyLifecycle.canProposePlan(trip, journey, "rider"))
+        assertTrue(ConnectedJourneyLifecycle.canAgreePlan(trip, journey, plan, "rider"))
+        assertFalse(ConnectedJourneyLifecycle.canAgreePlan(trip, journey, plan, "driver"))
+        assertFalse(ConnectedJourneyLifecycle.canAgreePlan(
+            trip, journey, plan.copy(acceptedRevision = 1, acceptedAtEpochMillis = 2), "rider",
+        ))
+        assertFalse(ConnectedJourneyLifecycle.canAgreePlan(
+            trip, journey.copy(status = ConnectedJourneyStatus.COMPLETED, completedAtEpochMillis = 2), plan, "rider",
+        ))
+    }
 }

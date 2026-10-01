@@ -117,6 +117,8 @@ backend-to-domain conversion.
   confirmed trips realtime.
 - **Messaging Phase 1:** participant-private confirmed-trip text coordination with an
   open-screen realtime stream.
+- **Pickup/drop-off agreement Phase 1.6:** one participant-private, revisioned journey plan per
+  confirmed rider, proposed by the driver and explicitly agreed by that rider.
 - **Journey completion:** after departure, the driver closes the canonical journey once; linked
   booking history remains immutable and coordination becomes read-only.
 - **Later:** migrate only the remaining explicitly selected capabilities while the local fake
@@ -171,6 +173,14 @@ The first 9C slice adds only these emulator-owned documents:
   senderUid: string          # exactly the authenticated driver or rider
   body: string               # nonblank, <= 500 chars, no prohibited control chars
   sentAt: timestamp          # server timestamp; immutable
+
+/confirmedTrips/{acceptedRequestId}/coordination/details
+  pickupDetails: string      # normalized nonblank public-place text, <= 160 chars
+  dropOffDetails: string     # normalized nonblank public-place text, <= 160 chars
+  revision: int              # starts at 1; driver increments per changed proposal
+  proposedAt: timestamp      # server timestamp
+  acceptedRevision: int      # 0 while waiting, otherwise equals revision
+  acceptedAt: timestamp|null # server timestamp for rider agreement
 ```
 
 Any authenticated emulator user may read the intentionally small journey document so that
@@ -235,9 +245,9 @@ confirmed trip:  absent -> CONFIRMED only with the matching request acceptance
 
 Rider-owned pending-request cancellation and safe re-requesting remain supported. An upcoming
 confirmed booking also supports the rider cancellation described below. Driver journey cancellation
-is supported as described below. There is no private pickup/drop-off, exact/live
-location, pricing/payment, notification, Circle, trust, rating, Function or Storage data in
-connected mode.
+is supported as described below. Private public-place pickup/drop-off agreement is stored only
+under a confirmed trip. There is no map pin, exact GPS/live location, pricing/payment,
+notification, Circle, trust, rating, Function or Storage data in connected mode.
 
 ### Realtime participant journey synchronization
 
@@ -281,6 +291,31 @@ client explicitly advises using public pickup places and not sharing a home addr
 or live location. Phase 1 has no inbox, unread state, push, attachments, read receipts, typing,
 editing/deleting, moderation or location sharing.
 
+### Private pickup/drop-off agreement Phase 1.6
+
+The existing confirmed-trip conversation also observes the single optional
+`coordination/details` document. Its absence means **Not set**. The driver can propose bounded
+pickup and drop-off text for that rider; the first proposal is revision 1. The rider sees it in
+the same screen and can explicitly agree only to the current revision. Agreement records the
+current revision and server time. A changed driver proposal increments the revision exactly once
+and atomically resets agreement, returning both participants to **Waiting for rider agreement**.
+Matching revisions with a server acceptance time render as **Agreed**.
+
+The plan is per confirmed-trip ID, not per journey, so two confirmed riders on one offer have
+isolated arrangements. It is deliberately excluded from public journeys, seat requests and the
+account-wide journey snapshot. The confirmed trip remains the authorization anchor. Its driver
+and rider may read the saved plan after rider cancellation, driver cancellation or completion,
+but all plan writes require the same coherent confirmed/open coordination state as message
+creation. Only the driver can create/revise proposal fields; only the rider can set the current
+agreement; deletes, stale agreement, client timestamps, extra fields and cross-trip access are
+denied.
+
+The UI asks for public meeting places, landmarks and short instructions, and warns against home
+addresses, phone numbers and live location. Bounded structural validation and participant access
+do not guarantee that arbitrary user-entered prose contains no sensitive information. Phase 1.6
+adds no maps, pins, coordinates, place lookup, navigation, contact exchange, arrival workflow or
+additional messaging features.
+
 ## Manual two-emulator test
 
 1. Start the disposable manual emulators with
@@ -303,13 +338,17 @@ editing/deleting, moderation or location sharing.
    appropriate `You're driving` or `You're riding` role. A third account must not see the trip.
 8. For the acceptance path, repeat with a one-seat offer and two rider accounts; only one pending
    request can be accepted and the other acceptance must fail without a negative seat count.
-9. From rider Trip Details and each accepted rider row in driver Trip Details, open **Messages**.
-   Send in both directions and confirm the other open screen updates without Refresh.
-10. Confirm two accepted riders on one offer open different histories. A third account must be
-    unable to read or write either nested message collection.
-11. Cancel the rider seat or driver journey while the other conversation remains open. Existing
-    history must remain visible, the composer must disappear, and a new send must fail safely.
-12. For a journey whose departure has passed, use **Mark journey complete** as the driver. Confirm
+9. From rider Trip Details and each accepted rider row in driver Trip Details, open
+   **Coordinate trip**. Send in both directions and confirm the other open screen updates without
+   Refresh.
+10. As the driver, propose public pickup and drop-off details. Confirm the rider sees revision 1
+    as waiting, agrees it, and the driver sees **Agreed**. Change the pickup text and confirm both
+    return to **Waiting for rider agreement** without losing the message thread.
+11. Confirm two accepted riders on one offer open different histories and journey plans. A third
+    account must be unable to read or write either nested coordination area.
+12. Cancel the rider seat or driver journey while the other conversation remains open. Existing
+    history and plan must remain visible and read-only, and new writes must fail safely.
+13. For a journey whose departure has passed, use **Mark journey complete** as the driver. Confirm
     both accounts show **Journey completed**, open conversations become read-only with history
     retained, and the action cannot be repeated.
 

@@ -45,6 +45,8 @@ interface ConnectedJourneyStore {
 interface ConnectedCoordinationStore {
     fun observeConversation(uid: String, tripId: String): Flow<ConnectedConversationSnapshot>
     suspend fun sendMessage(uid: String, tripId: String, messageId: String, body: String)
+    suspend fun proposePlan(uid: String, tripId: String, plan: ValidatedConnectedJourneyPlan)
+    suspend fun agreePlan(uid: String, tripId: String, revision: Int)
 }
 
 class FirebaseAuthGateway(private val auth: FirebaseAuth) : ConnectedAuthGateway {

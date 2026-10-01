@@ -67,7 +67,7 @@ class ConnectedTripDetailsScreenUiTest {
 
         text("York → Leeds").assertIsDisplayed()
         text("Rider requested: Hucknall → Nottingham").assertIsDisplayed()
-        text("Broad areas only — pickup and drop-off are not agreed yet.").assertIsDisplayed()
+        text("Broad requested areas only — confirmed pairs coordinate pickup and drop-off privately.").assertIsDisplayed()
         compose.onAllNodesWithTag("connected-route-via").assertCountEquals(0)
     }
 
@@ -399,7 +399,7 @@ class ConnectedTripDetailsScreenUiTest {
                 onOpenMessages = { riderTargets += it },
             )
         } }
-        text("Messages").performClick()
+        text("Coordinate trip").performClick()
         compose.runOnIdle { assertEquals(listOf(riderTrip.id), riderTargets.map { it.tripId }) }
     }
 
