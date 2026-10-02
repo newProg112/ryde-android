@@ -43,6 +43,25 @@ internal data class JourneyMapPresentation(
     }
 }
 
+/** True only when every declared presentation point can be rendered geographically. */
+internal val JourneyMapPresentation.hasCompleteCoordinates: Boolean
+    get() = points.all { it.coordinate != null }
+
+internal enum class JourneyRouteRenderer {
+    SCHEMATIC,
+    GOOGLE_GEOGRAPHIC_PREVIEW,
+}
+
+/** Provider-neutral selection boundary. A Google composable is never entered for the fallback. */
+internal fun journeyRouteRenderer(
+    route: JourneyMapPresentation,
+    mapsConfigured: Boolean,
+): JourneyRouteRenderer = if (mapsConfigured && route.hasCompleteCoordinates) {
+    JourneyRouteRenderer.GOOGLE_GEOGRAPHIC_PREVIEW
+} else {
+    JourneyRouteRenderer.SCHEMATIC
+}
+
 /** Builds an ordered declared route from persisted truth; its points never imply road geometry. */
 internal fun journeyMap(
     originArea: String,

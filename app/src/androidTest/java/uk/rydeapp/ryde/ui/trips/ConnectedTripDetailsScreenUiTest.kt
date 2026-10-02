@@ -91,6 +91,7 @@ class ConnectedTripDetailsScreenUiTest {
         text("Via Hucknall").assertIsDisplayed()
         text("Hucknall").assertIsDisplayed()
         compose.onNodeWithTag("connected-route-via").assertIsDisplayed()
+        compose.onAllNodesWithTag("connected-route-geographic-preview").assertCountEquals(0)
         compose.onNodeWithContentDescription(
             "Visual connection from Mansfield via Hucknall to Nottingham; this is not a geographic map",
         ).assertIsDisplayed()

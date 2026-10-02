@@ -1,8 +1,10 @@
 package uk.rydeapp.ryde.ui.map
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import uk.rydeapp.ryde.domain.model.GeographicCoordinate
 
@@ -34,6 +36,7 @@ class JourneyMapPresentationTest {
 
         assertEquals(listOf(origin, destination), route.points.map(JourneyMapPoint::coordinate))
         assertSame(JourneyMapLine.VisualConnection, route.line)
+        assertTrue(route.hasCompleteCoordinates)
     }
 
     @Test
@@ -57,6 +60,83 @@ class JourneyMapPresentationTest {
         assertEquals(listOf("Mansfield", "Hucknall", "Nottingham"), route.points.map(JourneyMapPoint::label))
         assertEquals(listOf(origin, via, destination), route.points.map(JourneyMapPoint::coordinate))
         assertSame(JourneyMapLine.VisualConnection, route.line)
+        assertTrue(route.hasCompleteCoordinates)
+    }
+
+    @Test
+    fun originAndDestinationCoordinatesAreGeographicallyEligible() {
+        val route = journeyMap(
+            "Mansfield",
+            "Nottingham",
+            GeographicCoordinate(53.1432, -1.1984),
+            GeographicCoordinate(52.9548, -1.1581),
+        )
+
+        assertTrue(route.hasCompleteCoordinates)
+    }
+
+    @Test
+    fun originViaAndDestinationCoordinatesAreGeographicallyEligible() {
+        val route = journeyMap(
+            "Mansfield",
+            "Nottingham",
+            GeographicCoordinate(53.1432, -1.1984),
+            GeographicCoordinate(52.9548, -1.1581),
+            "Hucknall",
+            GeographicCoordinate(53.0380, -1.2034),
+        )
+
+        assertTrue(route.hasCompleteCoordinates)
+    }
+
+    @Test
+    fun missingCoordinatesAreNotGeographicallyEligible() {
+        assertFalse(broadAreaJourneyMap("York", "Leeds").hasCompleteCoordinates)
+    }
+
+    @Test
+    fun mixedCoordinateDataIsNotGeographicallyEligible() {
+        val route = JourneyMapPresentation(
+            points = listOf(
+                JourneyMapPoint(
+                    "Mansfield",
+                    JourneyMapPointRole.JOURNEY_START,
+                    GeographicCoordinate(53.1432, -1.1984),
+                ),
+                JourneyMapPoint("Hucknall", JourneyMapPointRole.JOURNEY_VIA),
+                JourneyMapPoint(
+                    "Nottingham",
+                    JourneyMapPointRole.JOURNEY_DESTINATION,
+                    GeographicCoordinate(52.9548, -1.1581),
+                ),
+            ),
+            line = JourneyMapLine.VisualConnection,
+        )
+
+        assertFalse(route.hasCompleteCoordinates)
+    }
+
+    @Test
+    fun rendererRequiresBothConfigurationAndCompleteCoordinates() {
+        val completeRoute = journeyMap(
+            "Mansfield",
+            "Nottingham",
+            GeographicCoordinate(53.1432, -1.1984),
+            GeographicCoordinate(52.9548, -1.1581),
+        )
+
+        assertSame(
+            JourneyRouteRenderer.SCHEMATIC,
+            journeyRouteRenderer(completeRoute, mapsConfigured = false),
+        )
+        assertSame(
+            JourneyRouteRenderer.SCHEMATIC,
+            journeyRouteRenderer(broadAreaJourneyMap("York", "Leeds"), mapsConfigured = true),
+        )
+        assertSame(
+            JourneyRouteRenderer.GOOGLE_GEOGRAPHIC_PREVIEW,
+            journeyRouteRenderer(completeRoute, mapsConfigured = true),
+        )
     }
 
     @Test(expected = IllegalArgumentException::class)

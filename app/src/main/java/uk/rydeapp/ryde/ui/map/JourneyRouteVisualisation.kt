@@ -25,30 +25,19 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import uk.rydeapp.ryde.BuildConfig
 import uk.rydeapp.ryde.R
 
-/** Area-only fallback shown until repository truth includes coordinates and route geometry. */
+/** Public route-preview wrapper. Labels and disclaimers are shared by both renderers. */
 @Composable
 internal fun JourneyRouteVisualisation(
     route: JourneyMapPresentation,
     modifier: Modifier = Modifier,
+    mapsConfigured: Boolean = BuildConfig.MAPS_CONFIGURED,
 ) {
     val start = route.points.first { it.role == JourneyMapPointRole.JOURNEY_START }
     val via = route.points.singleOrNull { it.role == JourneyMapPointRole.JOURNEY_VIA }
     val destination = route.points.last { it.role == JourneyMapPointRole.JOURNEY_DESTINATION }
-    val description = if (via == null) {
-        stringResource(R.string.connected_route_visual_description, start.label, destination.label)
-    } else {
-        stringResource(
-            R.string.connected_route_visual_description_via,
-            start.label,
-            via.label,
-            destination.label,
-        )
-    }
-    val routeColor = MaterialTheme.colorScheme.primary
-    val destinationColor = MaterialTheme.colorScheme.tertiary
-    val trackColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .55f)
 
     Card(
         modifier = modifier.fillMaxWidth().testTag("connected-route-visual"),
@@ -57,43 +46,41 @@ internal fun JourneyRouteVisualisation(
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(stringResource(R.string.connected_route_overview), style = MaterialTheme.typography.titleMedium)
-            Canvas(
-                Modifier
-                    .fillMaxWidth()
-                    .height(104.dp)
-                    .semantics { contentDescription = description },
-            ) {
-                val from = Offset(size.width * .12f, size.height * .72f)
-                val to = Offset(size.width * .88f, size.height * .28f)
-                val viaMarker = Offset(size.width * .49f, size.height * .49f)
-                val path = Path().apply {
-                    moveTo(from.x, from.y)
-                    cubicTo(
-                        size.width * .36f,
-                        size.height * .78f,
-                        size.width * .60f,
-                        size.height * .20f,
-                        to.x,
-                        to.y,
-                    )
+            when (journeyRouteRenderer(route, mapsConfigured)) {
+                JourneyRouteRenderer.SCHEMATIC -> {
+                    val description = if (via == null) {
+                        stringResource(
+                            R.string.connected_route_visual_description,
+                            start.label,
+                            destination.label,
+                        )
+                    } else {
+                        stringResource(
+                            R.string.connected_route_visual_description_via,
+                            start.label,
+                            via.label,
+                            destination.label,
+                        )
+                    }
+                    SchematicJourneyRouteVisualisation(via != null, description)
                 }
-                drawPath(
-                    path,
-                    trackColor,
-                    style = Stroke(
-                        width = 6.dp.toPx(),
-                        cap = StrokeCap.Round,
-                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(14.dp.toPx(), 9.dp.toPx())),
-                    ),
-                )
-                drawCircle(routeColor.copy(alpha = .20f), 13.dp.toPx(), from)
-                drawCircle(routeColor, 7.dp.toPx(), from)
-                if (via != null) {
-                    drawCircle(routeColor.copy(alpha = .20f), 13.dp.toPx(), viaMarker)
-                    drawCircle(routeColor, 7.dp.toPx(), viaMarker)
+                JourneyRouteRenderer.GOOGLE_GEOGRAPHIC_PREVIEW -> {
+                    val description = if (via == null) {
+                        stringResource(
+                            R.string.connected_route_geographic_description,
+                            start.label,
+                            destination.label,
+                        )
+                    } else {
+                        stringResource(
+                            R.string.connected_route_geographic_description_via,
+                            start.label,
+                            via.label,
+                            destination.label,
+                        )
+                    }
+                    GoogleJourneyMapPreview(route, description)
                 }
-                drawCircle(destinationColor.copy(alpha = .20f), 13.dp.toPx(), to)
-                drawCircle(destinationColor, 7.dp.toPx(), to)
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 Column(Modifier.weight(1f).testTag("connected-route-start")) {
@@ -142,5 +129,55 @@ internal fun JourneyRouteVisualisation(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    }
+}
+
+/** Existing area-only Canvas fallback; appearance and semantics intentionally remain unchanged. */
+@Composable
+private fun SchematicJourneyRouteVisualisation(
+    hasVia: Boolean,
+    description: String,
+) {
+    val routeColor = MaterialTheme.colorScheme.primary
+    val destinationColor = MaterialTheme.colorScheme.tertiary
+    val trackColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .55f)
+
+    Canvas(
+        Modifier
+            .fillMaxWidth()
+            .height(104.dp)
+            .semantics { contentDescription = description },
+    ) {
+        val from = Offset(size.width * .12f, size.height * .72f)
+        val to = Offset(size.width * .88f, size.height * .28f)
+        val viaMarker = Offset(size.width * .49f, size.height * .49f)
+        val path = Path().apply {
+            moveTo(from.x, from.y)
+            cubicTo(
+                size.width * .36f,
+                size.height * .78f,
+                size.width * .60f,
+                size.height * .20f,
+                to.x,
+                to.y,
+            )
+        }
+        drawPath(
+            path,
+            trackColor,
+            style = Stroke(
+                width = 6.dp.toPx(),
+                cap = StrokeCap.Round,
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(14.dp.toPx(), 9.dp.toPx())),
+            ),
+        )
+        drawCircle(routeColor.copy(alpha = .20f), 13.dp.toPx(), from)
+        drawCircle(routeColor, 7.dp.toPx(), from)
+        if (hasVia) {
+            drawCircle(routeColor.copy(alpha = .20f), 13.dp.toPx(), viaMarker)
+            drawCircle(routeColor, 7.dp.toPx(), viaMarker)
+        }
+        drawCircle(destinationColor.copy(alpha = .20f), 13.dp.toPx(), to)
+        drawCircle(destinationColor, 7.dp.toPx(), to)
     }
 }

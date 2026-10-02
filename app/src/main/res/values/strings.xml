@@ -44,6 +44,11 @@
     <string name="connected_route_destination">Destination</string>
     <string name="connected_route_visual_description">Visual connection from %1$s to %2$s; this is not a geographic map</string>
     <string name="connected_route_visual_description_via">Visual connection from %1$s via %2$s to %3$s; this is not a geographic map</string>
+    <string name="connected_route_geographic_description">Geographic preview of declared broad-area points from %1$s to %2$s; this is not an actual driven road route</string>
+    <string name="connected_route_geographic_description_via">Geographic preview of declared broad-area points from %1$s via %2$s to %3$s; this is not an actual driven road route</string>
+    <string name="connected_route_geographic_marker_start">Declared broad-area journey start: %1$s</string>
+    <string name="connected_route_geographic_marker_via">Declared broad-area Via point: %1$s</string>
+    <string name="connected_route_geographic_marker_destination">Declared broad-area journey destination: %1$s</string>
     <string name="connected_route_visual_only">Visual connection only — broad areas, not a road route or navigation.</string>
     <string name="connected_route_pickup_unavailable">A separate rider pickup point is not stored for this journey.</string>
     <string name="connected_seats">Seats remaining: %1$d/%2$d</string>

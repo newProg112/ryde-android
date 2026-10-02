@@ -6,6 +6,10 @@ plugins {
 val requestedRydeMode = providers.gradleProperty("rydeAppMode")
     .orElse("LOCAL_DEMO")
     .map { it.uppercase() }
+val mapsApiKey = providers.gradleProperty("MAPS_API_KEY")
+    .orElse("")
+    .map { it.trim() }
+val mapsConfigured = mapsApiKey.map { it.isNotEmpty() }
 
 require(requestedRydeMode.get() in setOf("LOCAL_DEMO", "CONNECTED")) {
     "rydeAppMode must be LOCAL_DEMO or CONNECTED"
@@ -38,9 +42,12 @@ android {
     buildTypes {
         debug {
             buildConfigField("String", "RYDE_APP_MODE", "\"${requestedRydeMode.get()}\"")
+            buildConfigField("boolean", "MAPS_CONFIGURED", mapsConfigured.get().toString())
+            manifestPlaceholders["MAPS_API_KEY"] = mapsApiKey.get()
         }
         release {
             buildConfigField("String", "RYDE_APP_MODE", "\"LOCAL_DEMO\"")
+            buildConfigField("boolean", "MAPS_CONFIGURED", "false")
             optimization {
                 enable = false
             }
@@ -67,6 +74,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.coroutines.play.services)
+    implementation(libs.maps.compose)
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.auth)
     implementation(libs.firebase.firestore)
